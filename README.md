@@ -22,11 +22,13 @@ SuperNova 让每位用户创建多个独立 AI 人格，配置模型与知识库
 | 主数据库 | PostgreSQL |
 | 向量检索 | pgvector |
 | 缓存 / 队列 | Redis |
-| 对象存储 | MinIO |
+| 对象存储 | S3 兼容存储（Silo / MinIO 兼容） |
 | Agent 运行时 | 隔离的 AstrBot Worker |
 | 部署 | 开发环境 Docker Compose，生产环境容器化部署 |
 
 控制平面负责用户、租户、API Key、人格、模型供应商配置、知识库、渠道配置、会话、用量和 Worker 生命周期。AstrBot Worker 执行 Agent 对话。统一模型网关负责身份识别、人格解析、模型路由、流式输出和用量计量。
+
+开发环境使用 PGSTY Silo 作为 MinIO 兼容的 S3 对象存储实现。Silo 是独立的社区维护分支，并非 MinIO, Inc. 官方发行版；应用层应只依赖标准 S3 API，避免绑定特定服务端实现。
 
 ## 本地开发
 
@@ -44,7 +46,7 @@ make dev-migrate
 - OpenAPI：<http://localhost:8000/docs>
 - Liveness：<http://localhost:8000/health/live>
 - Readiness：<http://localhost:8000/health/ready>
-- MinIO Console：<http://localhost:9001>
+- S3 Console（Silo）：<http://localhost:9001>
 
 常用命令：
 

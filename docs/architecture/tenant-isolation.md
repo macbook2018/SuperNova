@@ -32,7 +32,7 @@ pgvector 检索必须在向量相似度查询前或同一 SQL 查询中强制加
 
 ## 存储与缓存隔离
 
-- MinIO 对象 Key 使用 tenant/{tenant_id}/... 前缀；下载前重新验证资源归属。
+- S3 对象 Key 使用 tenant/{tenant_id}/... 前缀；下载前重新验证资源归属。
 - Redis Key 使用 tenant:{tenant_id}:... 命名空间；不得跨租户复用会话缓存。
 - Worker 配置、临时文件和日志必须带租户边界；不同租户 Worker 不共享可写工作目录。
 - Worker 的模型凭据和渠道凭据按最小权限注入，不写入镜像或仓库。

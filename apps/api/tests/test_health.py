@@ -1,9 +1,8 @@
 from uuid import UUID
 
-from fastapi.testclient import TestClient
-
 from app.api import health
 from app.main import app
+from fastapi.testclient import TestClient
 
 client = TestClient(app)
 

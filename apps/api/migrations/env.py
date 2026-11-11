@@ -1,7 +1,7 @@
 from alembic import context
-from sqlalchemy import create_engine, pool
 
 from app.core.config import get_settings
+from sqlalchemy import create_engine, pool
 
 target_metadata = None
 

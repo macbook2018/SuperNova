@@ -19,7 +19,7 @@ flowchart TB
     Control --> DB[(PostgreSQL + pgvector)]
     Gateway --> DB
     Control --> Redis[(Redis)]
-    Control --> Storage[(MinIO)]
+    Control --> Storage[(S3-compatible object storage)]
     Control --> Manager[Worker Manager]
     Manager --> Worker
 ~~~

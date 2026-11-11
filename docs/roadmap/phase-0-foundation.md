@@ -7,9 +7,9 @@
 
 - 项目 README、产品原则、技术基线和交付顺序。
 - 控制平面 / 运行平面架构说明。
-- 多租户隔离、安全边界和两项架构决策。
+- 多租户隔离、安全边界和三项架构决策。
 - FastAPI 最小服务、Request ID 中间件和健康检查端点。
-- PostgreSQL + pgvector、Redis、MinIO 的 Docker Compose 开发环境。
+- PostgreSQL + pgvector、Redis、Silo（MinIO 兼容 S3）的 Docker Compose 开发环境。
 - Alembic 迁移框架与 pgvector 扩展初始化迁移。
 - 结构化日志、非 root API 容器、开发命令和 Docker 构建上下文排除规则。
 - API 健康检查、Request ID 和依赖就绪状态测试。
