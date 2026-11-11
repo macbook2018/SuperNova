@@ -1,85 +1,85 @@
 # SuperNova
 
-> Multi-tenant AI Agent SaaS built around AstrBot.
+> 基于 AstrBot 的多租户 AI Agent SaaS 平台。
 
-SuperNova lets each tenant create independent AI personas, connect knowledge bases and model providers, and expose those personas through WeChat channels or an OpenAI-compatible API.
+SuperNova 让每位用户创建多个独立 AI 人格，配置模型与知识库，并通过微信渠道或 OpenAI 兼容 API 接入业务系统。
 
-## Product principles
+## 产品原则
 
-- **Tenant isolation first**: tenant data, API credentials, knowledge bases, conversations, usage records, and runtime workers must be isolated.
-- **AstrBot as the runtime engine**: extend through adapters and integration boundaries; avoid unnecessary forks or invasive changes to upstream core.
-- **One API key, multiple personas**: a tenant-level API key authenticates the caller; the `model` field selects a persona owned by that tenant.
-- **OpenAI-compatible integration**: support `GET /v1/models`, `POST /v1/chat/completions`, and streaming responses over SSE.
-- **Observable and billable**: record request IDs, token usage, latency, errors, and tenant-level consumption.
-- **Brand consistency**: use the approved SuperNova orbital S-mark and deep-space navy / cyan / blue / violet visual system.
+- **租户隔离优先**：用户、人格、模型凭据、知识库、会话、用量记录和运行时资源必须具备明确的租户边界。
+- **AstrBot 负责 Agent 运行时**：优先通过适配器和集成边界扩展，避免不必要地 Fork 或侵入上游核心。
+- **一个用户级 API Key，多个人格**：API Key + Base URL 用于识别用户，OpenAI 兼容请求中的 `model` 用于选择该用户有权访问的人格。
+- **OpenAI 兼容**：支持 `GET /v1/models`、`POST /v1/chat/completions` 和 SSE 流式响应。
+- **可观测、可计量**：记录 Request ID、Token 用量、延迟、错误和用户级消耗。
+- **品牌一致性**：使用已确认的 SuperNova S 形轨道 Logo，以及深空蓝、青绿、蓝紫渐变视觉体系。
 
-## Baseline architecture
+## 技术基线
 
-| Layer | Baseline |
+| 层级 | 技术 |
 | --- | --- |
-| Web console | Vue 3 + TypeScript |
-| Control plane API | Python + FastAPI |
-| Primary database | PostgreSQL |
-| Vector retrieval | pgvector |
-| Cache / queue | Redis |
-| Object storage | MinIO |
-| Agent runtime | Isolated AstrBot workers |
-| Deployment | Docker Compose for development; containerized services for production |
+| Web 控制台 | Vue 3 + TypeScript |
+| 控制平面 API | Python + FastAPI |
+| 主数据库 | PostgreSQL |
+| 向量检索 | pgvector |
+| 缓存 / 队列 | Redis |
+| 对象存储 | MinIO |
+| Agent 运行时 | 隔离的 AstrBot Worker |
+| 部署 | 开发环境 Docker Compose，生产环境容器化部署 |
 
-The control plane owns tenants, users, API keys, personas, model-provider configuration, knowledge bases, channel configuration, sessions, usage, and worker lifecycle. AstrBot workers execute agent conversations. A unified model gateway provides tenant-aware authentication, persona resolution, provider routing, streaming, and usage accounting.
+控制平面负责用户、租户、API Key、人格、模型供应商配置、知识库、渠道配置、会话、用量和 Worker 生命周期。AstrBot Worker 执行 Agent 对话。统一模型网关负责身份识别、人格解析、模型路由、流式输出和用量计量。
 
-## API contract
+## 统一 API 约定
 
-- `GET /v1/models`: list personas available to the authenticated tenant.
-- `POST /v1/chat/completions`: resolve `model` to a tenant-owned persona and execute a conversation.
-- `stream=true`: emit OpenAI-compatible Server-Sent Events and terminate with `data: [DONE]`.
+- `GET /v1/models`：返回当前 API Key 对应用户可用的人格列表。
+- `POST /v1/chat/completions`：通过 `model` 解析人格，并执行对话。
+- `stream=true`：返回 OpenAI 兼容 SSE，结束时发送 `data: [DONE]`。
 
-Authentication uses a tenant-scoped API key in the standard `Authorization: Bearer <key>` header. A key must never grant access to another tenant's persona or data.
+认证使用标准请求头 `Authorization: Bearer <API_KEY>`。API Key 绑定用户及其租户；服务端不得信任请求体或 URL 中由客户端自行传入的 tenant_id。任何人格、知识库或会话访问都必须再次校验资源归属。
 
-## Planned delivery sequence
+## 交付顺序
 
-1. **Foundation** — repository conventions, local development stack, configuration, migrations, health checks, structured logging, and CI.
-2. **Control plane** — tenant/user authentication, tenant context, API-key lifecycle, and authorization boundaries.
-3. **Persona and model management** — persona CRUD, model-provider configuration, secrets handling, and model selection.
-4. **Unified API gateway** — OpenAI-compatible models/chat-completions endpoints, SSE streaming, request tracing, and usage records.
-5. **Knowledge** — document/link ingestion, parsing, chunking, embeddings, retrieval, and tenant-scoped access.
-6. **AstrBot runtime orchestration** — isolated worker provisioning, lifecycle, adapter integration, health monitoring, and recovery.
-7. **Channels and operations** — WeChat integration, session management, usage limits, billing hooks, admin console, and production hardening.
+1. **工程基础**：仓库规范、本地开发环境、配置、数据库迁移、健康检查、结构化日志和 CI。
+2. **控制平面**：用户认证、租户上下文、用户级 API Key 生命周期和权限边界。
+3. **人格与模型管理**：人格 CRUD、模型供应商配置、密钥安全存储和模型选择。
+4. **统一 API 网关**：OpenAI 兼容 models/chat-completions、SSE、请求追踪和用量记录。
+5. **知识库**：文档/链接导入、解析、切片、Embedding、检索和租户级隔离。
+6. **AstrBot 运行时编排**：Worker 隔离部署、生命周期、适配器集成、健康监控和故障恢复。
+7. **渠道与运营**：微信渠道、会话管理、用量限制、计费接口、管理控制台和生产加固。
 
-Each phase must have automated tests and an acceptance report. Do not mark a phase complete based only on compilation.
+每个阶段都必须有自动化测试和验收报告；仅编译通过不能视为阶段完成。
 
-## Repository layout
+## 仓库结构
 
 ```text
 apps/
-  api/                 FastAPI control plane and gateway
-  console/             Vue 3 management console
-  worker-manager/      AstrBot worker lifecycle and adapter boundary
+  api/                 FastAPI 控制平面与统一 API 网关
+  console/             Vue 3 管理控制台
+  worker-manager/      AstrBot Worker 生命周期与适配边界
 packages/
-  contracts/           Shared API schemas and generated client contracts
-  sdk/                 OpenAI-compatible client examples and helpers
+  contracts/           共享 API Schema 与客户端契约
+  sdk/                 OpenAI 兼容 SDK 示例与辅助工具
 deploy/
-  docker/              Local and production container definitions
-  scripts/             Development and release scripts
+  docker/              本地和生产容器定义
+  scripts/             开发及发布脚本
 docs/
-  architecture/        System design and tenant-isolation model
-  decisions/           Architecture decision records
-  roadmap/             Milestones and acceptance criteria
+  architecture/        系统设计与租户隔离模型
+  decisions/           架构决策记录
+  roadmap/             里程碑与验收标准
 ```
 
-## Security requirements
+## 安全要求
 
-- Store only hashed API-key verifiers; show the plaintext key only once at creation.
-- Keep model-provider secrets encrypted at rest and never return them from read APIs.
-- Derive tenant identity from authenticated credentials, never from an untrusted request field.
-- Enforce tenant scoping at service and data-access layers; add cross-tenant negative tests.
-- Do not expose AstrBot worker credentials, internal URLs, or raw provider secrets to browsers.
-- Keep secrets out of source control, logs, traces, and error messages.
+- API Key 仅存储不可逆哈希；创建时明文只展示一次。
+- 模型供应商密钥必须加密存储，读取 API 不得返回密钥明文。
+- 租户身份必须从已认证的 API Key / 登录会话推导，不接受客户端自报身份。
+- 服务层和数据访问层都必须执行租户范围校验，并提供跨租户负向测试。
+- 浏览器不得接触 AstrBot Worker 凭据、内部地址或模型供应商密钥。
+- 密钥不得进入 Git、日志、链路追踪或错误响应。
 
-## Development status
+## 当前状态
 
-The repository is being initialized. The first implementation milestone is the foundation and control-plane skeleton; later phases will build on tested interfaces rather than introducing a monolithic application.
+仓库已初始化，正在建设第一阶段：工程基础与控制平面骨架。当前所有接口和目录均以可测试、可渐进交付为原则，不采用难以拆分的单体式实现。
 
 ## License
 
-License and distribution terms will be decided before the first public release.
+正式公开发布前确定许可证及分发条款。
