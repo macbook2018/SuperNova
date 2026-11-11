@@ -112,7 +112,9 @@ docs/
 
 ## 当前状态
 
-Phase 0 正在完成工程基础验收。当前已包含 FastAPI 可运行骨架、健康检查、Request ID、结构化日志、Docker Compose 开发依赖、Alembic 迁移框架和自动化测试。下一阶段必须先通过 Phase 0 验收，再开始用户认证与租户上下文。
+**Phase 0 工程基础已通过 GitHub Actions 自动验收（run #6）。** Ruff、pytest、Alembic 初始迁移、Docker Compose 构建与启动、API 存活/就绪检查、API 非 root 运行及 Silo 存储就绪检查均通过。CI 使用 GitHub Actions 的 Ubuntu 环境；首次在本机 macOS Docker Desktop 上启动仍需按上方命令执行。
+
+下一阶段进入控制平面：用户登录、租户上下文、用户级 API Key 的安全存储、轮换和撤销，以及跨租户负向测试。
 
 ## License
 
