@@ -28,6 +28,36 @@ SuperNova 让每位用户创建多个独立 AI 人格，配置模型与知识库
 
 控制平面负责用户、租户、API Key、人格、模型供应商配置、知识库、渠道配置、会话、用量和 Worker 生命周期。AstrBot Worker 执行 Agent 对话。统一模型网关负责身份识别、人格解析、模型路由、流式输出和用量计量。
 
+## 本地开发
+
+需要 Docker Desktop（含 Docker Compose v2）、Python 3.12+。
+
+```bash
+cp .env.example .env
+make dev-up
+make dev-migrate
+```
+
+服务启动后：
+
+- API：<http://localhost:8000>
+- OpenAPI：<http://localhost:8000/docs>
+- Liveness：<http://localhost:8000/health/live>
+- Readiness：<http://localhost:8000/health/ready>
+- MinIO Console：<http://localhost:9001>
+
+常用命令：
+
+```bash
+make dev-logs
+make dev-down
+make api-install
+make api-lint
+make api-test
+```
+
+`.env.example` 中的凭据仅供本机开发。部署到共享或生产环境前必须替换全部默认密码；不要提交真实凭据。PostgreSQL 和 Redis 的本地端口仅绑定到 `127.0.0.1`。
+
 ## 统一 API 约定
 
 - `GET /v1/models`：返回当前 API Key 对应用户可用的人格列表。
@@ -53,14 +83,16 @@ SuperNova 让每位用户创建多个独立 AI 人格，配置模型与知识库
 ```text
 apps/
   api/                 FastAPI 控制平面与统一 API 网关
-  console/             Vue 3 管理控制台
-  worker-manager/      AstrBot Worker 生命周期与适配边界
+    app/               API 应用代码
+    migrations/        Alembic 数据库迁移
+  console/             Vue 3 管理控制台（后续阶段）
+  worker-manager/      AstrBot Worker 生命周期与适配边界（后续阶段）
 packages/
-  contracts/           共享 API Schema 与客户端契约
-  sdk/                 OpenAI 兼容 SDK 示例与辅助工具
+  contracts/           共享 API Schema 与客户端契约（后续阶段）
+  sdk/                 OpenAI 兼容 SDK 示例与辅助工具（后续阶段）
 deploy/
   docker/              本地和生产容器定义
-  scripts/             开发及发布脚本
+  scripts/             开发及发布脚本（后续阶段）
 docs/
   architecture/        系统设计与租户隔离模型
   decisions/           架构决策记录
@@ -78,7 +110,7 @@ docs/
 
 ## 当前状态
 
-仓库已初始化，正在建设第一阶段：工程基础与控制平面骨架。当前所有接口和目录均以可测试、可渐进交付为原则，不采用难以拆分的单体式实现。
+Phase 0 正在完成工程基础验收。当前已包含 FastAPI 可运行骨架、健康检查、Request ID、结构化日志、Docker Compose 开发依赖、Alembic 迁移框架和自动化测试。下一阶段必须先通过 Phase 0 验收，再开始用户认证与租户上下文。
 
 ## License
 

@@ -1,19 +1,30 @@
 API_DIR := apps/api
-COMPOSE := docker compose -f deploy/docker/compose.yaml
+COMPOSE_FILE := deploy/docker/compose.yaml
+COMPOSE := docker compose -f $(COMPOSE_FILE)
 
-.PHONY: api-install api-lint api-test dev-up dev-down dev-logs
+.PHONY: api-install api-lint api-test api-migrate api-revision dev-up dev-down dev-logs dev-migrate
 
 api-install:
-	cd $(API_DIR) && python -m pip install -e ".[dev]"
+	python -m pip install -e "$(API_DIR)[dev]"
 
 api-lint:
-	cd $(API_DIR) && ruff check app tests
+	ruff check --config $(API_DIR)/pyproject.toml $(API_DIR)/app $(API_DIR)/tests $(API_DIR)/migrations
 
 api-test:
-	cd $(API_DIR) && pytest
+	pytest -c $(API_DIR)/pyproject.toml $(API_DIR)/tests
+
+api-migrate:
+	alembic -c $(API_DIR)/alembic.ini upgrade head
+
+api-revision:
+	test -n "$(name)" || (echo "Usage: make api-revision name='describe change'"; exit 1)
+	alembic -c $(API_DIR)/alembic.ini revision --autogenerate -m "$(name)"
 
 dev-up:
 	$(COMPOSE) up --build -d
+
+dev-migrate:
+	$(COMPOSE) exec -T api alembic upgrade head
 
 dev-down:
 	$(COMPOSE) down
