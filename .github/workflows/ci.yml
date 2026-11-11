@@ -91,6 +91,11 @@ jobs:
           curl -fsS http://127.0.0.1:8000/health/live
           curl -fsS http://127.0.0.1:8000/health/ready
 
+      - name: Verify non-root API and S3 storage readiness
+        run: |
+          test "$(docker compose -f deploy/docker/compose.yaml exec -T api id -u)" != "0"
+          docker compose -f deploy/docker/compose.yaml exec -T minio silo healthcheck ready
+
       - name: Stop stack
         if: always()
         run: docker compose -f deploy/docker/compose.yaml down -v
