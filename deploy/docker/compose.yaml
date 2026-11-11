@@ -1,0 +1,76 @@
+name: supernova
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: \${POSTGRES_DB:-supernova}
+      POSTGRES_USER: \${POSTGRES_USER:-supernova}
+      POSTGRES_PASSWORD: \${POSTGRES_PASSWORD:-change-me-local-only}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \${POSTGRES_USER:-supernova} -d \${POSTGRES_DB:-supernova}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["sh", "-c", "if [ -n \\"$REDIS_PASSWORD\\" ]; then redis-server --appendonly yes --requirepass \\"$REDIS_PASSWORD\\"; else redis-server --appendonly yes; fi"]
+    environment:
+      REDIS_PASSWORD: \${REDIS_PASSWORD:-}
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  minio:
+    image: quay.io/minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: \${MINIO_ROOT_USER:-supernova}
+      MINIO_ROOT_PASSWORD: \${MINIO_ROOT_PASSWORD:-change-me-local-only}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+
+  api:
+    build:
+      context: ../..
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    environment:
+      SUPERNOVA_ENVIRONMENT: \${SUPERNOVA_ENVIRONMENT:-development}
+      SUPERNOVA_LOG_LEVEL: \${SUPERNOVA_LOG_LEVEL:-INFO}
+      SUPERNOVA_DATABASE_URL: postgresql://\${POSTGRES_USER:-supernova}:\${POSTGRES_PASSWORD:-change-me-local-only}@postgres:5432/\${POSTGRES_DB:-supernova}
+      SUPERNOVA_REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
