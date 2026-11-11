@@ -1,5 +1,4 @@
 from alembic import context
-
 from app.core.config import get_settings
 from sqlalchemy import create_engine, pool
 
