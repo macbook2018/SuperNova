@@ -17,7 +17,7 @@ api-migrate:
 	alembic -c $(API_DIR)/alembic.ini upgrade head
 
 api-revision:
-	test -n "$(name)" || (echo "Usage: make api-revision name='describe change'"; exit 1)
+	test -n "$(name)" || (echo "用法：make api-revision name='迁移内容说明'"; exit 1)
 	alembic -c $(API_DIR)/alembic.ini revision --autogenerate -m "$(name)"
 
 dev-up:

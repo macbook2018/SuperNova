@@ -5,7 +5,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from redis.asyncio import Redis
 
-router = APIRouter(tags=["health"])
+router = APIRouter(tags=["运行状态"])
 
 
 async def _check_database(database_url: str) -> str:
@@ -39,12 +39,21 @@ async def _check_redis(redis_url: str) -> str:
         await client.aclose()
 
 
-@router.get("/health/live")
+@router.get(
+    "/health/live",
+    summary="服务存活检查",
+    description="检查 SuperNova API 进程是否正常运行，不检查数据库等外部依赖。",
+)
 async def liveness() -> dict[str, str]:
+    # status 字段使用固定英文值，供 Docker 和监控系统进行机器判断。
     return {"status": "alive"}
 
 
-@router.get("/health/ready")
+@router.get(
+    "/health/ready",
+    summary="服务就绪检查",
+    description="检查 API 是否已准备好对外提供服务，同时验证 PostgreSQL 和 Redis 的连接状态。",
+)
 async def readiness(request: Request) -> JSONResponse:
     settings = request.app.state.settings
     database, redis = await asyncio.gather(
@@ -54,6 +63,7 @@ async def readiness(request: Request) -> JSONResponse:
     dependencies = {"postgres": database, "redis": redis}
     ready = all(status == "ok" for status in dependencies.values())
 
+    # status、dependencies 和其取值属于机器接口，不翻译字段或固定枚举。
     return JSONResponse(
         status_code=200 if ready else 503,
         content={

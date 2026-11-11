@@ -1,38 +1,50 @@
 # SuperNova
 
-> 基于 AstrBot 的多租户 AI Agent SaaS 平台。
+> 基于 AstrBot 构建的多租户智能体服务平台。
 
-SuperNova 让每位用户创建多个独立 AI 人格，配置模型与知识库，并通过微信渠道或 OpenAI 兼容 API 接入业务系统。
+SuperNova 允许每位用户创建多个相互独立的 AI 人格，分别配置提示词、模型、知识库和渠道，并通过微信或兼容 OpenAI 标准的接口调用自己的机器人。
 
-## 产品原则
+## 一、产品语言
 
-- **租户隔离优先**：用户、人格、模型凭据、知识库、会话、用量记录和运行时资源必须具备明确的租户边界。
-- **AstrBot 负责 Agent 运行时**：优先通过适配器和集成边界扩展，避免不必要地 Fork 或侵入上游核心。
-- **一个用户级 API Key，多个人格**：API Key + Base URL 用于识别用户，OpenAI 兼容请求中的 `model` 用于选择该用户有权访问的人格。
-- **OpenAI 兼容**：支持 `GET /v1/models`、`POST /v1/chat/completions` 和 SSE 流式响应。
-- **可观测、可计量**：记录 Request ID、Token 用量、延迟、错误和用户级消耗。
-- **品牌一致性**：使用已确认的 SuperNova S 形轨道 Logo，以及深空蓝、青绿、蓝紫渐变视觉体系。
+- 平台默认语言：**简体中文（zh-CN）**。
+- 用户后台、管理后台、表单、菜单、按钮、通知、错误提示、帮助文档和账单页面均使用简体中文。
+- 后续如增加英文界面，必须通过独立语言包提供，不得在同一页面中随意中英混排。
+- API 路径、JSON 字段、数据库字段、代码变量、环境变量和第三方协议名称保留标准英文，避免破坏程序兼容性。
+- 第三方基础设施自带的管理控制台不属于 SuperNova 产品界面，其语言由对应第三方项目决定。
 
-## 技术基线
+详细要求见《产品语言与界面规范》（docs/产品语言规范.md）。
+
+## 二、产品原则
+
+- **数据隔离优先**：用户、人格、模型凭据、知识库、会话、用量记录和运行资源必须具备明确的租户边界。
+- **AstrBot 负责智能体运行**：优先通过适配器和集成边界扩展，避免不必要地修改上游核心。
+- **一个用户级接口密钥，多个独立人格**：接口密钥与用户绑定；请求中的 model 字段用于选择该用户有权使用的人格。
+- **兼容 OpenAI 接口**：提供 GET /v1/models、POST /v1/chat/completions 和 SSE 流式响应。
+- **用量可追踪**：记录请求编号、Token 用量、响应时间、错误和用户消耗。
+- **安全优先**：所有数据访问、文件存储、向量检索和机器人运行资源都必须执行租户隔离。
+
+## 三、技术架构
 
 | 层级 | 技术 |
 | --- | --- |
-| Web 控制台 | Vue 3 + TypeScript |
-| 控制平面 API | Python + FastAPI |
+| 用户控制台 | Vue 3 + TypeScript |
+| 服务端接口 | Python + FastAPI |
 | 主数据库 | PostgreSQL |
 | 向量检索 | pgvector |
-| 缓存 / 队列 | Redis |
-| 对象存储 | S3 兼容存储（Silo / MinIO 兼容） |
-| Agent 运行时 | 隔离的 AstrBot Worker |
-| 部署 | 开发环境 Docker Compose，生产环境容器化部署 |
+| 缓存与任务队列 | Redis |
+| 对象存储 | S3 兼容存储（开发环境使用 Silo） |
+| 智能体运行时 | 按租户隔离的 AstrBot Worker |
+| 部署 | Docker Compose 开发环境、容器化生产部署 |
 
-控制平面负责用户、租户、API Key、人格、模型供应商配置、知识库、渠道配置、会话、用量和 Worker 生命周期。AstrBot Worker 执行 Agent 对话。统一模型网关负责身份识别、人格解析、模型路由、流式输出和用量计量。
+控制平面负责用户、租户、接口密钥、人格、模型供应商、知识库、渠道、会话、用量和 Worker 生命周期。AstrBot Worker 负责执行智能体对话。统一模型网关负责身份识别、人格解析、模型路由、流式输出和用量计量。
 
-开发环境使用 PGSTY Silo 作为 MinIO 兼容的 S3 对象存储实现。Silo 是独立的社区维护分支，并非 MinIO, Inc. 官方发行版；应用层应只依赖标准 S3 API，避免绑定特定服务端实现。
+开发环境使用 PGSTY Silo 作为 S3 兼容对象存储。Silo 是社区维护的 MinIO 兼容分支，并非 MinIO 官方发行版。应用层只依赖标准 S3 接口，以便未来替换对象存储服务。
 
-## 本地开发
+## 四、本地开发
 
-需要 Docker Desktop（含 Docker Compose v2）、Python 3.12+。
+需要安装 Docker Desktop（包含 Docker Compose v2）和 Python 3.12 或更高版本。
+
+在终端中进入 SuperNova 项目目录，然后执行：
 
 ```bash
 cp .env.example .env
@@ -42,80 +54,85 @@ make dev-migrate
 
 服务启动后：
 
-- API：<http://localhost:8000>
-- OpenAPI：<http://localhost:8000/docs>
-- Liveness：<http://localhost:8000/health/live>
-- Readiness：<http://localhost:8000/health/ready>
-- S3 Console（Silo）：<http://localhost:9001>
+| 服务 | 地址 |
+| --- | --- |
+| SuperNova 接口 | http://localhost:8000 |
+| 接口文档 | http://localhost:8000/docs |
+| 存活检查 | http://localhost:8000/health/live |
+| 就绪检查 | http://localhost:8000/health/ready |
+| 对象存储管理控制台 | http://localhost:9001 |
 
 常用命令：
 
 ```bash
-make dev-logs
-make dev-down
-make api-install
-make api-lint
-make api-test
+make dev-logs       # 查看服务日志
+make dev-down       # 停止开发环境
+make api-install    # 安装接口服务开发依赖
+make api-lint       # 执行代码规范检查
+make api-test       # 运行自动化测试
+make dev-migrate    # 执行数据库迁移
 ```
 
-`.env.example` 中的凭据仅供本机开发。部署到共享或生产环境前必须替换全部默认密码；不要提交真实凭据。PostgreSQL 和 Redis 的本地端口仅绑定到 `127.0.0.1`。
+注意：.env.example 中的密码仅供本机开发使用。部署到共享或生产环境前必须更换所有默认密码，禁止将真实密钥提交到 Git。PostgreSQL 和 Redis 的开发端口仅绑定到本机地址。
 
-## 统一 API 约定
+## 五、统一接口约定
 
-- `GET /v1/models`：返回当前 API Key 对应用户可用的人格列表。
-- `POST /v1/chat/completions`：通过 `model` 解析人格，并执行对话。
-- `stream=true`：返回 OpenAI 兼容 SSE，结束时发送 `data: [DONE]`。
+- GET /v1/models：返回当前接口密钥所属用户可用的人格列表。
+- POST /v1/chat/completions：根据请求中的 model 选择人格并执行对话。
+- stream=true：启用 SSE 流式响应，结束标记为 data: [DONE]。
 
-认证使用标准请求头 `Authorization: Bearer <API_KEY>`。API Key 绑定用户及其租户；服务端不得信任请求体或 URL 中由客户端自行传入的 tenant_id。任何人格、知识库或会话访问都必须再次校验资源归属。
+认证使用标准请求头：
 
-## 交付顺序
+```http
+Authorization: Bearer <API_KEY>
+```
 
-1. **工程基础**：仓库规范、本地开发环境、配置、数据库迁移、健康检查、结构化日志和 CI。
-2. **控制平面**：用户认证、租户上下文、用户级 API Key 生命周期和权限边界。
-3. **人格与模型管理**：人格 CRUD、模型供应商配置、密钥安全存储和模型选择。
-4. **统一 API 网关**：OpenAI 兼容 models/chat-completions、SSE、请求追踪和用量记录。
-5. **知识库**：文档/链接导入、解析、切片、Embedding、检索和租户级隔离。
-6. **AstrBot 运行时编排**：Worker 隔离部署、生命周期、适配器集成、健康监控和故障恢复。
-7. **渠道与运营**：微信渠道、会话管理、用量限制、计费接口、管理控制台和生产加固。
+接口密钥绑定用户及其租户。服务端不得信任客户端自行传入的 tenant_id 或 user_id。访问人格、知识库、会话和文件前，必须再次校验资源归属。
 
-每个阶段都必须有自动化测试和验收报告；仅编译通过不能视为阶段完成。
+## 六、开发阶段
 
-## 仓库结构
+1. **工程基础**：仓库规范、本地环境、数据库迁移、健康检查、结构化日志和自动化测试。
+2. **身份与租户管理**：用户注册、登录、租户上下文、用户级接口密钥及权限边界。
+3. **人格与模型管理**：人格创建、编辑、删除，模型供应商配置和密钥安全存储。
+4. **统一接口网关**：兼容 OpenAI 的模型列表、对话接口、流式响应和用量记录。
+5. **知识库**：文档和链接导入、解析、切片、向量化、检索及租户隔离。
+6. **AstrBot 运行管理**：Worker 隔离部署、生命周期、适配器集成、健康监控和故障恢复。
+7. **渠道与运营**：微信渠道、会话管理、用量限制、套餐计费、管理后台和生产环境加固。
+
+每个阶段都必须提供自动化测试和验收报告。仅编译通过不能视为阶段完成。
+
+## 七、仓库结构
 
 ```text
 apps/
-  api/                 FastAPI 控制平面与统一 API 网关
-    app/               API 应用代码
-    migrations/        Alembic 数据库迁移
-  console/             Vue 3 管理控制台（后续阶段）
-  worker-manager/      AstrBot Worker 生命周期与适配边界（后续阶段）
+  api/                 服务端控制平面与统一接口网关
+  console/             中文用户控制台（后续阶段）
+  worker-manager/      AstrBot 运行实例管理（后续阶段）
 packages/
-  contracts/           共享 API Schema 与客户端契约（后续阶段）
-  sdk/                 OpenAI 兼容 SDK 示例与辅助工具（后续阶段）
+  contracts/           共享接口数据结构（后续阶段）
+  sdk/                 OpenAI 兼容接口示例与工具包（后续阶段）
 deploy/
-  docker/              本地和生产容器定义
-  scripts/             开发及发布脚本（后续阶段）
+  docker/              本地与生产容器配置
+  scripts/             开发与发布脚本
 docs/
-  architecture/        系统设计与租户隔离模型
+  architecture/        系统架构与数据隔离设计
   decisions/           架构决策记录
-  roadmap/             里程碑与验收标准
+  roadmap/              阶段计划与验收标准
 ```
 
-## 安全要求
+## 八、安全要求
 
-- API Key 仅存储不可逆哈希；创建时明文只展示一次。
-- 模型供应商密钥必须加密存储，读取 API 不得返回密钥明文。
-- 租户身份必须从已认证的 API Key / 登录会话推导，不接受客户端自报身份。
-- 服务层和数据访问层都必须执行租户范围校验，并提供跨租户负向测试。
+- 用户接口密钥只保存不可逆哈希，创建时仅展示一次明文。
+- 模型供应商密钥必须加密保存，读取接口不得返回密钥明文。
+- 租户身份必须从已验证的接口密钥或登录会话中取得，不接受客户端自行声明身份。
+- 服务层和数据访问层都必须校验租户范围，并覆盖跨租户越权测试。
 - 浏览器不得接触 AstrBot Worker 凭据、内部地址或模型供应商密钥。
-- 密钥不得进入 Git、日志、链路追踪或错误响应。
+- 密钥不得写入 Git、日志、链路追踪或错误响应。
 
-## 当前状态
+## 九、当前进度
 
-**Phase 0 工程基础已通过 GitHub Actions 自动验收（run #6）。** Ruff、pytest、Alembic 初始迁移、Docker Compose 构建与启动、API 存活/就绪检查、API 非 root 运行及 Silo 存储就绪检查均通过。CI 使用 GitHub Actions 的 Ubuntu 环境；首次在本机 macOS Docker Desktop 上启动仍需按上方命令执行。
+工程基础阶段已通过 GitHub Actions 自动验收。下一阶段进入用户身份、租户上下文和用户级接口密钥开发。中文用户控制台将在后续前端阶段实现；当前仓库尚未包含可供用户登录的完整后台。
 
-下一阶段进入控制平面：用户登录、租户上下文、用户级 API Key 的安全存储、轮换和撤销，以及跨租户负向测试。
-
-## License
+## 十、许可证
 
 正式公开发布前确定许可证及分发条款。

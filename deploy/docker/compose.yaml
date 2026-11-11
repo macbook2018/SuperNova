@@ -39,7 +39,7 @@ services:
       timeout: 3s
       retries: 20
 
-  # Silo is a community-maintained MinIO-compatible S3 server.
+  # 使用社区维护的 Silo，提供兼容 MinIO 的 S3 对象存储接口。
   minio:
     image: docker.io/pgsty/silo:RELEASE.2026-11-09T00-00-00Z
     restart: unless-stopped

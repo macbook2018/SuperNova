@@ -10,7 +10,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    app_name: str = "SuperNova API"
+    app_name: str = "SuperNova 中文管理平台与模型网关"
     environment: str = "development"
     log_level: str = "INFO"
     database_url: str = (
