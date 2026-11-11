@@ -27,7 +27,7 @@ def test_request_id_is_generated_when_missing() -> None:
     response = client.get("/health/live")
 
     assert response.status_code == 200
-    UUID(response.headers["X-Request-ID"])
+    assert str(UUID(response.headers["X-Request-ID"])) == response.headers["X-Request-ID"]
 
 
 def test_invalid_request_id_is_replaced() -> None:
@@ -35,7 +35,7 @@ def test_invalid_request_id_is_replaced() -> None:
 
     assert response.status_code == 200
     assert response.headers["X-Request-ID"] != "not-a-uuid"
-    UUID(response.headers["X-Request-ID"])
+    assert str(UUID(response.headers["X-Request-ID"])) == response.headers["X-Request-ID"]
 
 
 def test_readiness_returns_ready_when_dependencies_are_healthy(monkeypatch) -> None:
