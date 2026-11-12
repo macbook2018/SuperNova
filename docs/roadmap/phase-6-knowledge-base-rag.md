@@ -192,3 +192,66 @@ Phase 6 仅记录：
 - 支付网关、充值、钱包、真实扣费、退款和发票。
 - AstrBot Worker 运行时及微信渠道自动化。
 - OCR、音视频转录、复杂表格 Agent、图像多模态索引（先留扩展点）。
+
+
+## 13. 部署与平台 Embedding 模型配置
+
+### 环境变量
+
+API 与 Worker 必须使用相同的对象存储和平台凭据配置：
+
+- `SUPERNOVA_S3_ENDPOINT_URL`
+- `SUPERNOVA_S3_ACCESS_KEY`
+- `SUPERNOVA_S3_SECRET_KEY`
+- `SUPERNOVA_S3_BUCKET`
+- `SUPERNOVA_PLATFORM_CREDENTIALS_JSON`
+- `SUPERNOVA_PLATFORM_ADMIN_EMAILS`
+- `SUPERNOVA_KNOWLEDGE_MAX_UPLOAD_BYTES`
+- `SUPERNOVA_KNOWLEDGE_MAX_URL_BYTES`
+
+平台 API Key 只通过 credential reference 映射到服务端环境变量，不提交到平台模型 API：
+
+```bash
+SUPERNOVA_PLATFORM_CREDENTIALS_JSON='{"openai-embedding-prod":"<server-side-api-key>"}'
+SUPERNOVA_PLATFORM_ADMIN_EMAILS='admin@example.com'
+```
+
+### 发布平台 Embedding 模型
+
+使用平台管理员账号调用 `POST /admin/platform/embedding-models`：
+
+```json
+{
+  "code": "platform-embedding-small",
+  "display_name": "平台 Embedding Small",
+  "provider_type": "openai_compatible",
+  "upstream_model_name": "text-embedding-3-small",
+  "base_url": "https://api.openai.com/v1",
+  "credential_ref": "openai-embedding-prod",
+  "dimensions": 1536,
+  "enabled": true
+}
+```
+
+普通租户通过 `GET /platform/embedding-models` 获取可选目录。响应不包含 credential_ref 或 API Key。
+
+BYOK 知识库复用当前租户的 ModelProvider 加密 Key；供应商必须支持 OpenAI-compatible Embeddings API，并返回 1536 维向量。
+
+### 数据库与 Worker
+
+```bash
+alembic -c apps/api/alembic.ini upgrade head
+docker compose -f deploy/docker/compose.yaml up -d --build api worker minio
+```
+
+Worker 使用 PostgreSQL 持久化任务、行锁、租约、重试和死信状态。不要通过 FastAPI 进程内 BackgroundTasks 替代 Worker。
+
+公网网页导入必须使用 HTTPS；Worker 禁止代理环境变量和 HTTP 重定向，并拒绝解析到非公网地址的目标。生产部署还应在网络层限制 Worker 的出站访问范围。
+
+### 当前实现边界
+
+- pgvector 首发固定 1536 维；有文档后不允许直接切换 Embedding 模型或切片参数，避免新旧向量空间混用。当前安全路径是新建知识库并重新导入资料；后续可增加双索引配置版本迁移。
+- URL 导入当前抓取单个页面，不做站点递归爬取。
+- 扫描件 OCR、旧版 DOC、音视频转录和图像多模态索引尚未实现。
+- 词法检索使用 pg_trgm；Reranker 和元数据过滤暂未开放。
+- 当前计量只写知识库用量记录，不执行钱包扣款、超额收费或支付。
