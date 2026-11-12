@@ -17,6 +17,13 @@ from app.models.billing import (
 )
 from app.models.catalog import KnowledgeBase, ModelProvider, Persona, PersonaKnowledgeBase
 from app.models.identity import ApiKey, RefreshSession, Tenant, TenantMembership, User
+from app.models.knowledge import (
+    KnowledgeChunk,
+    KnowledgeDocument,
+    KnowledgeIngestionJob,
+    KnowledgeUsageRecord,
+    PlatformEmbeddingModel,
+)
 from app.models.usage import UsageRecord
 
 __all__ = [
@@ -33,6 +40,11 @@ __all__ = [
     "BillingReservationItem",
     "BillingUsageEvent",
     "KnowledgeBase",
+    "KnowledgeChunk",
+    "KnowledgeDocument",
+    "KnowledgeIngestionJob",
+    "KnowledgeUsageRecord",
+    "PlatformEmbeddingModel",
     "ModelProvider",
     "Persona",
     "PersonaKnowledgeBase",
