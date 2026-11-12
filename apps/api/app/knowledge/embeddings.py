@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from urllib.parse import urlparse
+
 import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session
