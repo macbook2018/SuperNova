@@ -37,7 +37,12 @@ def ensure_bucket() -> None:
         code = str(exc.response.get("Error", {}).get("Code", ""))
         if code not in {"404", "NoSuchBucket", "NotFound"}:
             raise
-        client.create_bucket(Bucket=settings.s3_bucket)
+        try:
+            client.create_bucket(Bucket=settings.s3_bucket)
+        except ClientError as create_error:
+            create_code = str(create_error.response.get("Error", {}).get("Code", ""))
+            if create_code not in {"BucketAlreadyExists", "BucketAlreadyOwnedByYou"}:
+                raise
 
 
 def put_object(object_key: str, body: bytes, content_type: str) -> None:
