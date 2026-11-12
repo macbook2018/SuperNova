@@ -66,7 +66,6 @@ def _claim_job() -> str | None:
 
 
 def _extend_job_lease(job_id) -> None:
-    settings = get_settings()
     with SessionLocal() as db:
         job = db.get(KnowledgeIngestionJob, job_id)
         if job is None or job.status != "running" or job.worker_id != WORKER_ID:
@@ -148,7 +147,12 @@ def _process_delete(db, job: KnowledgeIngestionJob, document: KnowledgeDocument)
     db.commit()
 
 
-def _process_ingest(db, job: KnowledgeIngestionJob, document: KnowledgeDocument, kb: KnowledgeBase) -> None:
+def _process_ingest(
+    db,
+    job: KnowledgeIngestionJob,
+    document: KnowledgeDocument,
+    kb: KnowledgeBase,
+) -> None:
     started = time.monotonic()
     settings = get_settings()
     if document.source_type == "url" and document.sha256 is None:
