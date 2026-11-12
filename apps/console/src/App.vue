@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import {
-  Activity, AlertCircle, ArrowRight, ArrowUpRight, Bell, Bot, Check, CheckCircle2,
+  Activity, AlertCircle, ArrowRight, Bell, Bot, Check, CheckCircle2,
   ChevronDown, ChevronRight, CircleHelp, Copy, Cpu, Database, Download, FileText,
   Filter, Gauge, KeyRound, LayoutDashboard, LifeBuoy, LogOut, Menu, MessageSquare,
   MoreHorizontal, Pencil, Plus, Search, Server, Settings2, ShieldCheck, Sparkles,
