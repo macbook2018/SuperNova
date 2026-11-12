@@ -2,13 +2,14 @@ from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, HTTPException, status
-from sqlalchemy import delete, insert, or_, select
+from sqlalchemy import delete, func, insert, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.deps import CurrentPrincipal, DatabaseSession, Principal
 from app.core.secret_encryption import encrypt_provider_api_key
 from app.models.billing import PlatformModel, PlatformModelPrice, TenantBillingPolicy
+from app.models.knowledge import KnowledgeDocument, PlatformEmbeddingModel
 from app.models.catalog import (
     KnowledgeBase,
     ModelProvider,
@@ -349,6 +350,85 @@ def delete_model_provider(
         ) from None
 
 
+def _knowledge_base_read(db: Session, item: KnowledgeBase) -> KnowledgeBaseRead:
+    documents_count = int(
+        db.scalar(
+            select(func.count(KnowledgeDocument.id)).where(
+                KnowledgeDocument.tenant_id == item.tenant_id,
+                KnowledgeDocument.knowledge_base_id == item.id,
+                KnowledgeDocument.status != "deleted",
+            )
+        )
+        or 0
+    )
+    return KnowledgeBaseRead(
+        id=item.id,
+        name=item.name,
+        description=item.description,
+        embedding_source=item.embedding_source,
+        platform_embedding_model_id=item.platform_embedding_model_id,
+        embedding_provider_id=item.embedding_provider_id,
+        embedding_model_name=item.embedding_model_name,
+        embedding_dimensions=item.embedding_dimensions,
+        chunk_size=item.chunk_size,
+        chunk_overlap=item.chunk_overlap,
+        retrieval_top_k=item.retrieval_top_k,
+        retrieval_score_threshold=item.retrieval_score_threshold,
+        enabled=item.enabled,
+        documents_count=documents_count,
+        created_at=item.created_at,
+        updated_at=item.updated_at,
+    )
+
+
+def _validate_knowledge_embedding_config(
+    db: Session,
+    principal: Principal,
+    *,
+    embedding_source: str,
+    platform_embedding_model_id: UUID | None,
+    embedding_provider_id: UUID | None,
+    embedding_model_name: str | None,
+) -> None:
+    if embedding_source == "platform":
+        if embedding_provider_id is not None:
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "embedding_source_conflict", "message": "平台 Embedding 不能绑定租户供应商"},
+            )
+        if platform_embedding_model_id is not None:
+            model = db.get(PlatformEmbeddingModel, platform_embedding_model_id)
+            if model is None or not model.enabled:
+                raise _not_found("platform_embedding_model")
+    elif embedding_source == "byok":
+        if platform_embedding_model_id is not None:
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "embedding_source_conflict", "message": "BYOK Embedding 不能绑定平台模型"},
+            )
+        if embedding_provider_id is None or not embedding_model_name:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "embedding_provider_required",
+                    "message": "BYOK Embedding 必须选择供应商并填写模型名称",
+                },
+            )
+        provider = _get_provider(db, principal, embedding_provider_id)
+        if not provider.enabled or not provider.api_key_ciphertext:
+            raise _conflict(
+                "embedding_provider_unavailable",
+                "所选 Embedding 供应商未启用或未配置 API Key",
+            )
+        if provider.provider_type == "anthropic":
+            raise _conflict("embedding_provider_not_supported", "当前不支持该供应商的 Embedding 协议")
+    else:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "embedding_source_invalid", "message": "不支持的 Embedding 来源"},
+        )
+
+
 @router.get("/knowledge-bases", response_model=list[KnowledgeBaseRead])
 def list_knowledge_bases(
     principal: CurrentPrincipal,
@@ -359,17 +439,7 @@ def list_knowledge_bases(
         .where(KnowledgeBase.tenant_id == principal.tenant.id)
         .order_by(KnowledgeBase.created_at.desc())
     ).all()
-    return [
-        KnowledgeBaseRead(
-            id=item.id,
-            name=item.name,
-            description=item.description,
-            documents_count=0,
-            created_at=item.created_at,
-            updated_at=item.updated_at,
-        )
-        for item in records
-    ]
+    return [_knowledge_base_read(db, item) for item in records]
 
 
 @router.post(
@@ -382,11 +452,29 @@ def create_knowledge_base(
     principal: CurrentPrincipal,
     db: DatabaseSession,
 ) -> KnowledgeBaseRead:
+    _validate_knowledge_embedding_config(
+        db,
+        principal,
+        embedding_source=payload.embedding_source,
+        platform_embedding_model_id=payload.platform_embedding_model_id,
+        embedding_provider_id=payload.embedding_provider_id,
+        embedding_model_name=payload.embedding_model_name,
+    )
     record = KnowledgeBase(
         id=uuid4(),
         tenant_id=principal.tenant.id,
         name=payload.name,
         description=payload.description,
+        embedding_source=payload.embedding_source,
+        platform_embedding_model_id=payload.platform_embedding_model_id,
+        embedding_provider_id=payload.embedding_provider_id,
+        embedding_model_name=payload.embedding_model_name,
+        embedding_dimensions=payload.embedding_dimensions,
+        chunk_size=payload.chunk_size,
+        chunk_overlap=payload.chunk_overlap,
+        retrieval_top_k=payload.retrieval_top_k,
+        retrieval_score_threshold=payload.retrieval_score_threshold,
+        enabled=payload.enabled,
     )
     db.add(record)
     try:
@@ -398,14 +486,7 @@ def create_knowledge_base(
             "同一工作空间内的知识库名称不能重复",
         ) from None
     db.refresh(record)
-    return KnowledgeBaseRead(
-        id=record.id,
-        name=record.name,
-        description=record.description,
-        documents_count=0,
-        created_at=record.created_at,
-        updated_at=record.updated_at,
-    )
+    return _knowledge_base_read(db, record)
 
 
 @router.patch("/knowledge-bases/{knowledge_base_id}", response_model=KnowledgeBaseRead)
@@ -417,7 +498,41 @@ def update_knowledge_base(
 ) -> KnowledgeBaseRead:
     record = _get_knowledge_base(db, principal, knowledge_base_id)
     updates = payload.model_dump(exclude_unset=True)
-    _reject_null_updates(updates)
+    _reject_null_updates(
+        updates,
+        nullable_fields={"platform_embedding_model_id", "embedding_provider_id", "embedding_model_name"},
+    )
+    target_source = updates.get("embedding_source", record.embedding_source)
+    target_platform_model = updates.get(
+        "platform_embedding_model_id", record.platform_embedding_model_id
+    )
+    target_provider = updates.get("embedding_provider_id", record.embedding_provider_id)
+    target_model_name = updates.get("embedding_model_name", record.embedding_model_name)
+    _validate_knowledge_embedding_config(
+        db,
+        principal,
+        embedding_source=target_source,
+        platform_embedding_model_id=target_platform_model,
+        embedding_provider_id=target_provider,
+        embedding_model_name=target_model_name,
+    )
+    config_fields = {
+        "embedding_source", "platform_embedding_model_id", "embedding_provider_id",
+        "embedding_model_name", "embedding_dimensions",
+    }
+    if config_fields.intersection(updates):
+        existing_documents = db.scalar(
+            select(func.count(KnowledgeDocument.id)).where(
+                KnowledgeDocument.tenant_id == principal.tenant.id,
+                KnowledgeDocument.knowledge_base_id == record.id,
+                KnowledgeDocument.status != "deleted",
+            )
+        )
+        if existing_documents:
+            raise _conflict(
+                "embedding_reindex_required",
+                "知识库已有文档，变更 Embedding 模型需要先执行全量重建索引；当前配置保持不变",
+            )
     for field, value in updates.items():
         setattr(record, field, value)
     try:
@@ -429,14 +544,7 @@ def update_knowledge_base(
             "同一工作空间内的知识库名称不能重复",
         ) from None
     db.refresh(record)
-    return KnowledgeBaseRead(
-        id=record.id,
-        name=record.name,
-        description=record.description,
-        documents_count=0,
-        created_at=record.created_at,
-        updated_at=record.updated_at,
-    )
+    return _knowledge_base_read(db, record)
 
 
 @router.delete("/knowledge-bases/{knowledge_base_id}", status_code=status.HTTP_204_NO_CONTENT)
