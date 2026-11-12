@@ -116,13 +116,19 @@ def _validate_provider_target(base_url: str) -> None:
     if parsed.port not in (None, 443) and not (development and local_target):
         raise HTTPException(
             status_code=403,
-            detail={"code": "provider_url_not_allowed", "message": "模型供应商仅允许使用标准 HTTPS 端口"},
+            detail={
+                "code": "provider_url_not_allowed",
+                "message": "模型供应商仅允许使用标准 HTTPS 端口",
+            },
         )
     if local_target:
         if not development:
             raise HTTPException(
                 status_code=403,
-                detail={"code": "provider_url_not_allowed", "message": "生产环境不允许访问本机模型地址"},
+                detail={
+                    "code": "provider_url_not_allowed",
+                    "message": "生产环境不允许访问本机模型地址",
+                },
             )
         return
 
@@ -193,12 +199,18 @@ def _resolve_persona(
     if provider is None or not provider.enabled:
         raise HTTPException(
             status_code=409,
-            detail={"code": "model_provider_disabled", "message": "该人格绑定的模型供应商不存在或已停用"},
+            detail={
+                "code": "model_provider_disabled",
+                "message": "该人格绑定的模型供应商不存在或已停用",
+            },
         )
     if not provider.api_key_ciphertext:
         raise HTTPException(
             status_code=409,
-            detail={"code": "provider_credentials_missing", "message": "请先为模型供应商配置 API Key"},
+            detail={
+                "code": "provider_credentials_missing",
+                "message": "请先为模型供应商配置 API Key",
+            },
         )
     if provider.provider_type == "anthropic":
         raise HTTPException(
@@ -214,7 +226,10 @@ def _resolve_persona(
     except RuntimeError:
         raise HTTPException(
             status_code=503,
-            detail={"code": "provider_credentials_unavailable", "message": "模型供应商凭据无法解密，请检查服务端加密配置"},
+            detail={
+                "code": "provider_credentials_unavailable",
+                "message": "模型供应商凭据无法解密，请检查服务端加密配置",
+            },
         ) from None
 
     _validate_provider_target(provider.base_url)
@@ -286,7 +301,9 @@ def _upstream_payload(payload: ChatCompletionRequest, persona: Persona) -> dict[
     result: dict[str, Any] = {
         "model": persona.model_name,
         "messages": messages,
-        "temperature": payload.temperature if payload.temperature is not None else persona.temperature,
+        "temperature": (
+            payload.temperature if payload.temperature is not None else persona.temperature
+        ),
         "top_p": payload.top_p if payload.top_p is not None else persona.top_p,
         "max_tokens": max_tokens,
         "stream": payload.stream,
@@ -459,7 +476,9 @@ def create_chat_completion(
                 latency_ms=latency_ms,
                 error_code="invalid_provider_response",
             )
-            raise _client_error(502, "invalid_provider_response", "模型供应商返回了无法识别的响应") from None
+            raise _client_error(
+                502, "invalid_provider_response", "模型供应商返回了无法识别的响应"
+            ) from None
 
         if not isinstance(result, dict) or not isinstance(result.get("choices"), list):
             _record_usage(
@@ -473,7 +492,9 @@ def create_chat_completion(
                 latency_ms=latency_ms,
                 error_code="invalid_provider_response",
             )
-            raise _client_error(502, "invalid_provider_response", "模型供应商返回了不兼容的对话响应")
+            raise _client_error(
+                502, "invalid_provider_response", "模型供应商返回了不兼容的对话响应"
+            )
 
         usage = _extract_usage(result.get("usage"))
         result["id"] = result.get("id") or "chatcmpl-" + uuid4().hex
@@ -585,7 +606,10 @@ def create_chat_completion(
                 if chunk_usage is not None:
                     usage = chunk_usage
                 chunk["model"] = persona.slug
-                yield "data: " + json.dumps(chunk, ensure_ascii=False, separators=(",", ":")) + "\n\n"
+                encoded_chunk = json.dumps(
+                    chunk, ensure_ascii=False, separators=(",", ":")
+                )
+                yield "data: " + encoded_chunk + "\n\n"
             if not completed:
                 failure_code = "provider_stream_incomplete"
         except GeneratorExit:
@@ -611,7 +635,13 @@ def create_chat_completion(
                     persona=persona,
                     provider=provider,
                     usage=usage,
-                    status_value="cancelled" if cancelled else "failed" if failure_code else "succeeded",
+                    status_value=(
+                        "cancelled"
+                        if cancelled
+                        else "failed"
+                        if failure_code
+                        else "succeeded"
+                    ),
                     latency_ms=int((time.monotonic() - started) * 1000),
                     error_code=failure_code,
                 )
@@ -623,12 +653,24 @@ def create_chat_completion(
 
         if meter_failed:
             yield "event: error\ndata: " + json.dumps(
-                {"error": {"message": "用量记录失败，请联系平台管理员", "type": "server_error", "code": "usage_record_failed"}},
+                {
+                    "error": {
+                        "message": "用量记录失败，请联系平台管理员",
+                        "type": "server_error",
+                        "code": "usage_record_failed",
+                    }
+                },
                 ensure_ascii=False,
             ) + "\n\n"
         elif failure_code:
             yield "event: error\ndata: " + json.dumps(
-                {"error": {"message": "模型供应商流式响应中断", "type": "server_error", "code": failure_code}},
+                {
+                    "error": {
+                        "message": "模型供应商流式响应中断",
+                        "type": "server_error",
+                        "code": failure_code,
+                    }
+                },
                 ensure_ascii=False,
             ) + "\n\n"
         elif completed:
