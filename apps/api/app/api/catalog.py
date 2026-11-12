@@ -241,7 +241,10 @@ def update_model_provider(
         db.commit()
     except IntegrityError:
         db.rollback()
-        raise _conflict("model_provider_name_exists", "同一工作空间内的供应商名称不能重复") from None
+        raise _conflict(
+            "model_provider_name_exists",
+            "同一工作空间内的供应商名称不能重复",
+        ) from None
     db.refresh(provider)
     return _provider_read(provider)
 
@@ -338,7 +341,10 @@ def update_knowledge_base(
         db.commit()
     except IntegrityError:
         db.rollback()
-        raise _conflict("knowledge_base_name_exists", "同一工作空间内的知识库名称不能重复") from None
+        raise _conflict(
+            "knowledge_base_name_exists",
+            "同一工作空间内的知识库名称不能重复",
+        ) from None
     db.refresh(record)
     return KnowledgeBaseRead(
         id=record.id,
