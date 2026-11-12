@@ -126,6 +126,7 @@ def _process_delete(db, job: KnowledgeIngestionJob, document: KnowledgeDocument)
     db.commit()
     delete_object(document.object_key)
     document.status = "deleted"
+    document.sha256 = None
     document.chunk_count = 0
     document.error_code = None
     document.error_message = None
