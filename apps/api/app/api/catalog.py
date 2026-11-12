@@ -518,7 +518,7 @@ def update_knowledge_base(
     )
     config_fields = {
         "embedding_source", "platform_embedding_model_id", "embedding_provider_id",
-        "embedding_model_name", "embedding_dimensions",
+        "embedding_model_name", "embedding_dimensions", "chunk_size", "chunk_overlap",
     }
     if config_fields.intersection(updates):
         existing_documents = db.scalar(
@@ -554,6 +554,18 @@ def delete_knowledge_base(
     db: DatabaseSession,
 ):
     record = _get_knowledge_base(db, principal, knowledge_base_id)
+    remaining_documents = db.scalar(
+        select(func.count(KnowledgeDocument.id)).where(
+            KnowledgeDocument.tenant_id == principal.tenant.id,
+            KnowledgeDocument.knowledge_base_id == record.id,
+            KnowledgeDocument.status != "deleted",
+        )
+    )
+    if remaining_documents:
+        raise _conflict(
+            "knowledge_base_has_documents",
+            "请先删除知识库中的全部文档；对象存储清理完成后才能删除知识库",
+        )
     db.execute(
         delete(PersonaKnowledgeBase).where(
             PersonaKnowledgeBase.tenant_id == principal.tenant.id,
