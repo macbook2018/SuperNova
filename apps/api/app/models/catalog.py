@@ -103,6 +103,7 @@ class KnowledgeBase(Base):
     retrieval_top_k: Mapped[int] = mapped_column(Integer, nullable=False, default=5, server_default="5")
     retrieval_score_threshold: Mapped[float] = mapped_column(Float, nullable=False, default=0.15, server_default="0.15")
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+    active_index_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
