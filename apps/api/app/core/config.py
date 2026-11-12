@@ -29,6 +29,16 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
     platform_admin_emails: str = ""
     platform_credentials_json: str = "{}"
+    s3_endpoint_url: str = "http://minio:9000"
+    s3_access_key: str = "supernova"
+    s3_secret_key: str = "change-me-local-only"
+    s3_bucket: str = "supernova-knowledge"
+    s3_region: str = "us-east-1"
+    knowledge_max_upload_bytes: int = 25 * 1024 * 1024
+    knowledge_max_url_bytes: int = 20 * 1024 * 1024
+    knowledge_worker_poll_seconds: float = 2.0
+    knowledge_worker_lease_seconds: int = 180
+    embedding_timeout_seconds: float = 60.0
 
     @property
     def platform_admin_email_set(self) -> frozenset[str]:
@@ -60,6 +70,12 @@ class Settings(BaseSettings):
                 raise ValueError("SUPERNOVA_ENCRYPTION_KEY must be a valid Fernet key") from None
         if self.access_token_ttl_minutes < 5 or self.access_token_ttl_minutes > 60:
             raise ValueError("SUPERNOVA_ACCESS_TOKEN_TTL_MINUTES must be between 5 and 60")
+        if self.knowledge_max_upload_bytes < 1024 or self.knowledge_max_url_bytes < 1024:
+            raise ValueError("Knowledge ingestion size limits must be at least 1 KiB")
+        if not 0.2 <= self.knowledge_worker_poll_seconds <= 60:
+            raise ValueError("SUPERNOVA_KNOWLEDGE_WORKER_POLL_SECONDS must be between 0.2 and 60")
+        if not 30 <= self.knowledge_worker_lease_seconds <= 3600:
+            raise ValueError("SUPERNOVA_KNOWLEDGE_WORKER_LEASE_SECONDS must be between 30 and 3600")
         if self.refresh_token_ttl_days < 1 or self.refresh_token_ttl_days > 90:
             raise ValueError("SUPERNOVA_REFRESH_TOKEN_TTL_DAYS must be between 1 and 90")
         return self
