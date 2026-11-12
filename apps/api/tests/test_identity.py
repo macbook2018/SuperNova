@@ -1,7 +1,6 @@
 from collections.abc import Generator
 
 import pytest
-
 from app.api.auth import _is_email_unique_violation
 from app.db.base import Base
 from app.db.session import get_db
