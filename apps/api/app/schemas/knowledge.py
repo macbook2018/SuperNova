@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Literal
-from uuid import UUID
 from urllib.parse import urlparse
+from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
 
