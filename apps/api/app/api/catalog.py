@@ -1,12 +1,14 @@
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, HTTPException, status
-from sqlalchemy import delete, insert, select
+from sqlalchemy import delete, insert, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.deps import CurrentPrincipal, DatabaseSession, Principal
 from app.core.secret_encryption import encrypt_provider_api_key
+from app.models.billing import PlatformModel, PlatformModelPrice, TenantBillingPolicy
 from app.models.catalog import (
     KnowledgeBase,
     ModelProvider,
@@ -112,6 +114,50 @@ def _validate_provider(
     return _get_provider(db, principal, provider_id)
 
 
+def _validate_platform_model(
+    db: Session,
+    principal: Principal,
+    platform_model_id: UUID | None,
+) -> PlatformModel:
+    if platform_model_id is None:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "platform_model_required",
+                "message": "平台模型模式必须选择一个平台模型",
+            },
+        )
+    policy = db.get(TenantBillingPolicy, principal.tenant.id)
+    currency = policy.currency if policy is not None else "CNY"
+    model = db.scalar(
+        select(PlatformModel).where(
+            PlatformModel.id == platform_model_id,
+            PlatformModel.enabled.is_(True),
+            PlatformModel.provider_type != "anthropic",
+        )
+    )
+    if model is None:
+        raise _not_found("platform_model")
+    now = datetime.now(UTC)
+    price = db.scalar(
+        select(PlatformModelPrice.id).where(
+            PlatformModelPrice.platform_model_id == model.id,
+            PlatformModelPrice.currency == currency,
+            PlatformModelPrice.effective_from <= now,
+            or_(
+                PlatformModelPrice.effective_until.is_(None),
+                PlatformModelPrice.effective_until > now,
+            ),
+        ).limit(1)
+    )
+    if price is None:
+        raise _conflict(
+            "platform_model_price_unavailable",
+            "该平台模型尚无当前生效的价格版本，暂时不能绑定",
+        )
+    return model
+
+
 def _validate_knowledge_bases(
     db: Session,
     principal: Principal,
@@ -135,11 +181,18 @@ def _validate_knowledge_bases(
 
 def _persona_read(db: Session, principal: Principal, persona: Persona) -> PersonaRead:
     provider_name = None
+    platform_model_name = None
     if persona.provider_id is not None:
         provider_name = db.scalar(
             select(ModelProvider.name).where(
                 ModelProvider.id == persona.provider_id,
                 ModelProvider.tenant_id == principal.tenant.id,
+            )
+        )
+    if persona.platform_model_id is not None:
+        platform_model_name = db.scalar(
+            select(PlatformModel.display_name).where(
+                PlatformModel.id == persona.platform_model_id
             )
         )
     knowledge_base_ids = db.scalars(
@@ -154,8 +207,11 @@ def _persona_read(db: Session, principal: Principal, persona: Persona) -> Person
         slug=persona.slug,
         description=persona.description,
         system_prompt=persona.system_prompt,
+        model_source=persona.model_source,
         provider_id=persona.provider_id,
         provider_name=provider_name,
+        platform_model_id=persona.platform_model_id,
+        platform_model_name=platform_model_name,
         model_name=persona.model_name,
         temperature=persona.temperature,
         top_p=persona.top_p,
@@ -419,7 +475,29 @@ def create_persona(
     principal: CurrentPrincipal,
     db: DatabaseSession,
 ) -> PersonaRead:
-    _validate_provider(db, principal, payload.provider_id)
+    if payload.model_source == "platform":
+        platform_model = _validate_platform_model(db, principal, payload.platform_model_id)
+        if payload.provider_id is not None:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "model_source_conflict",
+                    "message": "平台模型模式不能绑定用户自己的模型供应商",
+                },
+            )
+        model_name = platform_model.upstream_model_name
+        provider_id = None
+        platform_model_id = platform_model.id
+    else:
+        _validate_provider(db, principal, payload.provider_id)
+        if payload.model_name is None:
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "model_name_required", "message": "BYOK 模式必须填写上游模型名称"},
+            )
+        model_name = payload.model_name
+        provider_id = payload.provider_id
+        platform_model_id = None
     knowledge_base_ids = _validate_knowledge_bases(
         db, principal, payload.knowledge_base_ids
     )
@@ -430,8 +508,10 @@ def create_persona(
         slug=payload.slug,
         description=payload.description,
         system_prompt=payload.system_prompt,
-        provider_id=payload.provider_id,
-        model_name=payload.model_name,
+        provider_id=provider_id,
+        model_source=payload.model_source,
+        platform_model_id=platform_model_id,
+        model_name=model_name,
         temperature=payload.temperature,
         top_p=payload.top_p,
         max_tokens=payload.max_tokens,
@@ -494,9 +574,46 @@ def update_persona(
         raise _not_found("persona")
 
     updates = payload.model_dump(exclude_unset=True, exclude={"knowledge_base_ids"})
-    _reject_null_updates(updates, nullable_fields={"provider_id"})
-    if "provider_id" in updates:
-        _validate_provider(db, principal, updates["provider_id"])
+    _reject_null_updates(
+        updates,
+        nullable_fields={"provider_id", "platform_model_id"},
+    )
+    target_source = updates.get("model_source", persona.model_source)
+    if target_source == "platform":
+        target_model_id = updates.get("platform_model_id", persona.platform_model_id)
+        platform_model = _validate_platform_model(db, principal, target_model_id)
+        if updates.get("provider_id") is not None:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "model_source_conflict",
+                    "message": "平台模型模式不能绑定用户自己的模型供应商",
+                },
+            )
+        if "model_name" in updates and updates["model_name"] != platform_model.upstream_model_name:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "platform_model_name_managed",
+                    "message": "平台模型的上游模型名称由平台统一管理",
+                },
+            )
+        updates["model_source"] = "platform"
+        updates["platform_model_id"] = platform_model.id
+        updates["provider_id"] = None
+        updates["model_name"] = platform_model.upstream_model_name
+    else:
+        target_provider_id = updates.get("provider_id", persona.provider_id)
+        if target_provider_id is not None:
+            _validate_provider(db, principal, target_provider_id)
+        updates["model_source"] = "byok"
+        updates["platform_model_id"] = None
+        updates["provider_id"] = target_provider_id
+        if updates.get("model_name", persona.model_name) is None:
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "model_name_required", "message": "BYOK 模式必须填写上游模型名称"},
+            )
     if "knowledge_base_ids" in payload.model_fields_set:
         knowledge_base_ids = _validate_knowledge_bases(
             db, principal, payload.knowledge_base_ids or []

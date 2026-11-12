@@ -145,12 +145,16 @@ class TenantSubscription(Base):
 
 class PlatformModel(Base):
     __tablename__ = "platform_models"
+    __table_args__ = (
+        Index("ix_platform_models_enabled_provider", "enabled", "provider_type"),
+    )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     code: Mapped[str] = mapped_column(String(80), unique=True, nullable=False)
     display_name: Mapped[str] = mapped_column(String(100), nullable=False)
     provider_type: Mapped[str] = mapped_column(String(32), nullable=False)
     upstream_model_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    base_url: Mapped[str] = mapped_column(String(2048), nullable=False)
     credential_ref: Mapped[str | None] = mapped_column(String(255))
     enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=text("false")

@@ -14,6 +14,7 @@ from app.core.security import (
     new_refresh_token,
     verify_password,
 )
+from app.models.billing import TenantBillingPolicy
 from app.models.identity import RefreshSession, Tenant, TenantMembership, User
 from app.schemas.auth import (
     AuthResponse,
@@ -122,7 +123,7 @@ def register(payload: RegisterRequest, db: DatabaseSession) -> AuthResponse:
         # relationships, so a single flush does not guarantee FK insert order.
         db.add_all([user, tenant])
         db.flush()
-        db.add_all([membership, refresh_session])
+        db.add_all([membership, refresh_session, TenantBillingPolicy(tenant_id=tenant.id)])
         db.commit()
     except IntegrityError as exc:
         db.rollback()

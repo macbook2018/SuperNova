@@ -1,14 +1,24 @@
 import json
 from collections.abc import Generator
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+from uuid import UUID, uuid4
 
 import pytest
 from app.api import gateway
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import app, asgi_app
+from app.models.billing import (
+    BillingPlan,
+    BillingPlanEntitlement,
+    PlatformModel,
+    PlatformModelPrice,
+    TenantSubscription,
+)
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -34,6 +44,44 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient, None, None]
         autocommit=False,
         expire_on_commit=False,
     )
+    plan_id = uuid4()
+    with testing_session() as seed_db:
+        seed_db.add(
+            BillingPlan(
+                id=plan_id,
+                code="gateway-test",
+                revision=1,
+                name="Gateway Test",
+                billing_interval="month",
+                currency="CNY",
+                subscription_price_minor=0,
+                status="active",
+            )
+        )
+        seed_db.flush()
+        seed_db.add_all(
+            [
+                BillingPlanEntitlement(
+                    id=uuid4(),
+                    plan_id=plan_id,
+                    resource_code=resource_code,
+                    unit=unit,
+                    included_units=1_000_000_000,
+                    hard_limit_units=None,
+                    overage_rate_minor_per_unit=Decimal("0"),
+                    overage_behavior="block",
+                )
+                for resource_code, unit in [
+                    ("api_requests", "requests"),
+                    ("platform_model_requests", "requests"),
+                    ("platform_input_tokens", "tokens"),
+                    ("platform_output_tokens", "tokens"),
+                ]
+            ]
+        )
+        seed_db.commit()
+    app.state.test_session_factory = testing_session
+    app.state.test_billing_plan_id = plan_id
 
     def override_get_db():
         with testing_session() as session:
@@ -58,7 +106,21 @@ def register(client: TestClient, email: str = "gateway@example.com") -> dict:
         },
     )
     assert response.status_code == 201, response.text
-    return response.json()
+    tokens = response.json()
+    now = datetime.now(UTC)
+    with app.state.test_session_factory() as seed_db:
+        seed_db.add(
+            TenantSubscription(
+                id=uuid4(),
+                tenant_id=UUID(tokens["tenant"]["id"]),
+                plan_id=app.state.test_billing_plan_id,
+                status="active",
+                current_period_start=now - timedelta(minutes=1),
+                current_period_end=now + timedelta(days=30),
+            )
+        )
+        seed_db.commit()
+    return tokens
 
 
 def jwt_headers(tokens: dict) -> dict[str, str]:
@@ -241,6 +303,8 @@ def test_chat_completion_routes_persona_and_records_actual_usage(
     records = client.get("/usage/records", headers=jwt_headers(owner))
     assert records.status_code == 200
     assert records.json()[0]["persona_slug"] == "customer-support"
+    assert records.json()[0]["model_source"] == "byok"
+    assert records.json()[0]["platform_model_id"] is None
     assert records.json()[0]["status"] == "succeeded"
 
 
@@ -422,3 +486,311 @@ def test_gateway_rejects_provider_redirect_instead_of_following_it(
 
     assert response.status_code == 502
     assert response.json()["error"]["code"] == "upstream_error"
+
+
+
+def test_platform_model_routes_without_tenant_provider_and_records_source(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner = register(client)
+    monkeypatch.setattr(gateway, "resolve_platform_api_key", lambda _ref: "sk-platform-secret-123")
+    model_id = uuid4()
+    now = datetime.now(UTC)
+    with app.state.test_session_factory() as seed_db:
+        seed_db.add(
+            PlatformModel(
+                id=model_id,
+                code="platform-deepseek",
+                display_name="SuperNova DeepSeek",
+                provider_type="deepseek",
+                upstream_model_name="deepseek-chat",
+                base_url="https://api.deepseek.com",
+                credential_ref="deepseek-primary",
+                enabled=True,
+            )
+        )
+        seed_db.add(
+            PlatformModelPrice(
+                id=uuid4(),
+                platform_model_id=model_id,
+                revision=1,
+                currency="CNY",
+                input_per_million_minor=Decimal("200"),
+                output_per_million_minor=Decimal("2000"),
+                effective_from=now - timedelta(days=1),
+                effective_until=None,
+            )
+        )
+        seed_db.commit()
+
+    created = client.post(
+        "/personas",
+        headers=jwt_headers(owner),
+        json={
+            "name": "平台客服",
+            "slug": "platform-support",
+            "description": "平台模型测试",
+            "system_prompt": "你是一名专业客服。",
+            "model_source": "platform",
+            "platform_model_id": str(model_id),
+            "temperature": 0.4,
+            "top_p": 0.9,
+            "max_tokens": 512,
+            "enabled": True,
+            "knowledge_base_ids": [],
+        },
+    )
+    assert created.status_code == 201, created.text
+    persona = created.json()
+    assert persona["model_source"] == "platform"
+    assert persona["provider_id"] is None
+    assert persona["model_name"] == "deepseek-chat"
+
+    key = create_api_key(client, owner)
+    FakeClient.calls = []
+    FakeClient.response = FakeResponse(
+        {
+            "id": "chatcmpl-platform",
+            "object": "chat.completion",
+            "created": 1800000000,
+            "model": "deepseek-chat",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "平台模型已接通"},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 12, "completion_tokens": 8, "total_tokens": 20},
+        }
+    )
+    monkeypatch.setattr(gateway.httpx, "Client", FakeClient)
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {key}"},
+        json={
+            "model": persona["slug"],
+            "messages": [{"role": "user", "content": "你好"}],
+        },
+    )
+    assert response.status_code == 200, response.text
+    call = FakeClient.calls[0]
+    assert call["url"] == "https://api.deepseek.com/chat/completions"
+    assert call["headers"]["Authorization"] == "Bearer sk-platform-secret-123"
+    assert call["json"]["model"] == "deepseek-chat"
+
+    records = client.get("/usage/records", headers=jwt_headers(owner))
+    assert records.status_code == 200
+    assert records.json()[0]["model_source"] == "platform"
+    assert records.json()[0]["platform_model_id"] == str(model_id)
+
+
+def test_gateway_blocks_new_request_when_api_request_entitlement_exhausted(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner = register(client)
+    with app.state.test_session_factory() as seed_db:
+        entitlement = seed_db.scalar(
+            select(BillingPlanEntitlement).where(
+                BillingPlanEntitlement.plan_id == app.state.test_billing_plan_id,
+                BillingPlanEntitlement.resource_code == "api_requests",
+            )
+        )
+        entitlement.included_units = 1
+        seed_db.commit()
+
+    provider = create_provider(client, owner)
+    persona = create_persona(client, owner, provider["id"])
+    key = create_api_key(client, owner)
+    FakeClient.calls = []
+    FakeClient.response = FakeResponse(
+        {
+            "id": "chatcmpl-quota",
+            "object": "chat.completion",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "ok"},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3},
+        }
+    )
+    monkeypatch.setattr(gateway.httpx, "Client", FakeClient)
+    payload = {
+        "model": persona["slug"],
+        "messages": [{"role": "user", "content": "hello"}],
+    }
+    first = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {key}"},
+        json=payload,
+    )
+    second = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {key}"},
+        json=payload,
+    )
+    assert first.status_code == 200, first.text
+    assert second.status_code == 429
+    assert second.json()["error"]["code"] == "quota_exceeded"
+    assert len(FakeClient.calls) == 1
+
+
+
+def test_persona_can_switch_between_platform_and_byok_without_cross_source_references(
+    client: TestClient,
+) -> None:
+    owner = register(client)
+    provider = create_provider(client, owner)
+    persona = create_persona(client, owner, provider["id"])
+    model_id = uuid4()
+    now = datetime.now(UTC)
+    with app.state.test_session_factory() as seed_db:
+        seed_db.add(
+            PlatformModel(
+                id=model_id,
+                code="switch-model",
+                display_name="Switch Model",
+                provider_type="deepseek",
+                upstream_model_name="deepseek-chat",
+                base_url="https://api.deepseek.com",
+                credential_ref="deepseek-primary",
+                enabled=True,
+            )
+        )
+        seed_db.add(
+            PlatformModelPrice(
+                id=uuid4(),
+                platform_model_id=model_id,
+                revision=1,
+                currency="CNY",
+                input_per_million_minor=Decimal("200"),
+                output_per_million_minor=Decimal("2000"),
+                effective_from=now - timedelta(days=1),
+                effective_until=None,
+            )
+        )
+        seed_db.commit()
+
+    switched_to_platform = client.patch(
+        f"/personas/{persona['id']}",
+        headers=jwt_headers(owner),
+        json={
+            "model_source": "platform",
+            "platform_model_id": str(model_id),
+            "provider_id": None,
+        },
+    )
+    assert switched_to_platform.status_code == 200, switched_to_platform.text
+    platform_persona = switched_to_platform.json()
+    assert platform_persona["model_source"] == "platform"
+    assert platform_persona["provider_id"] is None
+    assert platform_persona["platform_model_id"] == str(model_id)
+    assert platform_persona["model_name"] == "deepseek-chat"
+
+    switched_to_byok = client.patch(
+        f"/personas/{persona['id']}",
+        headers=jwt_headers(owner),
+        json={
+            "model_source": "byok",
+            "provider_id": provider["id"],
+            "platform_model_id": None,
+            "model_name": "deepseek-flash",
+        },
+    )
+    assert switched_to_byok.status_code == 200, switched_to_byok.text
+    byok_persona = switched_to_byok.json()
+    assert byok_persona["model_source"] == "byok"
+    assert byok_persona["provider_id"] == provider["id"]
+    assert byok_persona["platform_model_id"] is None
+    assert byok_persona["model_name"] == "deepseek-flash"
+
+
+def test_new_tenant_requires_subscription_for_byok_calls(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner = register(client)
+    provider = create_provider(client, owner)
+    persona = create_persona(client, owner, provider["id"])
+    key = create_api_key(client, owner)
+    FakeClient.calls = []
+    FakeClient.response = FakeResponse(
+        {
+            "id": "chatcmpl-no-subscription",
+            "object": "chat.completion",
+            "choices": [],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+    )
+    monkeypatch.setattr(gateway.httpx, "Client", FakeClient)
+
+    with app.state.test_session_factory() as seed_db:
+        seed_db.query(TenantSubscription).filter(
+            TenantSubscription.tenant_id == UUID(owner["tenant"]["id"])
+        ).delete()
+        seed_db.commit()
+
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {key}"},
+        json={
+            "model": persona["slug"],
+            "messages": [{"role": "user", "content": "hello"}],
+        },
+    )
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "subscription_required"
+    assert FakeClient.calls == []
+
+
+def test_historical_tenant_without_billing_policy_keeps_byok_compatibility(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner = register(client)
+    provider = create_provider(client, owner)
+    persona = create_persona(client, owner, provider["id"])
+    key = create_api_key(client, owner)
+    FakeClient.calls = []
+    FakeClient.response = FakeResponse(
+        {
+            "id": "chatcmpl-legacy",
+            "object": "chat.completion",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "legacy ok"},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 2, "completion_tokens": 2, "total_tokens": 4},
+        }
+    )
+    monkeypatch.setattr(gateway.httpx, "Client", FakeClient)
+
+    from app.models.billing import TenantBillingPolicy
+
+    with app.state.test_session_factory() as seed_db:
+        seed_db.query(TenantSubscription).filter(
+            TenantSubscription.tenant_id == UUID(owner["tenant"]["id"])
+        ).delete()
+        seed_db.query(TenantBillingPolicy).filter(
+            TenantBillingPolicy.tenant_id == UUID(owner["tenant"]["id"])
+        ).delete()
+        seed_db.commit()
+
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {key}"},
+        json={
+            "model": persona["slug"],
+            "messages": [{"role": "user", "content": "hello"}],
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["choices"][0]["message"]["content"] == "legacy ok"

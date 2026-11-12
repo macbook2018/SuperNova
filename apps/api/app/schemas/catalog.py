@@ -123,8 +123,10 @@ class PersonaCreate(BaseModel):
     slug: str = Field(min_length=1, max_length=80, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
     description: str = Field(default="", max_length=500)
     system_prompt: str = Field(min_length=1, max_length=20000)
+    model_source: Literal["platform", "byok"] = "byok"
     provider_id: UUID | None = None
-    model_name: str = Field(min_length=1, max_length=120)
+    platform_model_id: UUID | None = None
+    model_name: str | None = Field(default=None, min_length=1, max_length=120)
     temperature: float = Field(default=0.7, ge=0, le=2)
     top_p: float = Field(default=1.0, ge=0, le=1)
     max_tokens: int = Field(default=2048, ge=1, le=65536)
@@ -136,10 +138,15 @@ class PersonaCreate(BaseModel):
     def normalize_slug(cls, value: str) -> str:
         return value.strip() if isinstance(value, str) else value
 
-    @field_validator("name", "slug", "system_prompt", "model_name")
+    @field_validator("name", "slug", "system_prompt")
     @classmethod
     def trim_required(cls, value: str) -> str:
         return _trim_required(value)
+
+    @field_validator("model_name")
+    @classmethod
+    def trim_model_name(cls, value: str | None) -> str | None:
+        return _trim_required(value) if value is not None else None
 
     @field_validator("description")
     @classmethod
@@ -157,7 +164,9 @@ class PersonaUpdate(BaseModel):
     )
     description: str | None = Field(default=None, max_length=500)
     system_prompt: str | None = Field(default=None, min_length=1, max_length=20000)
+    model_source: Literal["platform", "byok"] | None = None
     provider_id: UUID | None = None
+    platform_model_id: UUID | None = None
     model_name: str | None = Field(default=None, min_length=1, max_length=120)
     temperature: float | None = Field(default=None, ge=0, le=2)
     top_p: float | None = Field(default=None, ge=0, le=1)
@@ -170,9 +179,14 @@ class PersonaUpdate(BaseModel):
     def normalize_slug(cls, value: str | None) -> str | None:
         return value.strip() if isinstance(value, str) else value
 
-    @field_validator("name", "slug", "system_prompt", "model_name")
+    @field_validator("name", "slug", "system_prompt")
     @classmethod
     def trim_required(cls, value: str | None) -> str | None:
+        return _trim_required(value) if value is not None else None
+
+    @field_validator("model_name")
+    @classmethod
+    def trim_model_name(cls, value: str | None) -> str | None:
         return _trim_required(value) if value is not None else None
 
     @field_validator("description")
@@ -187,8 +201,11 @@ class PersonaRead(BaseModel):
     slug: str
     description: str
     system_prompt: str
+    model_source: str
     provider_id: UUID | None
     provider_name: str | None
+    platform_model_id: UUID | None
+    platform_model_name: str | None
     model_name: str
     temperature: float
     top_p: float

@@ -3,6 +3,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     DateTime,
     Float,
     ForeignKey,
@@ -73,6 +74,13 @@ class Persona(Base):
     __table_args__ = (
         UniqueConstraint("tenant_id", "slug", name="uq_personas_tenant_slug"),
         UniqueConstraint("tenant_id", "id", name="uq_personas_tenant_id"),
+        CheckConstraint("model_source IN ('platform', 'byok')", name="ck_personas_model_source"),
+        CheckConstraint(
+            "(model_source = 'platform' AND platform_model_id IS NOT NULL AND provider_id IS NULL) "
+            "OR (model_source = 'byok' AND platform_model_id IS NULL)",
+            name="ck_personas_model_source_reference",
+        ),
+        Index("ix_personas_platform_model", "platform_model_id"),
         ForeignKeyConstraint(
             ["tenant_id", "provider_id"],
             ["model_providers.tenant_id", "model_providers.id"],

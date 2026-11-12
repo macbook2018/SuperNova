@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Uuid, func
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -10,9 +10,14 @@ from app.db.base import Base
 class UsageRecord(Base):
     __tablename__ = "usage_records"
     __table_args__ = (
+        CheckConstraint(
+            "model_source IN ('platform', 'byok')",
+            name="ck_usage_records_model_source",
+        ),
         Index("ix_usage_records_tenant_created", "tenant_id", "created_at"),
         Index("ix_usage_records_user_created", "user_id", "created_at"),
         Index("ix_usage_records_request_id", "request_id"),
+        Index("ix_usage_records_tenant_source_created", "tenant_id", "model_source", "created_at"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
@@ -31,6 +36,12 @@ class UsageRecord(Base):
     )
     provider_id: Mapped[UUID | None] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("model_providers.id", ondelete="SET NULL")
+    )
+    platform_model_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("platform_models.id", ondelete="SET NULL")
+    )
+    model_source: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="byok", server_default="byok"
     )
     persona_slug: Mapped[str] = mapped_column(String(80), nullable=False)
     provider_type: Mapped[str] = mapped_column(String(32), nullable=False)

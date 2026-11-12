@@ -16,6 +16,9 @@ import {
   type ApiKey,
   type ApiKeyCreated,
   type AuthResponse,
+  type BillingEntitlements,
+  type BillingPlan,
+  type PlatformModel,
   type KnowledgeBase,
   type ModelProvider,
   type Persona,
@@ -25,7 +28,7 @@ import {
   type UsageSummary,
 } from './lib/api'
 
-type Page = 'overview' | 'personas' | 'providers' | 'knowledge' | 'knowledgeDetail' | 'api' | 'usage' | 'settings'
+type Page = 'overview' | 'personas' | 'providers' | 'knowledge' | 'knowledgeDetail' | 'api' | 'billing' | 'usage' | 'settings'
 type PersonaView = Persona & { color: string }
 type KnowledgeBaseView = KnowledgeBase & { color: string; docs: never[] }
 
@@ -49,6 +52,7 @@ const titles: Record<Page, string> = {
   knowledge: '知识库',
   knowledgeDetail: '知识库详情',
   api: 'API 接口',
+  billing: '套餐与额度',
   usage: '用量与账单',
   settings: '账户设置',
 }
@@ -59,6 +63,7 @@ const descriptions: Record<Page, string> = {
   knowledge: '集中管理知识库资料空间，并关联到一个或多个 AI 人格。',
   knowledgeDetail: '管理知识库基本信息及其关联人格。',
   api: '使用一个用户级 API Key，通过 OpenAI 兼容接口调用多个独立人格。',
+  billing: '查看当前订阅、套餐权益和资源额度。在线支付与超额结算将在后续阶段开放。',
   usage: '查看真实模型调用次数、输入输出 Token 和响应时间；金额计费将在定价规则接入后开放。',
   settings: '查看账户资料与安全设置。',
 }
@@ -79,7 +84,8 @@ const nav = [
     label: '开发者',
     items: [
       { key: 'api' as Page, label: 'API 接口', icon: KeyRound },
-      { key: 'usage' as Page, label: '用量与账单', icon: Activity },
+      { key: 'billing' as Page, label: '套餐与额度', icon: Wallet },
+      { key: 'usage' as Page, label: '用量记录', icon: Activity },
     ],
   },
 ]
@@ -87,6 +93,10 @@ const activeNav = computed(() => page.value === 'knowledgeDetail' ? 'knowledge' 
 
 const personas = ref<PersonaView[]>([])
 const providers = ref<ModelProvider[]>([])
+const platformModels = ref<PlatformModel[]>([])
+const billingPlans = ref<BillingPlan[]>([])
+const billingEntitlements = ref<BillingEntitlements | null>(null)
+const billingLoading = ref(false)
 const kbs = ref<KnowledgeBaseView[]>([])
 const apiKeys = ref<ApiKey[]>([])
 const usageSummary = ref<UsageSummary | null>(null)
@@ -137,18 +147,45 @@ function colorFor(index: number): string {
 }
 
 async function loadWorkspace() {
-  const [personaData, providerData, knowledgeData, keyData] = await Promise.all([
+  const [personaData, providerData, platformData, knowledgeData, keyData] = await Promise.all([
     request<Persona[]>('/personas'),
     request<ModelProvider[]>('/model-providers'),
+    request<PlatformModel[]>('/platform/models'),
     request<KnowledgeBase[]>('/knowledge-bases'),
     request<ApiKey[]>('/api-keys'),
   ])
   personas.value = personaData.map((persona, index) => ({ ...persona, color: colorFor(index) }))
   providers.value = providerData
+  platformModels.value = platformData
   kbs.value = knowledgeData.map((kb, index) => ({ ...kb, color: colorFor(index), docs: [] }))
   apiKeys.value = keyData
   if (!kbs.value.some(kb => kb.id === selectedId.value)) selectedId.value = kbs.value[0]?.id ?? ''
 }
+async function loadBilling(showError = false) {
+  if (!authenticated.value) return
+  billingLoading.value = true
+  try {
+    const [plans, entitlements] = await Promise.all([
+      request<BillingPlan[]>('/billing/plans'),
+      request<BillingEntitlements>('/billing/entitlements'),
+    ])
+    billingPlans.value = plans
+    billingEntitlements.value = entitlements
+  } catch (error) {
+    if (showError) notify(error instanceof Error ? error.message : '读取套餐权益失败')
+  } finally {
+    billingLoading.value = false
+  }
+}
+const apiRequestQuota = computed(() =>
+  billingEntitlements.value?.resources.find(item => item.resource_code === 'api_requests') ?? null,
+)
+const platformInputQuota = computed(() =>
+  billingEntitlements.value?.resources.find(item => item.resource_code === 'platform_input_tokens') ?? null,
+)
+const platformOutputQuota = computed(() =>
+  billingEntitlements.value?.resources.find(item => item.resource_code === 'platform_output_tokens') ?? null,
+)
 async function loadUsage(showError = false) {
   if (!authenticated.value) return
   usageLoading.value = true
@@ -171,6 +208,7 @@ async function loadIdentity() {
   currentTenant.value = identity.tenant
   authenticated.value = true
   await loadWorkspace()
+  await loadBilling()
   await loadUsage()
 }
 onMounted(async () => {
@@ -234,6 +272,7 @@ function go(next: Page) {
   mobileOpen.value = false
   query.value = ''
   if (next === 'usage' || next === 'overview') void loadUsage()
+  if (next === 'billing') void loadBilling()
 }
 
 const personaModal = ref(false)
@@ -243,7 +282,9 @@ const personaForm = ref({
   slug: '',
   description: '',
   system_prompt: '',
+  model_source: 'platform' as 'platform' | 'byok',
   provider_id: '',
+  platform_model_id: '',
   model_name: '',
   temperature: 0.7,
   top_p: 1,
@@ -262,7 +303,9 @@ function editPersona(persona?: PersonaView) {
         slug: persona.slug,
         description: persona.description,
         system_prompt: persona.system_prompt,
+        model_source: persona.model_source,
         provider_id: persona.provider_id ?? '',
+        platform_model_id: persona.platform_model_id ?? '',
         model_name: persona.model_name,
         temperature: persona.temperature,
         top_p: persona.top_p,
@@ -275,7 +318,9 @@ function editPersona(persona?: PersonaView) {
         slug: newPersonaSlug(),
         description: '',
         system_prompt: '',
-        provider_id: providers.value[0]?.id ?? '',
+        model_source: 'platform',
+        provider_id: '',
+        platform_model_id: platformModels.value[0]?.id ?? '',
         model_name: '',
         temperature: 0.7,
         top_p: 1,
@@ -285,10 +330,30 @@ function editPersona(persona?: PersonaView) {
       }
   personaModal.value = true
 }
+function onPersonaModelSourceChange() {
+  if (personaForm.value.model_source === 'platform') {
+    personaForm.value.provider_id = ''
+    if (!personaForm.value.platform_model_id) {
+      personaForm.value.platform_model_id = platformModels.value[0]?.id ?? ''
+    }
+  } else {
+    personaForm.value.platform_model_id = ''
+    if (!personaForm.value.provider_id) personaForm.value.provider_id = providers.value[0]?.id ?? ''
+  }
+}
 async function savePersona() {
   if (!personaForm.value.name.trim() || !personaForm.value.slug.trim() ||
-      !personaForm.value.system_prompt.trim() || !personaForm.value.model_name.trim()) {
-    notify('请填写人格名称、调用标识、模型名称和系统提示词')
+      !personaForm.value.system_prompt.trim()) {
+    notify('请填写人格名称、调用标识和系统提示词')
+    return
+  }
+  if (personaForm.value.model_source === 'platform' && !personaForm.value.platform_model_id) {
+    notify('当前没有可用的平台模型，请联系平台管理员配置')
+    return
+  }
+  if (personaForm.value.model_source === 'byok' &&
+      (!personaForm.value.provider_id || !personaForm.value.model_name.trim())) {
+    notify('BYOK 模式必须选择模型供应商并填写上游模型名称')
     return
   }
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(personaForm.value.slug.trim())) {
@@ -302,14 +367,20 @@ async function savePersona() {
     notify('模型参数超出允许范围，请检查 Temperature、Top P 和最大输出 Token')
     return
   }
-  const payload = {
+  const payload: Record<string, unknown> = {
     ...personaForm.value,
     name: personaForm.value.name.trim(),
     slug: personaForm.value.slug.trim(),
     description: personaForm.value.description.trim(),
     system_prompt: personaForm.value.system_prompt.trim(),
-    model_name: personaForm.value.model_name.trim(),
-    provider_id: personaForm.value.provider_id || null,
+    model_source: personaForm.value.model_source,
+    provider_id: personaForm.value.model_source === 'byok' ? personaForm.value.provider_id : null,
+    platform_model_id: personaForm.value.model_source === 'platform' ? personaForm.value.platform_model_id : null,
+  }
+  if (personaForm.value.model_source === 'platform') {
+    delete payload.model_name
+  } else {
+    payload.model_name = personaForm.value.model_name.trim()
   }
   try {
     if (editingId.value) {
@@ -554,6 +625,7 @@ async function revokeKey(key: ApiKey) {
     <template v-else-if="page==='knowledgeDetail'"><button class="btn secondary" @click="go('knowledge')">返回知识库</button><button class="btn primary" @click="upload"><Upload :size="16"/>上传文档</button></template>
     <button v-else-if="page==='api'" class="btn primary" @click="keyModal=true"><Plus :size="16"/>创建 API Key</button>
     <button v-else-if="page==='usage'" class="btn secondary" disabled><Download :size="16"/>暂无可导出数据</button>
+    <button v-else-if="page==='billing'" class="btn secondary" @click="loadBilling(true)" :disabled="billingLoading"><Activity :size="16"/>刷新权益</button>
    </div></div>
 
    <template v-if="page==='overview'">
@@ -561,7 +633,7 @@ async function revokeKey(key: ApiKey) {
     <section class="stats">
      <article><div><span class="ico blue"><Bot :size="18"/></span>我的人格<button @click="go('personas')"><MoreHorizontal :size="17"/></button></div><strong>{{personas.length}}<small>个</small></strong><footer><b>{{personas.filter(p=>p.enabled).length}} 个已启用</b><span>共创建</span></footer></article>
      <article><div><span class="ico purple"><Zap :size="18"/></span>本月 Token 消耗<button @click="go('usage')"><MoreHorizontal :size="17"/></button></div><strong>—</strong><footer><span>Phase 4 接入真实计量</span></footer></article>
-     <article><div><span class="ico green"><Wallet :size="18"/></span>剩余额度<button @click="go('usage')"><MoreHorizontal :size="17"/></button></div><strong>—</strong><footer><span>计费模块尚未接入</span><a @click="go('usage')">了解进度 →</a></footer></article>
+     <article><div><span class="ico green"><Wallet :size="18"/></span>剩余请求额度<button @click="go('billing')"><MoreHorizontal :size="17"/></button></div><strong>{{billingEntitlements?.legacy_unmetered?'不限':apiRequestQuota?.remaining_units.toLocaleString() ?? '—'}}</strong><footer><span>{{billingEntitlements?.subscription?.plan_name ?? (billingEntitlements?.legacy_unmetered?'历史 BYOK 兼容':'未开通订阅')}}</span><a @click="go('billing')">查看套餐 →</a></footer></article>
      <article><div><span class="ico amber"><Database :size="18"/></span>知识库文档<button @click="go('knowledge')"><MoreHorizontal :size="17"/></button></div><strong>{{totalDocs}}<small>份</small></strong><footer><span>{{kbs.length}} 个知识库</span><a @click="go('knowledge')">管理知识库 →</a></footer></article>
     </section>
     <section class="dashboard"><article class="panel chart-panel"><div class="panel-title"><div><b>本月 Token 用量</b><small>根据模型供应商返回的实际 usage 字段统计。</small></div><label class="running">真实计量</label></div><div class="usage-mini-grid"><div><small>输入 Token</small><b>{{usageSummary?.current_month.prompt_tokens.toLocaleString() ?? '—'}}</b></div><div><small>输出 Token</small><b>{{usageSummary?.current_month.completion_tokens.toLocaleString() ?? '—'}}</b></div><div><small>总 Token</small><b>{{usageSummary?.current_month.total_tokens.toLocaleString() ?? '—'}}</b></div></div><small class="usage-footnote">{{usageSummary?.current_month.unmetered_requests ?? 0}} 次请求暂未获得供应商 usage 统计，不计入 Token 总量。</small></article>
@@ -618,10 +690,52 @@ async function revokeKey(key: ApiKey) {
    </template>
 
 
+   <template v-else-if="page==='billing'">
+    <section class="metric-strip">
+     <div><small>当前套餐</small><b class="small-metric">{{billingEntitlements?.subscription?.plan_name ?? (billingEntitlements?.legacy_unmetered?'历史 BYOK':'未开通')}}</b></div>
+     <div><small>订阅状态</small><b class="small-metric">{{billingEntitlements?.subscription?.status==='active'?'有效':billingEntitlements?.subscription?.status==='trialing'?'试用':billingEntitlements?.legacy_unmetered?'兼容模式':'未订阅'}}</b></div>
+     <div><small>API 请求剩余</small><b>{{billingEntitlements?.legacy_unmetered?'不限':apiRequestQuota?.remaining_units.toLocaleString() ?? '—'}}</b></div>
+     <div><small>可用平台模型</small><b>{{platformModels.length}}</b></div>
+    </section>
+    <section class="panel">
+     <div class="panel-title"><div><b>当前订阅</b><small>套餐由平台管理员分配；在线支付和自动续费将在 Phase 5D 接入。</small></div><label :class="billingEntitlements?.subscription?'running':'paused'">{{billingEntitlements?.subscription?'已分配':'未分配'}}</label></div>
+     <div v-if="billingEntitlements?.subscription" class="usage-mini-grid">
+      <div><small>套餐名称</small><b>{{billingEntitlements.subscription.plan_name}}</b></div>
+      <div><small>订阅开始</small><b>{{new Date(billingEntitlements.subscription.current_period_start).toLocaleDateString()}}</b></div>
+      <div><small>订阅结束</small><b>{{new Date(billingEntitlements.subscription.current_period_end).toLocaleDateString()}}</b></div>
+     </div>
+     <div v-else-if="billingEntitlements?.legacy_unmetered" class="info"><ShieldCheck :size="17"/><div><b>历史 BYOK 兼容模式</b><small>此工作空间没有 Phase 5B 计费策略，现有 BYOK 调用继续兼容；平台模型需要有效订阅。</small></div></div>
+     <div v-else class="empty"><Wallet :size="28"/><b>当前工作空间尚未开通订阅</b><small>请联系平台管理员分配套餐。未开通前，新的工作空间不能调用平台模型或 BYOK 模型。</small></div>
+    </section>
+    <section class="panel">
+     <div class="panel-title"><div><b>套餐资源额度</b><small>超额请求在 Phase 5B 暂时拒绝，不会产生真实扣款。</small></div></div>
+     <div v-if="billingEntitlements?.resources.length" class="usage-mini-grid">
+      <div v-for="item in billingEntitlements.resources" :key="item.resource_code">
+       <small>{{item.resource_code}}</small>
+       <b>{{item.used_units.toLocaleString()}} / {{item.included_units.toLocaleString()}}</b>
+       <small>剩余 {{item.remaining_units.toLocaleString()}} {{item.unit}}</small>
+      </div>
+     </div>
+     <div v-else class="empty"><b>暂无可展示的额度</b><small>订阅生效并配置套餐权益后，这里会显示请求次数和平台模型 Token 额度。</small></div>
+    </section>
+    <section class="panel">
+     <div class="panel-title"><div><b>可用套餐</b><small>当前开放的套餐信息；购买、支付和升级操作将在 Phase 5D 开放。</small></div></div>
+     <div v-if="billingPlans.length" class="kb-grid">
+      <article v-for="plan in billingPlans" :key="plan.id" class="kb-card">
+       <div class="kb-card-head"><span class="kb-icon purple"><Wallet :size="20"/></span><label class="running">{{plan.billing_interval==='month'?'月付':'年付'}}</label></div>
+       <h3>{{plan.name}}</h3><p>{{plan.code}} · v{{plan.revision}}</p>
+       <div class="kb-meta"><b>{{plan.currency}} {{(plan.subscription_price_minor / 100).toFixed(2)}}</b><span>{{plan.entitlements.length}} 项权益</span></div>
+       <footer><small><i></i>由平台发布</small></footer>
+      </article>
+     </div>
+     <div v-else class="empty"><b>暂无已发布套餐</b><small>平台管理员发布套餐后，将在这里展示价格和权益。</small></div>
+    </section>
+   </template>
+
    <template v-else-if="page==='usage'">
     <section class="metric-strip"><div><small>本月请求次数</small><b>{{usageSummary?.current_month.requests.toLocaleString() ?? '—'}}</b></div><div><small>输入 Token</small><b>{{usageSummary?.current_month.prompt_tokens.toLocaleString() ?? '—'}}</b></div><div><small>输出 Token</small><b>{{usageSummary?.current_month.completion_tokens.toLocaleString() ?? '—'}}</b></div><div><small>本月总 Token</small><b class="green-text">{{usageSummary?.current_month.total_tokens.toLocaleString() ?? '—'}}</b></div></section>
     <section class="panel"><div class="panel-title"><div><b>用量统计</b><small>本月数据从 {{usageSummary ? new Date(usageSummary.month_start).toLocaleDateString() : '—'}} 起累计</small></div><button class="btn secondary small" @click="loadUsage(true)" :disabled="usageLoading"><Activity :size="14"/>刷新</button></div><div class="usage-mini-grid"><div><small>累计请求</small><b>{{usageSummary?.all_time.requests.toLocaleString() ?? '—'}}</b></div><div><small>累计 Token</small><b>{{usageSummary?.all_time.total_tokens.toLocaleString() ?? '—'}}</b></div><div><small>未返回 usage 的请求</small><b>{{usageSummary?.all_time.unmetered_requests.toLocaleString() ?? '—'}}</b></div></div><small class="usage-footnote">仅统计模型供应商明确返回的 Token 数量。未返回 usage 的请求会单独标记，不会估算或虚构 Token。当前阶段尚未启用金额扣费、充值和套餐余额。</small></section>
-    <section class="panel"><div class="panel-title"><div><b>最近调用记录</b><small>记录人格、供应商模型、状态、Token 和响应时间；不保存对话正文。</small></div></div><div v-if="usageRecords.length" class="usage-list"><div v-for="record in usageRecords" :key="record.id" class="usage-row"><div><b>{{record.persona_slug}}</b><small>{{record.model_name}} · {{new Date(record.created_at).toLocaleString()}}</small></div><span>{{record.prompt_tokens?.toLocaleString() ?? '—'}} / {{record.completion_tokens?.toLocaleString() ?? '—'}}</span><span>{{record.total_tokens?.toLocaleString() ?? '未统计'}} Token</span><label :class="record.status==='succeeded'?'running':'paused'">{{record.status==='succeeded'?'成功':record.status==='cancelled'?'已取消':'失败'}}</label><small>{{record.latency_ms.toLocaleString()}} ms</small></div></div><div v-else class="empty"><Activity :size="28"/><b>暂无模型调用记录</b><small>通过 API 接口发起一次模型请求后，真实记录会显示在这里。</small></div></section>
+    <section class="panel"><div class="panel-title"><div><b>最近调用记录</b><small>记录人格、供应商模型、状态、Token 和响应时间；不保存对话正文。</small></div></div><div v-if="usageRecords.length" class="usage-list"><div v-for="record in usageRecords" :key="record.id" class="usage-row"><div><b>{{record.persona_slug}}</b><small>{{record.model_source==='platform'?'平台模型':'BYOK'}} · {{record.model_name}} · {{new Date(record.created_at).toLocaleString()}}</small></div><span>{{record.prompt_tokens?.toLocaleString() ?? '—'}} / {{record.completion_tokens?.toLocaleString() ?? '—'}}</span><span>{{record.total_tokens?.toLocaleString() ?? '未统计'}} Token</span><label :class="record.status==='succeeded'?'running':'paused'">{{record.status==='succeeded'?'成功':record.status==='cancelled'?'已取消':'失败'}}</label><small>{{record.latency_ms.toLocaleString()}} ms</small></div></div><div v-else class="empty"><Activity :size="28"/><b>暂无模型调用记录</b><small>通过 API 接口发起一次模型请求后，真实记录会显示在这里。</small></div></section>
    </template>
 
 
@@ -639,8 +753,12 @@ async function revokeKey(key: ApiKey) {
    <label>人格名称 <b>*</b><input v-model="personaForm.name" maxlength="100" placeholder="例如：智能客服"></label>
    <label>调用标识（model） <b>*</b><input v-model="personaForm.slug" maxlength="80" placeholder="例如：customer-support"><small>仅允许小写字母、数字和连字符。</small></label>
    <label class="full">人格简介<input v-model="personaForm.description" maxlength="500" placeholder="简单描述这个人格的用途"></label>
-   <label class="full">模型供应商<select v-model="personaForm.provider_id"><option value="">暂不绑定供应商</option><option v-for="provider in providers" :key="provider.id" :value="provider.id" :disabled="!provider.enabled">{{provider.name}}（{{provider.provider_type}}）</option></select><small>先在「模型供应商」中保存供应商地址和 API Key。</small></label>
-   <label class="full">模型名称 <b>*</b><input v-model="personaForm.model_name" maxlength="120" placeholder="例如：deepseek-chat / gpt-4o-mini"></label>
+   <label class="full">模型来源<select v-model="personaForm.model_source" @change="onPersonaModelSourceChange"><option value="platform">使用 SuperNova 平台模型</option><option value="byok">自带 API Key（BYOK）</option></select><small>平台模型由 SuperNova 提供；BYOK 使用你自己配置的供应商和 API Key。</small></label>
+   <label v-if="personaForm.model_source==='platform'" class="full">平台模型<select v-model="personaForm.platform_model_id"><option value="">请选择平台模型</option><option v-for="model in platformModels" :key="model.id" :value="model.id">{{model.display_name}}（{{model.model_name}}） · 输入 {{(Number(model.input_per_million_minor) / 100).toFixed(2)}} / 输出 {{(Number(model.output_per_million_minor) / 100).toFixed(2)}} {{model.currency}} / 百万 Token</option></select><small v-if="!platformModels.length">当前没有可用平台模型，请联系平台管理员发布模型和价格。</small></label>
+   <template v-else>
+    <label class="full">模型供应商<select v-model="personaForm.provider_id"><option value="">请选择供应商</option><option v-for="provider in providers" :key="provider.id" :value="provider.id" :disabled="!provider.enabled || !provider.has_api_key">{{provider.name}}（{{provider.provider_type}}）</option></select><small>BYOK 使用你自己的 API Key，Token 模型费用由供应商向你收取。</small></label>
+    <label class="full">上游模型名称 <b>*</b><input v-model="personaForm.model_name" maxlength="120" placeholder="例如：deepseek-chat / gpt-4o-mini"></label>
+   </template>
    <label class="full">系统提示词 <b>*</b><textarea v-model="personaForm.system_prompt" rows="6" maxlength="20000" placeholder="定义 AI 的身份、目标、表达风格和行为边界..."></textarea></label>
    <label>Temperature<input v-model.number="personaForm.temperature" type="number" min="0" max="2" step="0.1"></label>
    <label>Top P<input v-model.number="personaForm.top_p" type="number" min="0" max="1" step="0.05"></label>

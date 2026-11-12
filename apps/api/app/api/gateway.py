@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Annotated, Any
 from urllib.parse import urlparse
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import httpx
 import structlog
@@ -18,9 +18,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import DatabaseSession
+from app.billing.credentials import resolve_platform_api_key
+from app.billing.entitlements import check_gateway_entitlements
 from app.core.config import get_settings
 from app.core.secret_encryption import decrypt_provider_api_key
 from app.core.security import hash_secret
+from app.models.billing import PlatformModel, PlatformModelPrice, TenantBillingPolicy
 from app.models.catalog import ModelProvider, Persona
 from app.models.identity import ApiKey, Tenant, TenantMembership, User
 from app.models.usage import UsageRecord
@@ -35,6 +38,20 @@ class GatewayPrincipal:
     api_key: ApiKey
     user: User
     tenant: Tenant
+
+
+@dataclass(frozen=True)
+class ResolvedModel:
+    persona: Persona
+    model_source: str
+    provider_id: UUID | None
+    platform_model_id: UUID | None
+    provider_type: str
+    provider_name: str
+    base_url: str
+    upstream_model_name: str
+    api_key: str
+    endpoint: str
 
 
 def _unauthorized() -> HTTPException:
@@ -187,7 +204,7 @@ def _resolve_persona(
     db: Session,
     principal: GatewayPrincipal,
     model_slug: str,
-) -> tuple[Persona, ModelProvider, str, str]:
+) -> ResolvedModel:
     persona = db.scalar(
         select(Persona).where(
             Persona.tenant_id == principal.tenant.id,
@@ -203,6 +220,69 @@ def _resolve_persona(
         raise HTTPException(
             status_code=403,
             detail={"code": "model_disabled", "message": "该人格已停用，无法调用"},
+        )
+
+    if persona.model_source == "platform":
+        if persona.platform_model_id is None or persona.provider_id is not None:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "platform_model_not_configured",
+                    "message": "该人格的平台模型配置无效",
+                },
+            )
+        model = db.get(PlatformModel, persona.platform_model_id)
+        if model is None or not model.enabled or model.provider_type == "anthropic":
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "platform_model_disabled",
+                    "message": "该人格绑定的平台模型不存在或已停用",
+                },
+            )
+        policy = db.get(TenantBillingPolicy, principal.tenant.id)
+        currency = policy.currency if policy is not None else "CNY"
+        now = datetime.now(UTC)
+        price = db.scalar(
+            select(PlatformModelPrice).where(
+                PlatformModelPrice.platform_model_id == model.id,
+                PlatformModelPrice.currency == currency,
+                PlatformModelPrice.effective_from <= now,
+                (
+                    PlatformModelPrice.effective_until.is_(None)
+                    | (PlatformModelPrice.effective_until > now)
+                ),
+            )
+            .order_by(PlatformModelPrice.revision.desc())
+            .limit(1)
+        )
+        if price is None:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "platform_model_price_unavailable",
+                    "message": "该平台模型没有当前生效且匹配工作空间币种的价格版本",
+                },
+            )
+        api_key = resolve_platform_api_key(model.credential_ref)
+        _validate_provider_target(model.base_url)
+        return ResolvedModel(
+            persona=persona,
+            model_source="platform",
+            provider_id=None,
+            platform_model_id=model.id,
+            provider_type=model.provider_type,
+            provider_name=model.display_name,
+            base_url=model.base_url,
+            upstream_model_name=model.upstream_model_name,
+            api_key=api_key,
+            endpoint=_chat_completions_url(model.base_url, model.provider_type),
+        )
+
+    if persona.model_source != "byok":
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "model_source_invalid", "message": "该人格的模型来源配置无效"},
         )
     if persona.provider_id is None:
         raise HTTPException(
@@ -253,11 +333,17 @@ def _resolve_persona(
         ) from None
 
     _validate_provider_target(provider.base_url)
-    return (
-        persona,
-        provider,
-        provider_secret,
-        _chat_completions_url(provider.base_url, provider.provider_type),
+    return ResolvedModel(
+        persona=persona,
+        model_source="byok",
+        provider_id=provider.id,
+        platform_model_id=None,
+        provider_type=provider.provider_type,
+        provider_name=provider.name,
+        base_url=provider.base_url,
+        upstream_model_name=persona.model_name,
+        api_key=provider_secret,
+        endpoint=_chat_completions_url(provider.base_url, provider.provider_type),
     )
 
 
@@ -288,14 +374,14 @@ def _record_usage(
     *,
     request_id: str,
     principal: GatewayPrincipal,
-    persona: Persona,
-    provider: ModelProvider,
+    resolved: ResolvedModel,
     usage: dict[str, int] | None,
     status_value: str,
     latency_ms: int,
     error_code: str | None = None,
 ) -> None:
     usage = usage or {}
+    persona = resolved.persona
     db.add(
         UsageRecord(
             id=uuid4(),
@@ -304,10 +390,12 @@ def _record_usage(
             user_id=principal.user.id,
             api_key_id=principal.api_key.id,
             persona_id=persona.id,
-            provider_id=provider.id,
+            provider_id=resolved.provider_id,
+            platform_model_id=resolved.platform_model_id,
+            model_source=resolved.model_source,
             persona_slug=persona.slug,
-            provider_type=provider.provider_type,
-            model_name=persona.model_name,
+            provider_type=resolved.provider_type,
+            model_name=resolved.upstream_model_name,
             status=status_value,
             prompt_tokens=usage.get("prompt_tokens"),
             completion_tokens=usage.get("completion_tokens"),
@@ -319,12 +407,13 @@ def _record_usage(
     db.commit()
 
 
-def _upstream_payload(payload: ChatCompletionRequest, persona: Persona) -> dict[str, Any]:
+def _upstream_payload(payload: ChatCompletionRequest, resolved: ResolvedModel) -> dict[str, Any]:
+    persona = resolved.persona
     messages = [{"role": "system", "content": persona.system_prompt}]
     messages.extend(message.model_dump(exclude_none=True) for message in payload.messages)
     max_tokens = min(payload.max_tokens or persona.max_tokens, persona.max_tokens)
     result: dict[str, Any] = {
-        "model": persona.model_name,
+        "model": resolved.upstream_model_name,
         "messages": messages,
         "temperature": (
             payload.temperature if payload.temperature is not None else persona.temperature
@@ -355,7 +444,7 @@ def _log_upstream_rejection(
     response: httpx.Response,
     *,
     request_id: str,
-    provider: ModelProvider,
+    resolved: ResolvedModel,
 ) -> None:
     upstream_code: str | None = None
     upstream_message: str | None = None
@@ -378,8 +467,8 @@ def _log_upstream_rejection(
     logger.warning(
         "gateway_upstream_rejected",
         request_id=request_id,
-        provider_type=provider.provider_type,
-        provider_name=provider.name,
+        provider_type=resolved.provider_type,
+        provider_name=resolved.provider_name,
         upstream_status=response.status_code,
         upstream_code=upstream_code,
         upstream_message=upstream_message,
@@ -391,8 +480,7 @@ def _record_failed(
     *,
     request_id: str,
     principal: GatewayPrincipal,
-    persona: Persona,
-    provider: ModelProvider,
+    resolved: ResolvedModel,
     started: float,
     error_code: str,
 ) -> None:
@@ -400,8 +488,7 @@ def _record_failed(
         db,
         request_id=request_id,
         principal=principal,
-        persona=persona,
-        provider=provider,
+        resolved=resolved,
         usage=None,
         status_value="failed",
         latency_ms=int((time.monotonic() - started) * 1000),
@@ -414,25 +501,27 @@ def list_models(
     principal: GatewayPrincipalDependency,
     db: DatabaseSession,
 ) -> dict[str, Any]:
-    records = db.execute(
-        select(Persona, ModelProvider)
-        .join(
-            ModelProvider,
-            (ModelProvider.id == Persona.provider_id)
-            & (ModelProvider.tenant_id == Persona.tenant_id),
-        )
+    personas = db.scalars(
+        select(Persona)
         .where(
             Persona.tenant_id == principal.tenant.id,
             Persona.enabled.is_(True),
-            ModelProvider.enabled.is_(True),
-            ModelProvider.api_key_ciphertext.is_not(None),
-            ModelProvider.provider_type != "anthropic",
         )
         .order_by(Persona.created_at.desc())
     ).all()
 
     data = []
-    for persona, _provider in records:
+    for persona in personas:
+        try:
+            resolved = _resolve_persona(db, principal, persona.slug)
+            check_gateway_entitlements(
+                db,
+                tenant_id=principal.tenant.id,
+                model_source=resolved.model_source,
+                max_output_tokens=0,
+            )
+        except HTTPException:
+            continue
         created_at = persona.created_at
         if created_at.tzinfo is None:
             created_at = created_at.replace(tzinfo=UTC)
@@ -455,12 +544,19 @@ def create_chat_completion(
     db: DatabaseSession,
 ):
     request_id = _request_id(request)
-    persona, provider, provider_secret, endpoint = _resolve_persona(
-        db, principal, payload.model
+    resolved = _resolve_persona(db, principal, payload.model)
+    persona = resolved.persona
+    max_output_tokens = min(payload.max_tokens or persona.max_tokens, persona.max_tokens)
+    check_gateway_entitlements(
+        db,
+        tenant_id=principal.tenant.id,
+        model_source=resolved.model_source,
+        max_output_tokens=max_output_tokens,
     )
-    upstream_payload = _upstream_payload(payload, persona)
+    endpoint = resolved.endpoint
+    upstream_payload = _upstream_payload(payload, resolved)
     headers = {
-        "Authorization": "Bearer " + provider_secret,
+        "Authorization": "Bearer " + resolved.api_key,
         "Content-Type": "application/json",
         "Accept": "text/event-stream" if payload.stream else "application/json",
         "X-Request-ID": request_id,
@@ -481,8 +577,7 @@ def create_chat_completion(
                 db,
                 request_id=request_id,
                 principal=principal,
-                persona=persona,
-                provider=provider,
+                resolved=resolved,
                 started=started,
                 error_code="provider_timeout",
             )
@@ -492,8 +587,7 @@ def create_chat_completion(
                 db,
                 request_id=request_id,
                 principal=principal,
-                persona=persona,
-                provider=provider,
+                resolved=resolved,
                 started=started,
                 error_code="provider_connection_error",
             )
@@ -504,14 +598,13 @@ def create_chat_completion(
             _log_upstream_rejection(
                 upstream,
                 request_id=request_id,
-                provider=provider,
+                resolved=resolved,
             )
             _record_usage(
                 db,
                 request_id=request_id,
                 principal=principal,
-                persona=persona,
-                provider=provider,
+                resolved=resolved,
                 usage=None,
                 status_value="failed",
                 latency_ms=latency_ms,
@@ -534,8 +627,7 @@ def create_chat_completion(
                 db,
                 request_id=request_id,
                 principal=principal,
-                persona=persona,
-                provider=provider,
+                resolved=resolved,
                 usage=None,
                 status_value="failed",
                 latency_ms=latency_ms,
@@ -550,8 +642,7 @@ def create_chat_completion(
                 db,
                 request_id=request_id,
                 principal=principal,
-                persona=persona,
-                provider=provider,
+                resolved=resolved,
                 usage=None,
                 status_value="failed",
                 latency_ms=latency_ms,
@@ -572,8 +663,7 @@ def create_chat_completion(
             db,
             request_id=request_id,
             principal=principal,
-            persona=persona,
-            provider=provider,
+            resolved=resolved,
             usage=usage,
             status_value="succeeded",
             latency_ms=latency_ms,
@@ -599,8 +689,7 @@ def create_chat_completion(
             db,
             request_id=request_id,
             principal=principal,
-            persona=persona,
-            provider=provider,
+            resolved=resolved,
             started=started,
             error_code="provider_timeout",
         )
@@ -611,8 +700,7 @@ def create_chat_completion(
             db,
             request_id=request_id,
             principal=principal,
-            persona=persona,
-            provider=provider,
+            resolved=resolved,
             started=started,
             error_code="provider_connection_error",
         )
@@ -622,7 +710,7 @@ def create_chat_completion(
         _log_upstream_rejection(
             upstream,
             request_id=request_id,
-            provider=provider,
+            resolved=resolved,
         )
         upstream.close()
         client.close()
@@ -630,8 +718,7 @@ def create_chat_completion(
             db,
             request_id=request_id,
             principal=principal,
-            persona=persona,
-            provider=provider,
+            resolved=resolved,
             usage=None,
             status_value="failed",
             latency_ms=int((time.monotonic() - started) * 1000),
@@ -690,7 +777,7 @@ def create_chat_completion(
             logger.warning(
                 "gateway_stream_failed",
                 request_id=request_id,
-                provider_type=provider.provider_type,
+                provider_type=resolved.provider_type,
                 error_type=type(exc).__name__,
             )
         finally:
@@ -702,8 +789,7 @@ def create_chat_completion(
                     record_session,
                     request_id=request_id,
                     principal=principal,
-                    persona=persona,
-                    provider=provider,
+                    resolved=resolved,
                     usage=usage,
                     status_value=(
                         "cancelled"
