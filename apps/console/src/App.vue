@@ -666,7 +666,7 @@ function upload() {
   input.click()
 }
 async function importKnowledgeUrl() {
-  const url = window.prompt('输入需要导入的公开网页 URL（仅支持 HTTP/HTTPS）')
+  const url = window.prompt('输入需要导入的公开网页 URL（公网地址必须使用 HTTPS）')
   if (!url?.trim() || !selectedId.value) return
   knowledgeBusy.value = true
   try {
