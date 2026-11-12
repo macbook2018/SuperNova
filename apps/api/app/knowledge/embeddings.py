@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
@@ -95,6 +96,7 @@ def resolve_embedding_config(db: Session, knowledge_base) -> EmbeddingConfig:
 def embed_texts(
     config: EmbeddingConfig,
     texts: list[str],
+    on_batch: Callable[[], None] | None = None,
 ) -> EmbeddingBatch:
     if not texts:
         return EmbeddingBatch(vectors=[], input_tokens=0, usage_known=True, request_count=0)
@@ -122,6 +124,8 @@ def embed_texts(
                 json={"model": config.model_name, "input": batch},
             )
             request_count += 1
+            if on_batch is not None:
+                on_batch()
             if not 200 <= response.status_code < 300:
                 raise RuntimeError(f"embedding_provider_http_{response.status_code}")
             try:
