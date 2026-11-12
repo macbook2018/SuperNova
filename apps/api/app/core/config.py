@@ -1,6 +1,9 @@
 from functools import lru_cache
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_DEFAULT_JWT_SECRET = "local-development-only-secret-change-before-deploy-2026"
 
 
 class Settings(BaseSettings):
@@ -17,6 +20,28 @@ class Settings(BaseSettings):
         "postgresql://supernova:change-me-local-only@localhost:5432/supernova"
     )
     redis_url: str = "redis://:change-me-local-only@localhost:6379/0"
+    jwt_secret: str = _DEFAULT_JWT_SECRET
+    access_token_ttl_minutes: int = 15
+    refresh_token_ttl_days: int = 30
+    cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+
+    @model_validator(mode="after")
+    def validate_jwt_secret(self) -> "Settings":
+        if self.environment.lower() in {"production", "prod"} and (
+            self.jwt_secret == _DEFAULT_JWT_SECRET or len(self.jwt_secret) < 32
+        ):
+            raise ValueError(
+                "SUPERNOVA_JWT_SECRET must be a unique secret of at least 32 characters"
+            )
+        if self.access_token_ttl_minutes < 5 or self.access_token_ttl_minutes > 60:
+            raise ValueError("SUPERNOVA_ACCESS_TOKEN_TTL_MINUTES must be between 5 and 60")
+        if self.refresh_token_ttl_days < 1 or self.refresh_token_ttl_days > 90:
+            raise ValueError("SUPERNOVA_REFRESH_TOKEN_TTL_DAYS must be between 1 and 90")
+        return self
+
+    @property
+    def allowed_origins(self) -> list[str]:
+        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
 
 
 @lru_cache
