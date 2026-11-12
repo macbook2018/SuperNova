@@ -99,6 +99,10 @@ def test_upload_creates_persistent_ingestion_job_and_is_idempotent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr("app.api.knowledge.put_object", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        "app.api.knowledge.get_object",
+        lambda *_args, **_kwargs: b"Shipping takes 3 days.",
+    )
     auth = register(client, "knowledge-owner@example.com")
     kb = create_kb(client, auth)
     files = {"file": ("faq.txt", b"Shipping takes 3 days.", "text/plain")}
@@ -127,6 +131,13 @@ def test_upload_creates_persistent_ingestion_job_and_is_idempotent(
     )
     assert listed.status_code == 200
     assert [item["id"] for item in listed.json()] == [first_doc["id"]]
+
+    downloaded = client.get(
+        f"/knowledge-bases/{kb['id']}/documents/{first_doc['id']}/download",
+        headers=headers(auth),
+    )
+    assert downloaded.status_code == 200
+    assert downloaded.content == b"Shipping takes 3 days."
 
 
 def test_upload_rejects_mismatched_file_signature(
