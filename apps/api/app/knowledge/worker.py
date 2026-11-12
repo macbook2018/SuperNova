@@ -297,13 +297,14 @@ def _handle_failure(job_id: str, error: Exception) -> None:
         if not final:
             delay = min(300, 2 ** min(job.attempts, 8))
             job.available_at = datetime.now(UTC) + timedelta(seconds=delay)
-        if document is not None and job.job_type != "delete":
-            if job.job_type == "reindex" and document.active_index_version > 0:
-                document.status = "ready"
-            elif final:
-                document.status = "failed"
-            else:
-                document.status = "queued"
+        if document is not None:
+            if job.job_type != "delete":
+                if job.job_type == "reindex" and document.active_index_version > 0:
+                    document.status = "ready"
+                elif final:
+                    document.status = "failed"
+                else:
+                    document.status = "queued"
             document.error_code = error.__class__.__name__[:80]
             document.error_message = message
         db.commit()
