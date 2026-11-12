@@ -23,17 +23,17 @@ from app.billing.entitlements import check_gateway_entitlements
 from app.billing.metering import (
     estimate_input_token_upper_bound,
     finalize_gateway_request,
-    fingerprint_gateway_request,
     find_existing_gateway_request,
+    fingerprint_gateway_request,
     reserve_gateway_request,
 )
 from app.core.config import get_settings
 from app.core.secret_encryption import decrypt_provider_api_key
 from app.core.security import hash_secret
+from app.knowledge.retrieval import retrieve_persona_context
 from app.models.billing import PlatformModel, PlatformModelPrice, TenantBillingPolicy
 from app.models.catalog import ModelProvider, Persona
 from app.models.identity import ApiKey, Tenant, TenantMembership, User
-from app.knowledge.retrieval import retrieve_persona_context
 from app.models.usage import UsageRecord
 from app.schemas.gateway import ChatCompletionRequest
 
