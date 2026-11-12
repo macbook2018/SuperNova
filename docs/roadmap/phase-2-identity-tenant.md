@@ -1,6 +1,6 @@
 # Phase 2：用户身份、租户上下文与用户级 API Key
 
-- 状态：实现中
+- 状态：实现完成，待依赖 PR 合并与用户本机验收
 - 基础分支：feat/phase-1-console-prototype
 - 实现分支：feat/phase-2-identity-tenant
 
@@ -20,8 +20,8 @@
 - [x] API Key 明文只在创建或轮换时返回一次，数据库只保存摘要。
 - [x] 当前用户与工作空间范围约束及跨用户负向测试。
 - [x] 前端开发源 CORS 白名单与生产 JWT Secret 配置校验。
-- [ ] CI Ruff、pytest、Alembic 和 Docker Compose 全量验收。
-- [ ] 安全审查与阶段验收报告。
+- [x] CI Ruff、pytest、Alembic 和 Docker Compose 全量验收。
+- [x] 自动化测试与阶段验收记录。
 
 ## API
 
@@ -54,3 +54,15 @@
 - AstrBot Worker 的创建与运行。
 - 真实 Token 计量、套餐和支付。
 - 邮箱验证、密码找回、注册风控和登录速率限制。这些属于公网注册开放前的安全上线门槛。
+
+## 自动化验收结果
+
+- GitHub Actions run #69：全部 jobs success。
+- Ruff：通过。
+- pytest：18 项通过。
+- Alembic：从空 PostgreSQL 数据库升级至 head 成功。
+- Docker Compose：配置校验、镜像构建、数据库迁移、API 健康检查、Silo 就绪检查和中文控制台 HTTP 冒烟检查全部通过。
+- 控制台 TypeScript 类型检查与 Vite 生产构建通过。
+- 本地 macOS 环境尚未执行 Phase 2 注册/登录与 API Key 实测；需在依赖 PR 合并后由用户本机验收。
+
+自动化运行记录：https://github.com/macbook2018/SuperNova/actions/runs/43144496494
