@@ -11,6 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from app.api.deps import CurrentPrincipal, DatabaseSession
 from app.core.config import get_settings
 from app.knowledge.parsers import validate_document_bytes
+from app.knowledge.retrieval import retrieve_knowledge_base
 from app.knowledge.storage import delete_object, put_object
 from app.models.catalog import KnowledgeBase
 from app.models.knowledge import (
@@ -21,6 +22,9 @@ from app.models.knowledge import (
 from app.schemas.knowledge import (
     KnowledgeDocumentRead,
     KnowledgeImportUrlRequest,
+    KnowledgeSearchHit,
+    KnowledgeSearchRequest,
+    KnowledgeSearchResponse,
     KnowledgeUsageSummary,
 )
 
@@ -425,21 +429,87 @@ def get_knowledge_usage(
         select(
             func.coalesce(func.sum(KnowledgeUsageRecord.input_tokens), 0),
             func.coalesce(func.sum(KnowledgeUsageRecord.request_count), 0),
-            func.coalesce(func.sum(KnowledgeUsageRecord.storage_bytes), 0),
-            func.coalesce(func.sum(KnowledgeUsageRecord.chunk_count), 0),
         ).where(
             KnowledgeUsageRecord.tenant_id == principal.tenant.id,
             KnowledgeUsageRecord.knowledge_base_id == knowledge_base_id,
         )
     ).one()
+    retrieval_requests = int(
+        db.scalar(
+            select(func.count(KnowledgeUsageRecord.id)).where(
+                KnowledgeUsageRecord.tenant_id == principal.tenant.id,
+                KnowledgeUsageRecord.knowledge_base_id == knowledge_base_id,
+                KnowledgeUsageRecord.operation == "retrieval",
+            )
+        )
+        or 0
+    )
     return KnowledgeUsageSummary(
         document_count=len(documents),
         ready_documents=sum(item.status == "ready" for item in documents),
         queued_documents=sum(item.status in {"queued", "processing", "deleting"} for item in documents),
         failed_documents=sum(item.status == "failed" for item in documents),
-        storage_bytes=int(usage[2] or 0),
+        storage_bytes=sum(item.file_size_bytes for item in documents),
         active_chunks=sum(item.chunk_count for item in documents if item.status == "ready"),
         embedding_tokens=int(usage[0] or 0),
         embedding_requests=int(usage[1] or 0),
-        retrieval_requests=0,
+        retrieval_requests=retrieval_requests,
+    )
+
+
+@router.post(
+    "/knowledge-bases/{knowledge_base_id}/search",
+    response_model=KnowledgeSearchResponse,
+)
+def search_knowledge_base(
+    knowledge_base_id: UUID,
+    payload: KnowledgeSearchRequest,
+    principal: CurrentPrincipal,
+    db: DatabaseSession,
+) -> KnowledgeSearchResponse:
+    knowledge_base = _get_knowledge_base(db, principal.tenant.id, knowledge_base_id)
+    try:
+        raw_hits = retrieve_knowledge_base(
+            db,
+            tenant_id=principal.tenant.id,
+            knowledge_base=knowledge_base,
+            query=payload.query,
+            top_k=payload.top_k,
+            score_threshold=payload.score_threshold,
+            document_ids=payload.document_ids or None,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": str(exc), "message": "知识库 Embedding 配置不可用，请检查模型配置"},
+        ) from None
+    except Exception:
+        raise HTTPException(
+            status_code=502,
+            detail={"code": "knowledge_retrieval_failed", "message": "知识库检索暂时不可用"},
+        ) from None
+
+    hits = [
+        KnowledgeSearchHit(
+            chunk_id=item["chunk_id"],
+            document_id=item["document_id"],
+            document_name=item["document_name"],
+            source_type=item["source_type"],
+            source_url=item["source_url"],
+            page_number=item["page_number"],
+            sheet_name=item["sheet_name"],
+            slide_number=item["slide_number"],
+            chunk_index=item["chunk_index"],
+            score=item["score"],
+            vector_rank=item["vector_rank"],
+            lexical_rank=item["lexical_rank"],
+            snippet=item["snippet"],
+            metadata=item["metadata"],
+        )
+        for item in raw_hits
+    ]
+    return KnowledgeSearchResponse(
+        query=payload.query,
+        knowledge_base_id=knowledge_base.id,
+        hits=hits,
     )
