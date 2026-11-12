@@ -634,7 +634,7 @@ def create_chat_completion(
                 db,
                 tenant_id=principal.tenant.id,
                 persona_id=persona.id,
-                query=latest_user_message,
+                query=latest_user_message[-4000:],
             )
         except Exception as exc:
             logger.warning(
