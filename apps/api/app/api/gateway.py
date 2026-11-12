@@ -21,7 +21,6 @@ from app.api.deps import DatabaseSession
 from app.core.config import get_settings
 from app.core.secret_encryption import decrypt_provider_api_key
 from app.core.security import hash_secret
-from app.db.session import get_db
 from app.models.catalog import ModelProvider, Persona
 from app.models.identity import ApiKey, Tenant, TenantMembership, User
 from app.models.usage import UsageRecord
