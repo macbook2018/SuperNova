@@ -8,6 +8,8 @@ from sqlalchemy.orm import Session
 from app.models.billing import (
     BillingPlan,
     BillingPlanEntitlement,
+    BillingReservation,
+    BillingReservationItem,
     TenantBillingPolicy,
     TenantSubscription,
 )
@@ -86,7 +88,6 @@ def _period_usage(
             select(func.coalesce(func.sum(UsageRecord.prompt_tokens), 0)).where(
                 *base,
                 UsageRecord.model_source == "platform",
-                UsageRecord.status == "succeeded",
             )
         )
     elif resource_code == "platform_output_tokens":
@@ -94,7 +95,6 @@ def _period_usage(
             select(func.coalesce(func.sum(UsageRecord.completion_tokens), 0)).where(
                 *base,
                 UsageRecord.model_source == "platform",
-                UsageRecord.status == "succeeded",
             )
         )
     else:
@@ -102,9 +102,37 @@ def _period_usage(
     return int(value or 0)
 
 
+def _reserved_usage(
+    db: Session,
+    *,
+    tenant_id: UUID,
+    subscription_id: UUID,
+    period_start: datetime,
+    period_end: datetime,
+    resource_code: str,
+) -> int:
+    value = db.scalar(
+        select(func.coalesce(func.sum(BillingReservationItem.reserved_units), 0))
+        .join(
+            BillingReservation,
+            BillingReservation.id == BillingReservationItem.reservation_id,
+        )
+        .where(
+            BillingReservation.tenant_id == tenant_id,
+            BillingReservation.subscription_id == subscription_id,
+            BillingReservation.period_start == period_start,
+            BillingReservation.period_end == period_end,
+            BillingReservation.state.in_(("held", "unknown")),
+            BillingReservationItem.resource_code == resource_code,
+            BillingReservationItem.state.in_(("held", "unknown")),
+        )
+    )
+    return int(value or 0)
+
+
 def _effective_limit(entitlement: BillingPlanEntitlement) -> int:
-    # Phase 5B deliberately blocks at included usage. Overage billing is not
-    # active until Phase 5C/5D have reservations and settlement.
+    # Phase 5C records shadow ratings but still blocks at included usage.
+    # Live overage collection remains disabled until Phase 5D.
     if entitlement.hard_limit_units is None:
         return entitlement.included_units
     return min(entitlement.included_units, entitlement.hard_limit_units)
@@ -143,6 +171,14 @@ def build_entitlement_snapshot(db: Session, tenant_id: UUID) -> BillingEntitleme
             subscription.current_period_end,
             code,
         )
+        reserved = _reserved_usage(
+            db,
+            tenant_id=tenant_id,
+            subscription_id=subscription.id,
+            period_start=subscription.current_period_start,
+            period_end=subscription.current_period_end,
+            resource_code=code,
+        )
         limit = _effective_limit(item)
         resources.append(
             BillingResourceUsageRead(
@@ -151,7 +187,8 @@ def build_entitlement_snapshot(db: Session, tenant_id: UUID) -> BillingEntitleme
                 included_units=item.included_units,
                 hard_limit_units=item.hard_limit_units,
                 used_units=used,
-                remaining_units=max(0, limit - used),
+                reserved_units=reserved,
+                remaining_units=max(0, limit - used - reserved),
                 overage_behavior="block",
             )
         )

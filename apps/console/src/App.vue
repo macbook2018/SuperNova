@@ -17,7 +17,9 @@ import {
   type ApiKeyCreated,
   type AuthResponse,
   type BillingEntitlements,
+  type BillingLedgerTransaction,
   type BillingPlan,
+  type BillingShadowUsageSummary,
   type PlatformModel,
   type KnowledgeBase,
   type ModelProvider,
@@ -63,8 +65,8 @@ const descriptions: Record<Page, string> = {
   knowledge: '集中管理知识库资料空间，并关联到一个或多个 AI 人格。',
   knowledgeDetail: '管理知识库基本信息及其关联人格。',
   api: '使用一个用户级 API Key，通过 OpenAI 兼容接口调用多个独立人格。',
-  billing: '查看当前订阅、套餐权益和资源额度。在线支付与超额结算将在后续阶段开放。',
-  usage: '查看真实模型调用次数、输入输出 Token 和响应时间；金额计费将在定价规则接入后开放。',
+  billing: '查看当前订阅、实时额度预留、影子计价和账本记录；当前不会产生真实扣款。',
+  usage: '查看真实模型调用次数、输入输出 Token、响应时间和未计量请求。',
   settings: '查看账户资料与安全设置。',
 }
 const nav = [
@@ -96,6 +98,8 @@ const providers = ref<ModelProvider[]>([])
 const platformModels = ref<PlatformModel[]>([])
 const billingPlans = ref<BillingPlan[]>([])
 const billingEntitlements = ref<BillingEntitlements | null>(null)
+const billingUsage = ref<BillingShadowUsageSummary | null>(null)
+const billingLedger = ref<BillingLedgerTransaction[]>([])
 const billingLoading = ref(false)
 const kbs = ref<KnowledgeBaseView[]>([])
 const apiKeys = ref<ApiKey[]>([])
@@ -146,6 +150,21 @@ function colorFor(index: number): string {
   return ['blue', 'purple', 'green'][index % 3]
 }
 
+function currencyMinorUnitExponent(currency: string): number {
+  try {
+    return new Intl.NumberFormat('en', { style: 'currency', currency }).resolvedOptions().maximumFractionDigits ?? 2
+  } catch {
+    return 2
+  }
+}
+function formatMinorAmount(
+  value: string | number,
+  currency: string,
+  exponent = currencyMinorUnitExponent(currency),
+): string {
+  return (Number(value) / 10 ** exponent).toFixed(exponent)
+}
+
 async function loadWorkspace() {
   const [personaData, providerData, platformData, knowledgeData, keyData] = await Promise.all([
     request<Persona[]>('/personas'),
@@ -165,12 +184,16 @@ async function loadBilling(showError = false) {
   if (!authenticated.value) return
   billingLoading.value = true
   try {
-    const [plans, entitlements] = await Promise.all([
+    const [plans, entitlements, usage, ledger] = await Promise.all([
       request<BillingPlan[]>('/billing/plans'),
       request<BillingEntitlements>('/billing/entitlements'),
+      request<BillingShadowUsageSummary>('/billing/usage'),
+      request<BillingLedgerTransaction[]>('/billing/ledger?limit=10'),
     ])
     billingPlans.value = plans
     billingEntitlements.value = entitlements
+    billingUsage.value = usage
+    billingLedger.value = ledger
   } catch (error) {
     if (showError) notify(error instanceof Error ? error.message : '读取套餐权益失败')
   } finally {
@@ -708,15 +731,43 @@ async function revokeKey(key: ApiKey) {
      <div v-else class="empty"><Wallet :size="28"/><b>当前工作空间尚未开通订阅</b><small>请联系平台管理员分配套餐。未开通前，新的工作空间不能调用平台模型或 BYOK 模型。</small></div>
     </section>
     <section class="panel">
-     <div class="panel-title"><div><b>套餐资源额度</b><small>超额请求在 Phase 5B 暂时拒绝，不会产生真实扣款。</small></div></div>
+     <div class="panel-title"><div><b>套餐资源额度</b><small>每次请求先预留额度，收到可信 usage 后按实际用量结算；超额仍会拒绝。</small></div></div>
      <div v-if="billingEntitlements?.resources.length" class="usage-mini-grid">
       <div v-for="item in billingEntitlements.resources" :key="item.resource_code">
        <small>{{item.resource_code}}</small>
        <b>{{item.used_units.toLocaleString()}} / {{item.included_units.toLocaleString()}}</b>
-       <small>剩余 {{item.remaining_units.toLocaleString()}} {{item.unit}}</small>
+       <small>预留 {{item.reserved_units.toLocaleString()}} · 剩余 {{item.remaining_units.toLocaleString()}} {{item.unit}}</small>
       </div>
      </div>
      <div v-else class="empty"><b>暂无可展示的额度</b><small>订阅生效并配置套餐权益后，这里会显示请求次数和平台模型 Token 额度。</small></div>
+    </section>
+    <section class="panel">
+     <div class="panel-title"><div><b>影子计价与计量状态</b><small>按当前模型销售价格版本计算的参考金额；仅用于验证账单，不会扣款。</small></div><label class="paused">SHADOW · 不扣款</label></div>
+     <div class="usage-mini-grid">
+      <div><small>本周期估算金额</small><b>{{billingUsage ? billingUsage.currency+' '+formatMinorAmount(billingUsage.estimated_amount_minor, billingUsage.currency, billingUsage.minor_unit_exponent) : '—'}}</b></div>
+      <div><small>影子计价明细</small><b>{{billingUsage?.shadow_rated_items.toLocaleString() ?? '—'}}</b></div>
+      <div><small>未知预留</small><b>{{billingUsage?.unknown_reservations.toLocaleString() ?? '—'}}</b></div>
+      <div><small>待核对事件</small><b>{{billingUsage?.unrated_events.toLocaleString() ?? '—'}}</b></div>
+     </div>
+     <div class="usage-mini-grid">
+      <div><small>平台模型输入 Token</small><b>{{billingUsage?.platform_input_tokens.toLocaleString() ?? '—'}}</b></div>
+      <div><small>平台模型输出 Token</small><b>{{billingUsage?.platform_output_tokens.toLocaleString() ?? '—'}}</b></div>
+      <div><small>BYOK 输入 Token</small><b>{{billingUsage?.byok_input_tokens.toLocaleString() ?? '—'}}</b></div>
+      <div><small>BYOK 输出 Token</small><b>{{billingUsage?.byok_output_tokens.toLocaleString() ?? '—'}}</b></div>
+     </div>
+     <small class="usage-footnote">平台模型金额根据固定价格版本计算；BYOK 模型 Token 不计平台模型费。没有可信 usage 的请求不会估算 Token 费用，未知预留会暂时占用额度，等待管理员核对。</small>
+    </section>
+    <section class="panel">
+     <div class="panel-title"><div><b>最近影子账本</b><small>每笔影子分录必须借贷平衡；这里不是实际应收款或钱包流水。</small></div></div>
+     <div v-if="billingLedger.length" class="usage-list">
+      <div v-for="entry in billingLedger" :key="entry.id" class="usage-row">
+       <div><b>{{entry.kind}}</b><small>{{new Date(entry.created_at).toLocaleString()}} · {{entry.id.slice(0,8)}}</small></div>
+       <span>{{entry.currency}} {{formatMinorAmount(entry.postings.filter(posting=>posting.amount_minor>0).reduce((sum,posting)=>sum+posting.amount_minor,0), entry.currency)}}</span>
+       <span>{{entry.postings.map(posting=>posting.amount_minor).reduce((a,b)=>a+b,0)===0?'借贷平衡':'需核对'}}</span>
+       <label class="paused">SHADOW</label>
+      </div>
+     </div>
+     <div v-else class="empty"><b>暂无影子账本分录</b><small>平台模型产生可信 Token usage 并达到最小货币精度后，会生成成对平衡的影子分录。</small></div>
     </section>
     <section class="panel">
      <div class="panel-title"><div><b>可用套餐</b><small>当前开放的套餐信息；购买、支付和升级操作将在 Phase 5D 开放。</small></div></div>
@@ -724,7 +775,7 @@ async function revokeKey(key: ApiKey) {
       <article v-for="plan in billingPlans" :key="plan.id" class="kb-card">
        <div class="kb-card-head"><span class="kb-icon purple"><Wallet :size="20"/></span><label class="running">{{plan.billing_interval==='month'?'月付':'年付'}}</label></div>
        <h3>{{plan.name}}</h3><p>{{plan.code}} · v{{plan.revision}}</p>
-       <div class="kb-meta"><b>{{plan.currency}} {{(plan.subscription_price_minor / 100).toFixed(2)}}</b><span>{{plan.entitlements.length}} 项权益</span></div>
+       <div class="kb-meta"><b>{{plan.currency}} {{formatMinorAmount(plan.subscription_price_minor, plan.currency)}}</b><span>{{plan.entitlements.length}} 项权益</span></div>
        <footer><small><i></i>由平台发布</small></footer>
       </article>
      </div>
@@ -754,7 +805,7 @@ async function revokeKey(key: ApiKey) {
    <label>调用标识（model） <b>*</b><input v-model="personaForm.slug" maxlength="80" placeholder="例如：customer-support"><small>仅允许小写字母、数字和连字符。</small></label>
    <label class="full">人格简介<input v-model="personaForm.description" maxlength="500" placeholder="简单描述这个人格的用途"></label>
    <label class="full">模型来源<select v-model="personaForm.model_source" @change="onPersonaModelSourceChange"><option value="platform">使用 SuperNova 平台模型</option><option value="byok">自带 API Key（BYOK）</option></select><small>平台模型由 SuperNova 提供；BYOK 使用你自己配置的供应商和 API Key。</small></label>
-   <label v-if="personaForm.model_source==='platform'" class="full">平台模型<select v-model="personaForm.platform_model_id"><option value="">请选择平台模型</option><option v-for="model in platformModels" :key="model.id" :value="model.id">{{model.display_name}}（{{model.model_name}}） · 输入 {{(Number(model.input_per_million_minor) / 100).toFixed(2)}} / 输出 {{(Number(model.output_per_million_minor) / 100).toFixed(2)}} {{model.currency}} / 百万 Token</option></select><small v-if="!platformModels.length">当前没有可用平台模型，请联系平台管理员发布模型和价格。</small></label>
+   <label v-if="personaForm.model_source==='platform'" class="full">平台模型<select v-model="personaForm.platform_model_id"><option value="">请选择平台模型</option><option v-for="model in platformModels" :key="model.id" :value="model.id">{{model.display_name}}（{{model.model_name}}） · 输入 {{formatMinorAmount(model.input_per_million_minor, model.currency)}} / 输出 {{formatMinorAmount(model.output_per_million_minor, model.currency)}} {{model.currency}} / 百万 Token</option></select><small v-if="!platformModels.length">当前没有可用平台模型，请联系平台管理员发布模型和价格。</small></label>
    <template v-else>
     <label class="full">模型供应商<select v-model="personaForm.provider_id"><option value="">请选择供应商</option><option v-for="provider in providers" :key="provider.id" :value="provider.id" :disabled="!provider.enabled || !provider.has_api_key">{{provider.name}}（{{provider.provider_type}}）</option></select><small>BYOK 使用你自己的 API Key，Token 模型费用由供应商向你收取。</small></label>
     <label class="full">上游模型名称 <b>*</b><input v-model="personaForm.model_name" maxlength="120" placeholder="例如：deepseek-chat / gpt-4o-mini"></label>

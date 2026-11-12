@@ -20,6 +20,12 @@ from sqlalchemy.orm import Session
 from app.api.deps import DatabaseSession
 from app.billing.credentials import resolve_platform_api_key
 from app.billing.entitlements import check_gateway_entitlements
+from app.billing.metering import (
+    estimate_input_token_upper_bound,
+    finalize_gateway_request,
+    fingerprint_gateway_request,
+    reserve_gateway_request,
+)
 from app.core.config import get_settings
 from app.core.secret_encryption import decrypt_provider_api_key
 from app.core.security import hash_secret
@@ -46,6 +52,7 @@ class ResolvedModel:
     model_source: str
     provider_id: UUID | None
     platform_model_id: UUID | None
+    price_version_id: UUID | None
     provider_type: str
     provider_name: str
     base_url: str
@@ -271,6 +278,7 @@ def _resolve_persona(
             model_source="platform",
             provider_id=None,
             platform_model_id=model.id,
+            price_version_id=price.id,
             provider_type=model.provider_type,
             provider_name=model.display_name,
             base_url=model.base_url,
@@ -338,6 +346,7 @@ def _resolve_persona(
         model_source="byok",
         provider_id=provider.id,
         platform_model_id=None,
+        price_version_id=None,
         provider_type=provider.provider_type,
         provider_name=provider.name,
         base_url=provider.base_url,
@@ -353,19 +362,22 @@ def _extract_usage(value: Any) -> dict[str, int] | None:
 
     def valid_count(key: str) -> int | None:
         item = value.get(key)
-        return item if isinstance(item, int) and not isinstance(item, bool) and item >= 0 else None
+        if isinstance(item, bool) or not isinstance(item, int) or item < 0:
+            return None
+        return item
 
     prompt = valid_count("prompt_tokens")
     completion = valid_count("completion_tokens")
     total = valid_count("total_tokens")
-    if total is None and prompt is not None and completion is not None:
-        total = prompt + completion
-    if prompt is None and completion is None and total is None:
+    if prompt is None or completion is None:
+        return None
+    expected_total = prompt + completion
+    if total is not None and total != expected_total:
         return None
     return {
         "prompt_tokens": prompt,
         "completion_tokens": completion,
-        "total_tokens": total,
+        "total_tokens": expected_total,
     }
 
 
@@ -378,33 +390,47 @@ def _record_usage(
     usage: dict[str, int] | None,
     status_value: str,
     latency_ms: int,
+    reservation_id: UUID | None = None,
+    usage_unknown: bool = True,
+    response_status: int | None = None,
+    response_json: dict | None = None,
     error_code: str | None = None,
 ) -> None:
-    usage = usage or {}
     persona = resolved.persona
-    db.add(
-        UsageRecord(
-            id=uuid4(),
-            request_id=request_id,
-            tenant_id=principal.tenant.id,
-            user_id=principal.user.id,
-            api_key_id=principal.api_key.id,
-            persona_id=persona.id,
-            provider_id=resolved.provider_id,
-            platform_model_id=resolved.platform_model_id,
-            model_source=resolved.model_source,
-            persona_slug=persona.slug,
-            provider_type=resolved.provider_type,
-            model_name=resolved.upstream_model_name,
-            status=status_value,
-            prompt_tokens=usage.get("prompt_tokens"),
-            completion_tokens=usage.get("completion_tokens"),
-            total_tokens=usage.get("total_tokens"),
-            latency_ms=max(0, latency_ms),
-            error_code=error_code,
-        )
+    record = UsageRecord(
+        id=uuid4(),
+        request_id=request_id,
+        tenant_id=principal.tenant.id,
+        user_id=principal.user.id,
+        api_key_id=principal.api_key.id,
+        persona_id=persona.id,
+        provider_id=resolved.provider_id,
+        platform_model_id=resolved.platform_model_id,
+        model_source=resolved.model_source,
+        persona_slug=persona.slug,
+        provider_type=resolved.provider_type,
+        model_name=resolved.upstream_model_name,
+        status=status_value,
+        prompt_tokens=usage.get("prompt_tokens") if usage else None,
+        completion_tokens=usage.get("completion_tokens") if usage else None,
+        total_tokens=usage.get("total_tokens") if usage else None,
+        latency_ms=max(0, latency_ms),
+        error_code=error_code,
     )
-    db.commit()
+    db.add(record)
+    db.flush()
+    if reservation_id is not None:
+        finalize_gateway_request(
+            db,
+            reservation_id=reservation_id,
+            usage_record=record,
+            trusted_usage=usage,
+            usage_unknown=usage_unknown if usage is None else False,
+            response_status=response_status,
+            response_json=response_json,
+        )
+    else:
+        db.commit()
 
 
 def _upstream_payload(payload: ChatCompletionRequest, resolved: ResolvedModel) -> dict[str, Any]:
@@ -481,6 +507,7 @@ def _record_failed(
     request_id: str,
     principal: GatewayPrincipal,
     resolved: ResolvedModel,
+    reservation_id: UUID,
     started: float,
     error_code: str,
 ) -> None:
@@ -492,6 +519,8 @@ def _record_failed(
         usage=None,
         status_value="failed",
         latency_ms=int((time.monotonic() - started) * 1000),
+        reservation_id=reservation_id,
+        usage_unknown=True,
         error_code=error_code,
     )
 
@@ -542,17 +571,55 @@ def create_chat_completion(
     request: Request,
     principal: GatewayPrincipalDependency,
     db: DatabaseSession,
+    idempotency_key_header: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     request_id = _request_id(request)
     resolved = _resolve_persona(db, principal, payload.model)
     persona = resolved.persona
-    max_output_tokens = min(payload.max_tokens or persona.max_tokens, persona.max_tokens)
-    check_gateway_entitlements(
+    upstream_payload = _upstream_payload(payload, resolved)
+
+    idempotency_key = (
+        idempotency_key_header.strip()
+        if idempotency_key_header
+        else request_id
+    )
+    if (
+        not idempotency_key
+        or len(idempotency_key) > 128
+        or any(ord(char) < 33 or ord(char) > 126 for char in idempotency_key)
+    ):
+        raise _client_error(
+            400,
+            "invalid_idempotency_key",
+            "Idempotency-Key 必须为 1 至 128 个可见 ASCII 字符",
+        )
+
+    request_hash = fingerprint_gateway_request(
+        upstream_payload,
+        api_key_id=principal.api_key.id,
+        persona_id=persona.id,
+        model_source=resolved.model_source,
+        price_version_id=resolved.price_version_id,
+    )
+    reservation = reserve_gateway_request(
         db,
         tenant_id=principal.tenant.id,
+        idempotency_key=idempotency_key,
+        request_hash=request_hash,
         model_source=resolved.model_source,
-        max_output_tokens=max_output_tokens,
+        input_token_reservation=estimate_input_token_upper_bound(
+            upstream_payload["messages"]
+        ),
+        output_token_reservation=upstream_payload["max_tokens"],
+        price_version_id=resolved.price_version_id,
     )
+    if reservation.replay_response is not None:
+        return JSONResponse(
+            content=reservation.replay_response,
+            status_code=reservation.replay_status or 200,
+        )
+    reservation_id = reservation.reservation_id
+
     endpoint = resolved.endpoint
     upstream_payload = _upstream_payload(payload, resolved)
     headers = {
@@ -578,6 +645,7 @@ def create_chat_completion(
                 request_id=request_id,
                 principal=principal,
                 resolved=resolved,
+                reservation_id=reservation_id,
                 started=started,
                 error_code="provider_timeout",
             )
@@ -588,6 +656,7 @@ def create_chat_completion(
                 request_id=request_id,
                 principal=principal,
                 resolved=resolved,
+                reservation_id=reservation_id,
                 started=started,
                 error_code="provider_connection_error",
             )
@@ -608,6 +677,9 @@ def create_chat_completion(
                 usage=None,
                 status_value="failed",
                 latency_ms=latency_ms,
+                reservation_id=reservation_id,
+                usage_unknown=upstream.status_code >= 500,
+                response_status=502,
                 error_code="provider_http_error",
             )
             if upstream.status_code in {401, 403}:
@@ -631,6 +703,9 @@ def create_chat_completion(
                 usage=None,
                 status_value="failed",
                 latency_ms=latency_ms,
+                reservation_id=reservation_id,
+                usage_unknown=True,
+                response_status=502,
                 error_code="invalid_provider_response",
             )
             raise _client_error(
@@ -646,6 +721,9 @@ def create_chat_completion(
                 usage=None,
                 status_value="failed",
                 latency_ms=latency_ms,
+                reservation_id=reservation_id,
+                usage_unknown=True,
+                response_status=502,
                 error_code="invalid_provider_response",
             )
             raise _client_error(
@@ -667,6 +745,10 @@ def create_chat_completion(
             usage=usage,
             status_value="succeeded",
             latency_ms=latency_ms,
+            reservation_id=reservation_id,
+            usage_unknown=usage is None,
+            response_status=200,
+            response_json=result,
         )
         return JSONResponse(content=result)
 
@@ -690,6 +772,7 @@ def create_chat_completion(
             request_id=request_id,
             principal=principal,
             resolved=resolved,
+            reservation_id=reservation_id,
             started=started,
             error_code="provider_timeout",
         )
@@ -701,6 +784,7 @@ def create_chat_completion(
             request_id=request_id,
             principal=principal,
             resolved=resolved,
+            reservation_id=reservation_id,
             started=started,
             error_code="provider_connection_error",
         )
@@ -722,6 +806,9 @@ def create_chat_completion(
             usage=None,
             status_value="failed",
             latency_ms=int((time.monotonic() - started) * 1000),
+            reservation_id=reservation_id,
+            usage_unknown=upstream.status_code >= 500,
+            response_status=502,
             error_code="provider_http_error",
         )
         if upstream.status_code in {401, 403}:
@@ -799,6 +886,9 @@ def create_chat_completion(
                         else "succeeded"
                     ),
                     latency_ms=int((time.monotonic() - started) * 1000),
+                    reservation_id=reservation_id,
+                    usage_unknown=usage is None,
+                    response_status=200 if completed else None,
                     error_code=failure_code,
                 )
             except Exception:

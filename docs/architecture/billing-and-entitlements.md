@@ -189,3 +189,23 @@ Phase 5B 在 0006 迁移中为平台模型增加 base_url，为 usage_records �
 - 平台管理员由 SUPERNOVA_PLATFORM_ADMIN_EMAILS 白名单控制；平台凭据由 SUPERNOVA_PLATFORM_CREDENTIALS_JSON 的 credential_ref 映射解析。真实 Key 不写入数据库或返回租户。
 
 Phase 5B 的额度检查是**调用前读取当前订阅周期用量并拒绝超额**，不是并发安全的预留。并发请求可能在同一时刻通过预检查，因此正式商用前必须由 Phase 5C 实现数据库预留、幂等事件和结算；当前不得启用实际超额收费。
+
+
+## 10. Phase 5C 实际实现边界（2026-11-12）
+
+迁移 `0007_phase_5c_metering` 已将预留、幂等、影子评级与审计落到数据库：
+
+- `billing_reservations` 保存 tenant-scoped idempotency key、请求指纹、订阅/套餐/价格版本快照、UsageRecord 关联和非流式响应缓存。
+- `billing_reservation_items` 按 resource_code 记录预留、消耗与 held/unknown/settled/released 状态。
+- PostgreSQL 以 tenant 行锁作为同租户预留的串行化点，再锁订阅与 reservation；并以唯一键作为最终幂等保护。
+- Chat Completions 接受 `Idempotency-Key`。同 Key 同 Payload 的非流式成功请求重放已缓存 JSON；同 Key 不同 Payload 返回 409；SSE 不缓存完整响应，重复 Key 返回 409，不再次调用上游。
+- 平台模型请求预留 API request、平台模型 request、输入 Token 上限和 max_tokens 输出上限；BYOK 仅预留 API request。
+- 输入 Token 预留采用序列化上游消息的 UTF-8 字节数加消息开销作为保守估算；最终只按可信供应商 usage 结算。该估算用于防止并发超额，并非最终 Token 计量。
+- 可信 usage 要求 prompt_tokens 和 completion_tokens 都是非负整数，total_tokens 如存在必须相符。缺失或不可信时不创建 Token 评级，不推测扣费；平台 Token 预留转 unknown 并继续占用额度。
+- 管理员可以基于供应商账单人工补录可信 usage 完成 shadow settle，或提供原因释放 unknown reservation。无 UsageRecord 的过期 held reservation 只能先标 unknown，再人工释放。
+- `billing_rated_items` 分别记录输入/输出价格版本、included/overage units、Decimal 金额和币种精度。BYOK Token 为 unmetered。
+- Phase 5C 只创建 `mode=shadow` 的双分录账本；每笔正负 posting 原子写入并校验 SUM(amount_minor)=0。不会修改钱包、扣款或产生实际应收。
+- 币种最小单位精度集中管理：常见两位小数币种默认2位，JPY/KRW等0位，BHD/KWD等3位，CLF/UYW等4位。
+- 对账报告核查不平衡交易、评级/账本金额差异、缺失或 unrated 事件、unknown/stale reservation 和 reservation overrun。日报接口由外部调度器每日调用。
+
+Phase 5C 仍然 block 超额。真实超额收费、余额/钱包、支付回调、退款和自动续费均未启用，属于后续商业化阶段。

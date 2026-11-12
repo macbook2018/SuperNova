@@ -103,8 +103,37 @@ export interface BillingEntitlements {
     included_units: number
     hard_limit_units: number | null
     used_units: number
+    reserved_units: number
     remaining_units: number
     overage_behavior: string
+  }>
+}
+
+export interface BillingShadowUsageSummary {
+  period_start: string
+  period_end: string
+  currency: string
+  minor_unit_exponent: number
+  estimated_amount_minor: string | number
+  shadow_rated_items: number
+  platform_input_tokens: number
+  platform_output_tokens: number
+  byok_input_tokens: number
+  byok_output_tokens: number
+  unrated_events: number
+  unknown_reservations: number
+}
+
+export interface BillingLedgerTransaction {
+  id: string
+  kind: string
+  mode: string
+  currency: string
+  reference_id: string | null
+  created_at: string
+  postings: Array<{
+    account_kind: string
+    amount_minor: number
   }>
 }
 

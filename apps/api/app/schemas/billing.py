@@ -121,6 +121,7 @@ class BillingResourceUsageRead(BaseModel):
     included_units: int
     hard_limit_units: int | None
     used_units: int
+    reserved_units: int = 0
     remaining_units: int
     overage_behavior: str
 
@@ -129,3 +130,86 @@ class BillingEntitlementsRead(BaseModel):
     legacy_unmetered: bool
     subscription: TenantSubscriptionRead | None
     resources: list[BillingResourceUsageRead]
+
+
+
+class BillingReconciliationRunCreate(BaseModel):
+    period_start: datetime
+    period_end: datetime
+
+    @model_validator(mode="after")
+    def validate_period(self):
+        if self.period_start.tzinfo is None or self.period_end.tzinfo is None:
+            raise ValueError("对账周期时间必须包含时区")
+        if self.period_end <= self.period_start:
+            raise ValueError("对账结束时间必须晚于开始时间")
+        return self
+
+
+class BillingReservationSettlement(BaseModel):
+    prompt_tokens: int = Field(ge=0)
+    completion_tokens: int = Field(ge=0)
+    reason: str = Field(min_length=5, max_length=500)
+
+    @field_validator("reason")
+    @classmethod
+    def trim_reason(cls, value: str) -> str:
+        value = value.strip()
+        if len(value) < 5:
+            raise ValueError("人工结算原因至少需要 5 个字符")
+        return value
+
+
+class BillingReservationRelease(BaseModel):
+    reason: str = Field(min_length=5, max_length=500)
+
+    @field_validator("reason")
+    @classmethod
+    def trim_reason(cls, value: str) -> str:
+        value = value.strip()
+        if len(value) < 5:
+            raise ValueError("人工处理原因至少需要 5 个字符")
+        return value
+
+
+class BillingReconciliationRunRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    period_start: datetime
+    period_end: datetime
+    status: str
+    report_json: dict
+    created_by_user_id: UUID | None
+    completed_at: datetime | None
+    created_at: datetime
+
+
+class BillingShadowUsageSummaryRead(BaseModel):
+    period_start: datetime
+    period_end: datetime
+    currency: str
+    minor_unit_exponent: int
+    estimated_amount_minor: Decimal
+    shadow_rated_items: int
+    platform_input_tokens: int
+    platform_output_tokens: int
+    byok_input_tokens: int
+    byok_output_tokens: int
+    unrated_events: int
+    unknown_reservations: int
+
+
+class BillingLedgerPostingRead(BaseModel):
+    account_kind: str
+    amount_minor: int
+
+
+class BillingLedgerTransactionRead(BaseModel):
+    id: UUID
+    kind: str
+    mode: str
+    currency: str
+    reference_id: str | None
+    created_at: datetime
+    postings: list[BillingLedgerPostingRead]

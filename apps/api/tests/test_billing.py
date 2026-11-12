@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 from app.api import platform_admin
 from app.billing import credentials
+from app.billing.money import currency_minor_unit_exponent
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
@@ -322,3 +323,54 @@ def test_plan_revisions_are_immutable_and_only_one_current_subscription(
         json=payload,
     )
     assert second.status_code == 409
+
+
+def test_platform_admin_can_run_shadow_reconciliation_and_non_admin_is_denied(
+    client: TestClient,
+) -> None:
+    admin = register(client)
+    customer = register(client, "customer@example.com")
+    start = datetime.now(UTC) - timedelta(days=1)
+    end = datetime.now(UTC) + timedelta(minutes=1)
+
+    denied = client.post(
+        "/admin/billing/reconciliation/run",
+        headers=headers(customer),
+        json={
+            "period_start": start.isoformat(),
+            "period_end": end.isoformat(),
+        },
+    )
+    assert denied.status_code == 403
+    assert denied.json()["detail"]["code"] == "platform_admin_required"
+
+    response = client.post(
+        "/admin/billing/reconciliation/run",
+        headers=headers(admin),
+        json={
+            "period_start": start.isoformat(),
+            "period_end": end.isoformat(),
+        },
+    )
+    assert response.status_code == 201, response.text
+    run = response.json()
+    assert run["status"] == "completed"
+    assert run["report_json"]["unbalanced_transactions"] == []
+    assert run["report_json"]["unknown_reservations"] == 0
+
+    listed = client.get(
+        "/admin/billing/reconciliation/runs",
+        headers=headers(admin),
+    )
+    assert listed.status_code == 200
+    assert listed.json()[0]["id"] == run["id"]
+
+
+
+def test_currency_minor_unit_precision_matches_iso_currency_exponents() -> None:
+    assert currency_minor_unit_exponent("CNY") == 2
+    assert currency_minor_unit_exponent("USD") == 2
+    assert currency_minor_unit_exponent("JPY") == 0
+    assert currency_minor_unit_exponent("KRW") == 0
+    assert currency_minor_unit_exponent("KWD") == 3
+    assert currency_minor_unit_exponent("CLF") == 4
