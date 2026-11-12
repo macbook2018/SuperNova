@@ -362,7 +362,10 @@ def reindex_knowledge_document(
         )
     )
     if document is None or document.status == "deleted":
-        raise HTTPException(status_code=404, detail={"code": "document_not_found", "message": "文档不存在"})
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "document_not_found", "message": "文档不存在"},
+        )
     if document.status not in {"ready", "failed"}:
         raise HTTPException(
             status_code=409,
