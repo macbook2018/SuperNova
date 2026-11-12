@@ -39,7 +39,10 @@ def validate_document_bytes(filename: str, content_type: str, body: bytes) -> st
             raise ValueError("file_signature_mismatch")
         try:
             with zipfile.ZipFile(io.BytesIO(body)) as archive:
-                names = set(archive.namelist())
+                members = archive.infolist()
+                names = {item.filename for item in members}
+                if len(members) > 10000 or sum(item.file_size for item in members) > 100_000_000:
+                    raise ValueError("office_document_expansion_limit_exceeded")
         except zipfile.BadZipFile:
             raise ValueError("invalid_office_document") from None
         required = {
@@ -74,6 +77,8 @@ def parse_document(filename: str, content_type: str, body: bytes) -> list[Extrac
     blocks: list[ExtractedBlock] = []
     if suffix == ".pdf":
         reader = PdfReader(io.BytesIO(body), strict=False)
+        if len(reader.pages) > 500:
+            raise ValueError("pdf_page_limit_exceeded")
         for page_index, page in enumerate(reader.pages, start=1):
             text = (page.extract_text() or "").strip()
             if text:
@@ -109,6 +114,8 @@ def parse_document(filename: str, content_type: str, body: bytes) -> list[Extrac
                 )
     elif suffix == ".pptx":
         presentation = Presentation(io.BytesIO(body))
+        if len(presentation.slides) > 500:
+            raise ValueError("pptx_slide_limit_exceeded")
         for slide_index, slide in enumerate(presentation.slides, start=1):
             parts = []
             for shape in slide.shapes:
@@ -129,9 +136,15 @@ def parse_document(filename: str, content_type: str, body: bytes) -> list[Extrac
     elif suffix == ".xlsx":
         workbook = load_workbook(io.BytesIO(body), read_only=True, data_only=True)
         try:
+            if len(workbook.worksheets) > 100:
+                raise ValueError("xlsx_sheet_limit_exceeded")
+            total_rows = 0
             for sheet in workbook.worksheets:
                 rows = []
                 for row_index, row in enumerate(sheet.iter_rows(values_only=True), start=1):
+                    total_rows += 1
+                    if row_index > 10000 or total_rows > 50000:
+                        raise ValueError("xlsx_row_limit_exceeded")
                     values = [str(value).strip() for value in row if value is not None]
                     if values:
                         rows.append((row_index, " | ".join(values)))
