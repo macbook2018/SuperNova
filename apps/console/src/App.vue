@@ -271,7 +271,7 @@ async function savePersona() {
   }
   try {
     if (editingId.value) {
-      await request<Persona>(\`/personas/\${editingId.value}\`, 'PATCH', payload)
+      await request<Persona>(`/personas/${editingId.value}`, 'PATCH', payload)
       notify('人格配置已保存')
     } else {
       await request<Persona>('/personas', 'POST', payload)
@@ -285,7 +285,7 @@ async function savePersona() {
 }
 async function togglePersona(persona: PersonaView) {
   try {
-    await request<Persona>(\`/personas/\${persona.id}\`, 'PATCH', { enabled: !persona.enabled })
+    await request<Persona>(`/personas/${persona.id}`, 'PATCH', { enabled: !persona.enabled })
     await loadWorkspace()
     notify(persona.enabled ? '人格已停用' : '人格已启用')
   } catch (error) {
@@ -293,9 +293,9 @@ async function togglePersona(persona: PersonaView) {
   }
 }
 async function deletePersona(persona: PersonaView) {
-  if (!window.confirm(\`确定删除人格「\${persona.name}」吗？\`)) return
+  if (!window.confirm(`确定删除人格「${persona.name}」吗？`)) return
   try {
-    await request<void>(\`/personas/\${persona.id}\`, 'DELETE')
+    await request<void>(`/personas/${persona.id}`, 'DELETE')
     await loadWorkspace()
     notify('人格已删除')
   } catch (error) {
@@ -359,7 +359,7 @@ async function saveProvider() {
   if (providerForm.value.api_key.trim()) payload.api_key = providerForm.value.api_key.trim()
   try {
     if (editingProviderId.value) {
-      await request<ModelProvider>(\`/model-providers/\${editingProviderId.value}\`, 'PATCH', payload)
+      await request<ModelProvider>(`/model-providers/${editingProviderId.value}`, 'PATCH', payload)
       notify('模型供应商已更新')
     } else {
       await request<ModelProvider>('/model-providers', 'POST', payload)
@@ -373,7 +373,7 @@ async function saveProvider() {
 }
 async function toggleProvider(provider: ModelProvider) {
   try {
-    await request<ModelProvider>(\`/model-providers/\${provider.id}\`, 'PATCH', { enabled: !provider.enabled })
+    await request<ModelProvider>(`/model-providers/${provider.id}`, 'PATCH', { enabled: !provider.enabled })
     await loadWorkspace()
     notify(provider.enabled ? '供应商已停用' : '供应商已启用')
   } catch (error) {
@@ -381,9 +381,9 @@ async function toggleProvider(provider: ModelProvider) {
   }
 }
 async function deleteProvider(provider: ModelProvider) {
-  if (!window.confirm(\`确定删除模型供应商「\${provider.name}」吗？\`)) return
+  if (!window.confirm(`确定删除模型供应商「${provider.name}」吗？`)) return
   try {
-    await request<void>(\`/model-providers/\${provider.id}\`, 'DELETE')
+    await request<void>(`/model-providers/${provider.id}`, 'DELETE')
     await loadWorkspace()
     notify('模型供应商已删除')
   } catch (error) {
@@ -415,9 +415,9 @@ function openKb(kb: KnowledgeBaseView) {
   page.value = 'knowledgeDetail'
 }
 async function deleteKb(kb: KnowledgeBaseView) {
-  if (!window.confirm(\`确定删除知识库「\${kb.name}」吗？关联关系也会一并移除。\`)) return
+  if (!window.confirm(`确定删除知识库「${kb.name}」吗？关联关系也会一并移除。`)) return
   try {
-    await request<void>(\`/knowledge-bases/\${kb.id}\`, 'DELETE')
+    await request<void>(`/knowledge-bases/${kb.id}`, 'DELETE')
     await loadWorkspace()
     page.value = 'knowledge'
     notify('知识库已删除')
@@ -433,14 +433,14 @@ const keyModal = ref(false)
 const secretModal = ref(false)
 const newKeyName = ref('我的应用')
 const newApiKeySecret = ref('')
-const baseUrl = \`\${API_BASE_URL}/v1\`
-const example = \`curl \${baseUrl}/chat/completions \\
+const baseUrl = `${API_BASE_URL}/v1`
+const example = `curl ${baseUrl}/chat/completions \\
   -H "Authorization: Bearer YOUR_USER_API_KEY" \\
   -H "Content-Type: application/json" \\
   -d '{
     "model": "customer-support",
     "messages": [{"role": "user", "content": "你好"}]
-  }'\`
+  }'`
 async function createApiKey() {
   if (!newKeyName.value.trim()) return notify('请填写密钥名称')
   try {
@@ -454,9 +454,9 @@ async function createApiKey() {
   }
 }
 async function rotateKey(key: ApiKey) {
-  if (!window.confirm(\`轮换「\${key.name}」后，旧密钥将立即失效。确定继续吗？\`)) return
+  if (!window.confirm(`轮换「${key.name}」后，旧密钥将立即失效。确定继续吗？`)) return
   try {
-    const result = await request<ApiKeyCreated>(\`/api-keys/\${key.id}/rotate\`, 'POST')
+    const result = await request<ApiKeyCreated>(`/api-keys/${key.id}/rotate`, 'POST')
     newApiKeySecret.value = result.secret
     secretModal.value = true
     await loadWorkspace()
@@ -465,9 +465,9 @@ async function rotateKey(key: ApiKey) {
   }
 }
 async function revokeKey(key: ApiKey) {
-  if (!window.confirm(\`确定撤销 API Key「\${key.name}」吗？\`)) return
+  if (!window.confirm(`确定撤销 API Key「${key.name}」吗？`)) return
   try {
-    await request<void>(\`/api-keys/\${key.id}\`, 'DELETE')
+    await request<void>(`/api-keys/${key.id}`, 'DELETE')
     await loadWorkspace()
     notify('API Key 已撤销')
   } catch (error) {
