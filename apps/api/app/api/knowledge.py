@@ -394,6 +394,11 @@ def delete_knowledge_document(
         raise HTTPException(status_code=404, detail={"code": "document_not_found", "message": "文档不存在"})
     if document.status == "deleted":
         return {"status": "deleted"}
+    db.query(KnowledgeIngestionJob).filter(
+        KnowledgeIngestionJob.tenant_id == principal.tenant.id,
+        KnowledgeIngestionJob.document_id == document.id,
+        KnowledgeIngestionJob.status.in_(("queued", "retry_wait")),
+    ).update({"status": "cancelled"}, synchronize_session=False)
     document.status = "deleting"
     _enqueue_job(
         db,
