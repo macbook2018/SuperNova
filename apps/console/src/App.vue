@@ -719,6 +719,22 @@ async function deleteKnowledgeDocument(item: KnowledgeDocument) {
     notify(error instanceof Error ? error.message : '删除文档失败')
   }
 }
+async function reindexAllKnowledgeBase() {
+  if (!selectedId.value || !window.confirm('将对当前知识库所有可用文档重新解析并建立索引，是否继续？')) return
+  knowledgeBusy.value = true
+  try {
+    const result = await request<{ queued_documents: number }>(
+      `/knowledge-bases/${selectedId.value}/reindex`,
+      'POST',
+    )
+    await loadKnowledgeDetail()
+    notify(`已提交 ${result.queued_documents} 份文档的重建索引任务`)
+  } catch (error) {
+    notify(error instanceof Error ? error.message : '批量重建索引失败')
+  } finally {
+    knowledgeBusy.value = false
+  }
+}
 async function searchKnowledge() {
   if (!selectedId.value || !knowledgeSearchQuery.value.trim()) return
   knowledgeSearchBusy.value = true
@@ -892,7 +908,7 @@ async function revokeKey(key: ApiKey) {
      <div><small>活动切片</small><b>{{knowledgeUsage?.active_chunks.toLocaleString() ?? '—'}}</b></div>
     </section>
     <section class="panel">
-     <div class="panel-title"><div><b>文档管理</b><small>支持 PDF、DOCX、PPTX、XLSX、TXT、Markdown、CSV、HTML；单文件默认上限 25 MB。</small></div><div class="heading-actions"><button class="btn secondary small" @click="importKnowledgeUrl" :disabled="knowledgeBusy">导入网页 URL</button><button class="btn primary small" @click="upload" :disabled="knowledgeBusy"><Upload :size="14"/>上传文件</button><button class="btn secondary small" @click="loadKnowledgeDetail(true)" :disabled="knowledgeBusy"><Activity :size="14"/>刷新</button></div></div>
+     <div class="panel-title"><div><b>文档管理</b><small>支持 PDF、DOCX、PPTX、XLSX、TXT、Markdown、CSV、HTML；单文件默认上限 25 MB。</small></div><div class="heading-actions"><button class="btn secondary small" @click="importKnowledgeUrl" :disabled="knowledgeBusy">导入网页 URL</button><button class="btn primary small" @click="upload" :disabled="knowledgeBusy"><Upload :size="14"/>上传文件</button><button class="btn secondary small" @click="reindexAllKnowledgeBase" :disabled="knowledgeBusy">全部重建索引</button><button class="btn secondary small" @click="loadKnowledgeDetail(true)" :disabled="knowledgeBusy"><Activity :size="14"/>刷新</button></div></div>
      <div v-if="knowledgeBusy && !knowledgeDocuments.length" class="empty"><Activity :size="25"/><b>正在读取知识库</b></div>
      <div v-else-if="knowledgeDocuments.length" class="usage-list">
       <div v-for="item in knowledgeDocuments" :key="item.id" class="usage-row">
