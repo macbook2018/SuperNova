@@ -3,6 +3,7 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, HTTPException, Response, status
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from app.api.deps import CurrentPrincipal, DatabaseSession, Principal
 from app.core.security import hash_secret, new_api_key
@@ -38,7 +39,7 @@ def _created_response(record: ApiKey, secret: str) -> ApiKeyCreated:
     )
 
 
-def _owned_key(db: DatabaseSession, principal: Principal, key_id: UUID) -> ApiKey | None:
+def _owned_key(db: Session, principal: Principal, key_id: UUID) -> ApiKey | None:
     return db.scalar(
         select(ApiKey).where(
             ApiKey.id == key_id,
