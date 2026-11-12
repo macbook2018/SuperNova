@@ -177,6 +177,25 @@ def _process_ingest(db, job: KnowledgeIngestionJob, document: KnowledgeDocument,
     if len(batch.vectors) != len(chunks):
         raise ValueError("embedding_count_mismatch")
 
+    # Serialize the final index switch with delete requests. If deletion won the
+    # race while embeddings were being generated, discard this batch.
+    latest_document = db.scalar(
+        select(KnowledgeDocument)
+        .where(
+            KnowledgeDocument.id == document.id,
+            KnowledgeDocument.tenant_id == job.tenant_id,
+            KnowledgeDocument.knowledge_base_id == job.knowledge_base_id,
+        )
+        .with_for_update()
+    )
+    if latest_document is None or latest_document.status == "deleting":
+        job.status = "cancelled"
+        job.worker_id = None
+        job.lease_expires_at = None
+        db.commit()
+        return
+    document = latest_document
+
     db.query(KnowledgeChunk).filter(
         KnowledgeChunk.tenant_id == job.tenant_id,
         KnowledgeChunk.knowledge_base_id == job.knowledge_base_id,
