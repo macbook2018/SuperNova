@@ -26,5 +26,5 @@
 - 原始文件不进入数据库，文档删除可以独立执行对象存储清理。
 - 平台 Embedding 模型需要独立目录与凭据管理；BYOK Embedding 可复用现有加密 ModelProvider。
 - 中文词法召回使用 trigram/字符级策略，不依赖 PostgreSQL 默认英语词干分析。
-- pgvector 先以明确的 embedding dimension 和索引版本约束向量空间；模型变更必须重建，不允许混合维度。
+- pgvector 首发固定 1536 维并以索引版本约束向量空间；模型变更必须重建，不允许混合维度。
 - RAG 引用、文档页码和表格位置成为 API 契约，前端和下游渠道可以复用。
