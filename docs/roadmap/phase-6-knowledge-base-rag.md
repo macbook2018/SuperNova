@@ -47,7 +47,7 @@ Console / Client
        ▼
 FastAPI Control Plane
   ├─ Tenant-scoped Knowledge API
-  ├─ Document API + signed upload/download policy
+  ├─ Document API + private object download proxy
   ├─ Search API
   └─ OpenAI-compatible Gateway
        │
