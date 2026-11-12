@@ -22,6 +22,10 @@ import {
   type BillingShadowUsageSummary,
   type PlatformModel,
   type KnowledgeBase,
+  type KnowledgeDocument,
+  type KnowledgeSearchResponse,
+  type KnowledgeUsageSummary,
+  type PlatformEmbeddingModel,
   type ModelProvider,
   type Persona,
   type Tenant,
@@ -32,7 +36,7 @@ import {
 
 type Page = 'overview' | 'personas' | 'providers' | 'knowledge' | 'knowledgeDetail' | 'api' | 'billing' | 'usage' | 'settings'
 type PersonaView = Persona & { color: string }
-type KnowledgeBaseView = KnowledgeBase & { color: string; docs: never[] }
+type KnowledgeBaseView = KnowledgeBase & { color: string; docs: KnowledgeDocument[] }
 
 const page = ref<Page>('overview')
 const mobileOpen = ref(false)
@@ -63,7 +67,7 @@ const descriptions: Record<Page, string> = {
   personas: '创建和管理独立 AI 人格，为每个人格配置模型与行为方式。',
   providers: '集中管理模型供应商、兼容接口地址和加密保存的 API Key。',
   knowledge: '集中管理知识库资料空间，并关联到一个或多个 AI 人格。',
-  knowledgeDetail: '管理知识库基本信息及其关联人格。',
+  knowledgeDetail: '管理文档导入、索引状态、混合检索与 RAG 来源。',
   api: '使用一个用户级 API Key，通过 OpenAI 兼容接口调用多个独立人格。',
   billing: '查看当前订阅、实时额度预留、影子计价和账本记录；当前不会产生真实扣款。',
   usage: '查看真实模型调用次数、输入输出 Token、响应时间和未计量请求。',
@@ -96,12 +100,19 @@ const activeNav = computed(() => page.value === 'knowledgeDetail' ? 'knowledge' 
 const personas = ref<PersonaView[]>([])
 const providers = ref<ModelProvider[]>([])
 const platformModels = ref<PlatformModel[]>([])
+const embeddingModels = ref<PlatformEmbeddingModel[]>([])
 const billingPlans = ref<BillingPlan[]>([])
 const billingEntitlements = ref<BillingEntitlements | null>(null)
 const billingUsage = ref<BillingShadowUsageSummary | null>(null)
 const billingLedger = ref<BillingLedgerTransaction[]>([])
 const billingLoading = ref(false)
 const kbs = ref<KnowledgeBaseView[]>([])
+const knowledgeDocuments = ref<KnowledgeDocument[]>([])
+const knowledgeUsage = ref<KnowledgeUsageSummary | null>(null)
+const knowledgeBusy = ref(false)
+const knowledgeSearchQuery = ref('')
+const knowledgeSearchHits = ref<KnowledgeSearchResponse['hits']>([])
+const knowledgeSearchBusy = ref(false)
 const apiKeys = ref<ApiKey[]>([])
 const usageSummary = ref<UsageSummary | null>(null)
 const usageRecords = ref<UsageRecord[]>([])
@@ -110,7 +121,7 @@ const selectedId = ref('')
 const selectedKb = computed<KnowledgeBaseView>(() =>
   kbs.value.find(k => k.id === selectedId.value) ??
   kbs.value[0] ??
-  { id: '', name: '', description: '', documents_count: 0, created_at: '', updated_at: '', color: 'blue', docs: [] },
+  { id: '', name: '', description: '', embedding_source: 'platform', platform_embedding_model_id: null, embedding_provider_id: null, embedding_model_name: null, embedding_dimensions: 1536, chunk_size: 800, chunk_overlap: 120, retrieval_top_k: 5, retrieval_score_threshold: 0.15, enabled: true, documents_count: 0, created_at: '', updated_at: '', color: 'blue', docs: [] },
 )
 const linkedPersonas = computed(() =>
   personas.value.filter(persona => persona.knowledge_base_ids.includes(selectedKb.value.id)),
@@ -166,19 +177,40 @@ function formatMinorAmount(
 }
 
 async function loadWorkspace() {
-  const [personaData, providerData, platformData, knowledgeData, keyData] = await Promise.all([
+  const [personaData, providerData, platformData, embeddingData, knowledgeData, keyData] = await Promise.all([
     request<Persona[]>('/personas'),
     request<ModelProvider[]>('/model-providers'),
     request<PlatformModel[]>('/platform/models'),
+    request<PlatformEmbeddingModel[]>('/platform/embedding-models'),
     request<KnowledgeBase[]>('/knowledge-bases'),
     request<ApiKey[]>('/api-keys'),
   ])
   personas.value = personaData.map((persona, index) => ({ ...persona, color: colorFor(index) }))
   providers.value = providerData
   platformModels.value = platformData
+  embeddingModels.value = embeddingData
   kbs.value = knowledgeData.map((kb, index) => ({ ...kb, color: colorFor(index), docs: [] }))
   apiKeys.value = keyData
   if (!kbs.value.some(kb => kb.id === selectedId.value)) selectedId.value = kbs.value[0]?.id ?? ''
+}
+
+async function loadKnowledgeDetail(showError = false) {
+  if (!selectedId.value) return
+  knowledgeBusy.value = true
+  try {
+    const [documents, usage] = await Promise.all([
+      request<KnowledgeDocument[]>(`/knowledge-bases/${selectedId.value}/documents`),
+      request<KnowledgeUsageSummary>(`/knowledge-bases/${selectedId.value}/usage`),
+    ])
+    knowledgeDocuments.value = documents
+    knowledgeUsage.value = usage
+    const selected = kbs.value.find(kb => kb.id === selectedId.value)
+    if (selected) selected.documents_count = usage.document_count
+  } catch (error) {
+    if (showError) notify(error instanceof Error ? error.message : '读取知识库文档失败')
+  } finally {
+    knowledgeBusy.value = false
+  }
 }
 async function loadBilling(showError = false) {
   if (!authenticated.value) return
@@ -528,19 +560,55 @@ async function deleteProvider(provider: ModelProvider) {
 }
 
 const kbModal = ref(false)
-const kbForm = ref({ name: '', description: '' })
+const newKnowledgeBaseForm = () => ({
+  name: '',
+  description: '',
+  embedding_source: 'platform' as 'platform' | 'byok',
+  platform_embedding_model_id: embeddingModels.value[0]?.id ?? '',
+  embedding_provider_id: '',
+  embedding_model_name: '',
+  embedding_dimensions: 1536,
+  chunk_size: 800,
+  chunk_overlap: 120,
+  retrieval_top_k: 5,
+  retrieval_score_threshold: 0.15,
+  enabled: true,
+})
+const kbForm = ref(newKnowledgeBaseForm())
 async function createKb() {
   if (!kbForm.value.name.trim()) {
     notify('请填写知识库名称')
     return
   }
+  if (kbForm.value.embedding_source === 'platform' && !kbForm.value.platform_embedding_model_id) {
+    notify('平台尚未配置 Embedding 模型，请联系管理员，或选择 BYOK 模式')
+    return
+  }
+  if (kbForm.value.embedding_source === 'byok' &&
+      (!kbForm.value.embedding_provider_id || !kbForm.value.embedding_model_name.trim())) {
+    notify('BYOK 模式必须选择支持 Embedding 的供应商并填写模型名称')
+    return
+  }
+  const payload = {
+    ...kbForm.value,
+    name: kbForm.value.name.trim(),
+    description: kbForm.value.description.trim(),
+    platform_embedding_model_id: kbForm.value.embedding_source === 'platform'
+      ? kbForm.value.platform_embedding_model_id : null,
+    embedding_provider_id: kbForm.value.embedding_source === 'byok'
+      ? kbForm.value.embedding_provider_id : null,
+    embedding_model_name: kbForm.value.embedding_source === 'byok'
+      ? kbForm.value.embedding_model_name.trim() : null,
+  }
   try {
-    const created = await request<KnowledgeBase>('/knowledge-bases', 'POST', kbForm.value)
-    kbForm.value = { name: '', description: '' }
+    const created = await request<KnowledgeBase>('/knowledge-bases', 'POST', payload)
+    kbForm.value = newKnowledgeBaseForm()
     kbModal.value = false
     await loadWorkspace()
     selectedId.value = created.id
     page.value = 'knowledgeDetail'
+    knowledgeSearchHits.value = []
+    await loadKnowledgeDetail()
     notify('知识库创建成功')
   } catch (error) {
     notify(error instanceof Error ? error.message : '创建知识库失败')
@@ -549,20 +617,128 @@ async function createKb() {
 function openKb(kb: KnowledgeBaseView) {
   selectedId.value = kb.id
   page.value = 'knowledgeDetail'
+  knowledgeSearchHits.value = []
+  void loadKnowledgeDetail()
 }
 async function deleteKb(kb: KnowledgeBaseView) {
-  if (!window.confirm(`确定删除知识库「${kb.name}」吗？关联关系也会一并移除。`)) return
+  if (!window.confirm(`确定删除知识库「${kb.name}」吗？请先删除其中的全部文档。`)) return
   try {
     await request<void>(`/knowledge-bases/${kb.id}`, 'DELETE')
     await loadWorkspace()
     page.value = 'knowledge'
     notify('知识库已删除')
   } catch (error) {
-    notify(error instanceof Error ? error.message : '删除知识库失败')
+    notify(error instanceof Error ? error.message : '删除知识库失败；请先删除文档')
   }
 }
 function upload() {
-  notify('知识库文档上传、解析和向量化将在后续知识库阶段接入；当前已完成知识库元数据与人格关联')
+  if (!selectedId.value) return
+  const input = document.createElement('input')
+  input.type = 'file'
+  input.multiple = true
+  input.accept = '.pdf,.docx,.pptx,.xlsx,.txt,.md,.csv,.html,.htm'
+  input.onchange = async () => {
+    const files = Array.from(input.files ?? [])
+    if (!files.length) return
+    knowledgeBusy.value = true
+    let succeeded = 0
+    try {
+      for (const file of files) {
+        const form = new FormData()
+        form.append('file', file)
+        await apiRequest<KnowledgeDocument>(
+          `/knowledge-bases/${selectedId.value}/documents/upload`,
+          { method: 'POST', body: form },
+        )
+        succeeded += 1
+      }
+      await loadKnowledgeDetail()
+      await loadWorkspace()
+      notify(`已提交 ${succeeded} 份文档，后台正在解析和建立索引`)
+    } catch (error) {
+      await loadKnowledgeDetail()
+      notify(error instanceof Error ? error.message : '部分文档上传失败')
+    } finally {
+      knowledgeBusy.value = false
+    }
+  }
+  input.click()
+}
+async function importKnowledgeUrl() {
+  const url = window.prompt('输入需要导入的公开网页 URL（仅支持 HTTP/HTTPS）')
+  if (!url?.trim() || !selectedId.value) return
+  knowledgeBusy.value = true
+  try {
+    await request<KnowledgeDocument>(
+      `/knowledge-bases/${selectedId.value}/documents/import-url`,
+      'POST',
+      { url: url.trim() },
+    )
+    await loadKnowledgeDetail()
+    notify('网页已提交，后台正在抓取和建立索引')
+  } catch (error) {
+    notify(error instanceof Error ? error.message : '网页导入失败')
+  } finally {
+    knowledgeBusy.value = false
+  }
+}
+async function retryKnowledgeDocument(item: KnowledgeDocument) {
+  try {
+    await request<KnowledgeDocument>(
+      `/knowledge-bases/${selectedId.value}/documents/${item.id}/retry`,
+      'POST',
+    )
+    await loadKnowledgeDetail()
+    notify('已重新提交处理任务')
+  } catch (error) {
+    notify(error instanceof Error ? error.message : '重试失败')
+  }
+}
+async function reindexKnowledgeDocument(item: KnowledgeDocument) {
+  try {
+    await request<KnowledgeDocument>(
+      `/knowledge-bases/${selectedId.value}/documents/${item.id}/reindex`,
+      'POST',
+    )
+    await loadKnowledgeDetail()
+    notify('已提交重建索引任务')
+  } catch (error) {
+    notify(error instanceof Error ? error.message : '重建索引失败')
+  }
+}
+async function deleteKnowledgeDocument(item: KnowledgeDocument) {
+  if (!window.confirm(`确定删除文档「${item.original_filename}」吗？`)) return
+  try {
+    await request<void>(
+      `/knowledge-bases/${selectedId.value}/documents/${item.id}`,
+      'DELETE',
+    )
+    await loadKnowledgeDetail()
+    notify('文档已进入删除队列')
+  } catch (error) {
+    notify(error instanceof Error ? error.message : '删除文档失败')
+  }
+}
+async function searchKnowledge() {
+  if (!selectedId.value || !knowledgeSearchQuery.value.trim()) return
+  knowledgeSearchBusy.value = true
+  try {
+    const result = await request<KnowledgeSearchResponse>(
+      `/knowledge-bases/${selectedId.value}/search`,
+      'POST',
+      { query: knowledgeSearchQuery.value.trim() },
+    )
+    knowledgeSearchHits.value = result.hits
+  } catch (error) {
+    notify(error instanceof Error ? error.message : '知识库检索失败')
+  } finally {
+    knowledgeSearchBusy.value = false
+  }
+}
+function formatBytes(value: number): string {
+  if (value < 1024) return `${value} B`
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`
 }
 
 const keyModal = ref(false)
