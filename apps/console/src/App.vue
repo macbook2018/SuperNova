@@ -1,55 +1,495 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import { Activity, AlertCircle, ArrowRight, ArrowUpRight, Bell, Bot, Check, CheckCircle2, ChevronDown, ChevronRight, CircleHelp, Clock3, Copy, Cpu, Database, Download, Eye, EyeOff, FileText, Filter, Gauge, KeyRound, LayoutDashboard, LifeBuoy, LogOut, Menu, MoreHorizontal, Pencil, Plus, Search, Settings2, ShieldCheck, Sparkles, Trash2, Upload, Wallet, X, Zap } from 'lucide-vue-next'
+import { computed, onMounted, ref } from 'vue'
+import {
+  Activity, AlertCircle, ArrowRight, ArrowUpRight, Bell, Bot, Check, CheckCircle2,
+  ChevronDown, ChevronRight, CircleHelp, Clock3, Copy, Cpu, Database, Download,
+  Eye, EyeOff, FileText, Filter, Gauge, KeyRound, LayoutDashboard, LifeBuoy,
+  LogOut, Mail, Menu, MessageSquare, MoreHorizontal, Pencil, Plus, Search, Server,
+  Settings2, ShieldCheck, Sparkles, Trash2, Upload, UserRound, Wallet, X, Zap,
+} from 'lucide-vue-next'
+import {
+  API_BASE_URL,
+  apiRequest,
+  clearStoredSession,
+  getStoredSession,
+  storeSession,
+  type ApiKey,
+  type ApiKeyCreated,
+  type AuthResponse,
+  type KnowledgeBase,
+  type ModelProvider,
+  type Persona,
+  type Tenant,
+  type User,
+} from './lib/api'
 
-type Page = 'overview' | 'personas' | 'knowledge' | 'knowledgeDetail' | 'api' | 'usage' | 'settings'
-type Persona = { id: number; name: string; slug: string; description: string; model: string; prompt: string; enabled: boolean; color: string }
-type Doc = { name: string; size: string; kind: string; status: string }
-type KB = { id: number; name: string; description: string; color: string; docs: Doc[] }
-const page = ref<Page>('overview'), mobileOpen = ref(false), query = ref(''), toast = ref('')
+type Page = 'overview' | 'personas' | 'providers' | 'knowledge' | 'knowledgeDetail' | 'api' | 'usage' | 'settings'
+type PersonaView = Persona & { color: string }
+type KnowledgeBaseView = KnowledgeBase & { color: string; docs: never[] }
+
+const page = ref<Page>('overview')
+const mobileOpen = ref(false)
+const query = ref('')
+const toast = ref('')
 let toastTimer: number | undefined
-const titles: Record<Page,string> = { overview:'工作台总览', personas:'人格管理', knowledge:'知识库', knowledgeDetail:'知识库详情', api:'API 接口', usage:'用量与账单', settings:'账户设置' }
-const descriptions: Record<Page,string> = { overview:'查看机器人运行状态、Token 用量和账户资源。', personas:'创建和管理独立 AI 人格，为每个人格配置模型与行为方式。', knowledge:'集中管理文档资料，为不同人格配置专属知识。', knowledgeDetail:'管理文档、索引状态，以及知识库与人格之间的关联。', api:'使用一个用户级 API Key，调用你创建的任意人格。', usage:'追踪 Token 消耗、调用记录和账户额度。', settings:'管理账户资料、安全设置和通知偏好。' }
-const nav = [{label:'工作空间',items:[{key:'overview' as Page,label:'工作台总览',icon:LayoutDashboard},{key:'personas' as Page,label:'人格管理',icon:Bot},{key:'knowledge' as Page,label:'知识库',icon:Database}]},{label:'开发者',items:[{key:'api' as Page,label:'API 接口',icon:KeyRound},{key:'usage' as Page,label:'用量与账单',icon:Activity}]}]
+const authenticated = ref(false)
+const currentUser = ref<User | null>(null)
+const currentTenant = ref<Tenant | null>(null)
+const authMode = ref<'login' | 'register'>('login')
+const authBusy = ref(false)
+const authError = ref('')
+const authForm = ref({ email: '', password: '', display_name: '', workspace_name: '' })
+
+const titles: Record<Page, string> = {
+  overview: '工作台总览',
+  personas: '人格管理',
+  providers: '模型供应商',
+  knowledge: '知识库',
+  knowledgeDetail: '知识库详情',
+  api: 'API 接口',
+  usage: '用量与账单',
+  settings: '账户设置',
+}
+const descriptions: Record<Page, string> = {
+  overview: '查看工作空间中的人格、模型供应商和资源状态。',
+  personas: '创建和管理独立 AI 人格，为每个人格配置模型与行为方式。',
+  providers: '集中管理模型供应商、兼容接口地址和加密保存的 API Key。',
+  knowledge: '集中管理知识库资料空间，并关联到一个或多个 AI 人格。',
+  knowledgeDetail: '管理知识库基本信息及其关联人格。',
+  api: '管理用户级 API Key；统一对话网关将在下一阶段开放。',
+  usage: 'Token 计量和账单将在统一 API 网关阶段接入。',
+  settings: '查看账户资料与安全设置。',
+}
+const nav = [
+  {
+    label: '工作空间',
+    items: [
+      { key: 'overview' as Page, label: '工作台总览', icon: LayoutDashboard },
+      { key: 'personas' as Page, label: '人格管理', icon: Bot },
+      { key: 'knowledge' as Page, label: '知识库', icon: Database },
+    ],
+  },
+  {
+    label: '模型配置',
+    items: [{ key: 'providers' as Page, label: '模型供应商', icon: Server }],
+  },
+  {
+    label: '开发者',
+    items: [
+      { key: 'api' as Page, label: 'API 接口', icon: KeyRound },
+      { key: 'usage' as Page, label: '用量与账单', icon: Activity },
+    ],
+  },
+]
 const activeNav = computed(() => page.value === 'knowledgeDetail' ? 'knowledge' : page.value)
-const personas = ref<Persona[]>([
- {id:1,name:'智能客服',slug:'customer-support',description:'面向客户咨询，提供产品解答与售后支持。',model:'deepseek-chat',prompt:'你是一名专业、耐心的在线客服。回答简洁、准确，优先依据知识库内容。',enabled:true,color:'blue'},
- {id:2,name:'品牌顾问',slug:'brand-advisor',description:'熟悉品牌定位、产品特点与营销表达。',model:'gpt-4o-mini',prompt:'你是一名品牌顾问，善于提炼产品价值并保持统一的品牌语气。',enabled:true,color:'purple'},
- {id:3,name:'社群助手',slug:'community-helper',description:'在群聊中自然互动，回答常见问题。',model:'qwen-plus',prompt:'你是一名友好的社群助手，表达自然，避免刷屏。',enabled:false,color:'green'}
-])
-const kbs = ref<KB[]>([
- {id:1,name:'产品资料库',description:'产品介绍、规格参数、价格政策与常见问题。',color:'blue',docs:[{name:'产品介绍与规格.pdf',size:'2.4 MB',kind:'PDF',status:'已完成'},{name:'售后服务政策.docx',size:'486 KB',kind:'DOCX',status:'已完成'},{name:'常见问题汇总.xlsx',size:'128 KB',kind:'XLSX',status:'已完成'}]},
- {id:2,name:'品牌知识库',description:'品牌故事、品牌规范、宣传素材和语气指南。',color:'purple',docs:[{name:'品牌手册.pdf',size:'5.1 MB',kind:'PDF',status:'已完成'},{name:'品牌文案规范.docx',size:'320 KB',kind:'DOCX',status:'已完成'}]},
- {id:3,name:'内部运营资料',description:'团队流程、内部制度与运营操作手册。',color:'green',docs:[{name:'运营流程手册.pdf',size:'1.8 MB',kind:'PDF',status:'索引中'}]}
-])
-const selectedId = ref(1)
-const selectedKb = computed(() => kbs.value.find(k => k.id === selectedId.value) ?? kbs.value[0])
-const totalDocs = computed(() => kbs.value.reduce((n,k) => n + k.docs.length,0))
-const filteredPersonas = computed(() => { const q=query.value.trim().toLowerCase(); return q ? personas.value.filter(p => [p.name,p.slug,p.description].some(s=>s.toLowerCase().includes(q))) : personas.value })
-function go(p:Page){page.value=p;mobileOpen.value=false;query.value=''}
-function notify(s:string){toast.value=s;if(toastTimer)window.clearTimeout(toastTimer);toastTimer=window.setTimeout(()=>toast.value='',2400)}
-async function copy(s:string,msg='已复制到剪贴板'){try{await navigator.clipboard.writeText(s);notify(msg)}catch{notify('复制失败，请手动选择文本')}}
-const personaModal=ref(false), editingId=ref<number|null>(null)
-const personaForm=ref({name:'',slug:'',description:'',model:'deepseek-chat',prompt:'',enabled:true})
-function editPersona(p?:Persona){editingId.value=p?.id??null;personaForm.value=p?{name:p.name,slug:p.slug,description:p.description,model:p.model,prompt:p.prompt,enabled:p.enabled}:{name:'',slug:'',description:'',model:'deepseek-chat',prompt:'',enabled:true};personaModal.value=true}
-function savePersona(){if(!personaForm.value.name.trim()||!personaForm.value.slug.trim())return notify('请填写人格名称和调用标识');if(editingId.value){const p=personas.value.find(x=>x.id===editingId.value);if(p)Object.assign(p,personaForm.value);notify('人格配置已更新')}else{personas.value.unshift({id:Date.now(),...personaForm.value,color:['blue','purple','green'][personas.value.length%3]});notify('人格创建成功')}personaModal.value=false}
-function togglePersona(p:Persona){p.enabled=!p.enabled;notify(p.enabled?'人格已启用':'人格已停用')}
-function deletePersona(p:Persona){if(!window.confirm('确定删除人格「'+p.name+'」吗？'))return;personas.value=personas.value.filter(x=>x.id!==p.id);notify('人格已删除')}
-const kbModal=ref(false), kbForm=ref({name:'',description:''})
-function createKb(){if(!kbForm.value.name.trim())return notify('请填写知识库名称');const id=Date.now();kbs.value.unshift({id,name:kbForm.value.name,description:kbForm.value.description,color:'blue',docs:[]});selectedId.value=id;kbForm.value={name:'',description:''};kbModal.value=false;page.value='knowledgeDetail';notify('知识库创建成功')}
-function openKb(k:KB){selectedId.value=k.id;page.value='knowledgeDetail'}
-const fileInput=ref<HTMLInputElement|null>(null)
-function upload(){fileInput.value?.click()}
-function fileSelected(e:Event){const el=e.target as HTMLInputElement;const f=el.files?.[0];if(!f)return;selectedKb.value.docs.unshift({name:f.name,size:f.size>1048576?(f.size/1048576).toFixed(1)+' MB':Math.max(1,Math.round(f.size/1024))+' KB',kind:f.name.split('.').pop()?.toUpperCase()||'FILE',status:'等待处理'});el.value='';notify('文件已加入上传队列（原型演示）')}
-function deleteDoc(d:Doc){if(!window.confirm('确定移除此文件吗？'))return;selectedKb.value.docs=selectedKb.value.docs.filter(x=>x!==d);notify('文件已移除')}
-const apiKey=ref('sn_live_demo_7f3c9a2b8d1e4f6a'),keyVisible=ref(false)
-const keyDisplay=computed(()=>keyVisible.value?apiKey.value:'sn_live_••••••••••••••••••••••')
-const baseUrl='http://localhost:8001/v1'
-const example='curl '+baseUrl+'/chat/completions \\\n  -H "Authorization: Bearer YOUR_USER_API_KEY" \\\n  -H "Content-Type: application/json" \\\n  -d \'{\\n    "model": "customer-support",\\n    "messages": [{"role": "user", "content": "你好"}]\\n  }\''
-function rotateKey(){if(!window.confirm('轮换后旧密钥将立即失效。确定继续吗？'))return;apiKey.value='sn_live_'+Math.random().toString(36).slice(2,10)+Math.random().toString(36).slice(2,10);keyVisible.value=true;notify('演示密钥已轮换；正式密钥需由后端生成')}
-const period=ref('日')
-const labels=computed(()=>period.value==='日'?['08','09','10','11','12','13','14','15','16','17','18','19']:period.value==='周'?['周一','周二','周三','周四','周五','周六','周日']:['06 月','07 月','08 月','09 月','10 月','11 月'])
-const bars=computed(()=>period.value==='日'?[28,42,36,58,47,72,54,66,48,83,62,76]:period.value==='周'?[36,52,44,68,57,83,72]:[42,56,48,74,62,86])
+
+const personas = ref<PersonaView[]>([])
+const providers = ref<ModelProvider[]>([])
+const kbs = ref<KnowledgeBaseView[]>([])
+const apiKeys = ref<ApiKey[]>([])
+const selectedId = ref('')
+const selectedKb = computed<KnowledgeBaseView>(() =>
+  kbs.value.find(k => k.id === selectedId.value) ??
+  kbs.value[0] ??
+  { id: '', name: '', description: '', documents_count: 0, created_at: '', updated_at: '', color: 'blue', docs: [] },
+)
+const linkedPersonas = computed(() =>
+  personas.value.filter(persona => persona.knowledge_base_ids.includes(selectedKb.value.id)),
+)
+const totalDocs = computed(() => kbs.value.reduce((count, kb) => count + kb.documents_count, 0))
+const filteredPersonas = computed(() => {
+  const term = query.value.trim().toLowerCase()
+  return term
+    ? personas.value.filter(persona =>
+        [persona.name, persona.slug, persona.description].some(value => value.toLowerCase().includes(term)),
+      )
+    : personas.value
+})
+const personaRatio = computed(() =>
+  personas.value.length ? personas.value.filter(persona => persona.enabled).length / personas.value.length * 100 : 0,
+)
+
+function notify(message: string) {
+  toast.value = message
+  if (toastTimer) window.clearTimeout(toastTimer)
+  toastTimer = window.setTimeout(() => { toast.value = '' }, 2600)
+}
+async function copy(value: string, message = '已复制到剪贴板') {
+  try {
+    await navigator.clipboard.writeText(value)
+    notify(message)
+  } catch {
+    notify('复制失败，请手动选择文本')
+  }
+}
+function request<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
+  const init: RequestInit = { method }
+  if (body !== undefined) init.body = JSON.stringify(body)
+  return apiRequest<T>(path, init)
+}
+function colorFor(index: number): string {
+  return ['blue', 'purple', 'green'][index % 3]
+}
+
+async function loadWorkspace() {
+  const [personaData, providerData, knowledgeData, keyData] = await Promise.all([
+    request<Persona[]>('/personas'),
+    request<ModelProvider[]>('/model-providers'),
+    request<KnowledgeBase[]>('/knowledge-bases'),
+    request<ApiKey[]>('/api-keys'),
+  ])
+  personas.value = personaData.map((persona, index) => ({ ...persona, color: colorFor(index) }))
+  providers.value = providerData
+  kbs.value = knowledgeData.map((kb, index) => ({ ...kb, color: colorFor(index), docs: [] }))
+  apiKeys.value = keyData
+  if (!kbs.value.some(kb => kb.id === selectedId.value)) selectedId.value = kbs.value[0]?.id ?? ''
+}
+async function loadIdentity() {
+  const identity = await request<{ user: User; tenant: Tenant }>('/auth/me')
+  currentUser.value = identity.user
+  currentTenant.value = identity.tenant
+  authenticated.value = true
+  await loadWorkspace()
+}
+onMounted(async () => {
+  if (!getStoredSession()) return
+  try {
+    await loadIdentity()
+  } catch (error) {
+    clearStoredSession()
+    authenticated.value = false
+    authError.value = error instanceof Error ? error.message : '登录状态已失效，请重新登录'
+  }
+})
+async function submitAuth() {
+  authBusy.value = true
+  authError.value = ''
+  try {
+    const path = authMode.value === 'login' ? '/auth/login' : '/auth/register'
+    const payload = authMode.value === 'login'
+      ? { email: authForm.value.email, password: authForm.value.password }
+      : {
+          email: authForm.value.email,
+          password: authForm.value.password,
+          display_name: authForm.value.display_name,
+          workspace_name: authForm.value.workspace_name || undefined,
+        }
+    const response = await request<AuthResponse>(path, 'POST', payload)
+    storeSession(response)
+    currentUser.value = response.user
+    currentTenant.value = response.tenant
+    authenticated.value = true
+    await loadWorkspace()
+    notify(authMode.value === 'login' ? '登录成功' : '账户创建成功')
+  } catch (error) {
+    authError.value = error instanceof Error ? error.message : '请求失败，请稍后重试'
+  } finally {
+    authBusy.value = false
+  }
+}
+async function logout() {
+  const session = getStoredSession()
+  try {
+    if (session?.refresh_token) {
+      await request('/auth/logout', 'POST', { refresh_token: session.refresh_token })
+    }
+  } catch {
+    // Local credentials are cleared even if the network logout fails.
+  }
+  clearStoredSession()
+  authenticated.value = false
+  currentUser.value = null
+  currentTenant.value = null
+  personas.value = []
+  providers.value = []
+  kbs.value = []
+  apiKeys.value = []
+  page.value = 'overview'
+  notify('已退出登录')
+}
+function go(next: Page) {
+  page.value = next
+  mobileOpen.value = false
+  query.value = ''
+}
+
+const personaModal = ref(false)
+const editingId = ref<string | null>(null)
+const personaForm = ref({
+  name: '',
+  slug: '',
+  description: '',
+  system_prompt: '',
+  provider_id: '',
+  model_name: '',
+  temperature: 0.7,
+  top_p: 1,
+  max_tokens: 2048,
+  knowledge_base_ids: [] as string[],
+  enabled: true,
+})
+function editPersona(persona?: PersonaView) {
+  editingId.value = persona?.id ?? null
+  personaForm.value = persona
+    ? {
+        name: persona.name,
+        slug: persona.slug,
+        description: persona.description,
+        system_prompt: persona.system_prompt,
+        provider_id: persona.provider_id ?? '',
+        model_name: persona.model_name,
+        temperature: persona.temperature,
+        top_p: persona.top_p,
+        max_tokens: persona.max_tokens,
+        knowledge_base_ids: [...persona.knowledge_base_ids],
+        enabled: persona.enabled,
+      }
+    : {
+        name: '',
+        slug: '',
+        description: '',
+        system_prompt: '',
+        provider_id: providers.value[0]?.id ?? '',
+        model_name: '',
+        temperature: 0.7,
+        top_p: 1,
+        max_tokens: 2048,
+        knowledge_base_ids: [],
+        enabled: true,
+      }
+  personaModal.value = true
+}
+async function savePersona() {
+  if (!personaForm.value.name.trim() || !personaForm.value.slug.trim() ||
+      !personaForm.value.system_prompt.trim() || !personaForm.value.model_name.trim()) {
+    notify('请填写人格名称、调用标识、模型名称和系统提示词')
+    return
+  }
+  const payload = {
+    ...personaForm.value,
+    provider_id: personaForm.value.provider_id || null,
+  }
+  try {
+    if (editingId.value) {
+      await request<Persona>(\`/personas/\${editingId.value}\`, 'PATCH', payload)
+      notify('人格配置已保存')
+    } else {
+      await request<Persona>('/personas', 'POST', payload)
+      notify('人格创建成功')
+    }
+    personaModal.value = false
+    await loadWorkspace()
+  } catch (error) {
+    notify(error instanceof Error ? error.message : '保存人格失败')
+  }
+}
+async function togglePersona(persona: PersonaView) {
+  try {
+    await request<Persona>(\`/personas/\${persona.id}\`, 'PATCH', { enabled: !persona.enabled })
+    await loadWorkspace()
+    notify(persona.enabled ? '人格已停用' : '人格已启用')
+  } catch (error) {
+    notify(error instanceof Error ? error.message : '更新人格状态失败')
+  }
+}
+async function deletePersona(persona: PersonaView) {
+  if (!window.confirm(\`确定删除人格「\${persona.name}」吗？\`)) return
+  try {
+    await request<void>(\`/personas/\${persona.id}\`, 'DELETE')
+    await loadWorkspace()
+    notify('人格已删除')
+  } catch (error) {
+    notify(error instanceof Error ? error.message : '删除人格失败')
+  }
+}
+
+const providerModal = ref(false)
+const editingProviderId = ref<string | null>(null)
+const providerForm = ref({
+  name: '',
+  provider_type: 'deepseek' as ModelProvider['provider_type'],
+  base_url: 'https://api.deepseek.com',
+  api_key: '',
+  enabled: true,
+})
+function providerPresetChanged() {
+  const presets: Record<ModelProvider['provider_type'], string> = {
+    deepseek: 'https://api.deepseek.com',
+    openai: 'https://api.openai.com/v1',
+    qwen: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    anthropic: 'https://api.anthropic.com/v1',
+    openai_compatible: '',
+  }
+  providerForm.value.base_url = presets[providerForm.value.provider_type]
+}
+function editProvider(provider?: ModelProvider) {
+  editingProviderId.value = provider?.id ?? null
+  providerForm.value = provider
+    ? {
+        name: provider.name,
+        provider_type: provider.provider_type,
+        base_url: provider.base_url,
+        api_key: '',
+        enabled: provider.enabled,
+      }
+    : {
+        name: '',
+        provider_type: 'deepseek',
+        base_url: 'https://api.deepseek.com',
+        api_key: '',
+        enabled: true,
+      }
+  providerModal.value = true
+}
+async function saveProvider() {
+  if (!providerForm.value.name.trim() || !providerForm.value.base_url.trim()) {
+    notify('请填写供应商名称和 Base URL')
+    return
+  }
+  if (!editingProviderId.value && !providerForm.value.api_key.trim()) {
+    notify('新建供应商时必须填写 API Key')
+    return
+  }
+  const payload: Record<string, unknown> = {
+    name: providerForm.value.name,
+    provider_type: providerForm.value.provider_type,
+    base_url: providerForm.value.base_url,
+    enabled: providerForm.value.enabled,
+  }
+  if (providerForm.value.api_key.trim()) payload.api_key = providerForm.value.api_key.trim()
+  try {
+    if (editingProviderId.value) {
+      await request<ModelProvider>(\`/model-providers/\${editingProviderId.value}\`, 'PATCH', payload)
+      notify('模型供应商已更新')
+    } else {
+      await request<ModelProvider>('/model-providers', 'POST', payload)
+      notify('模型供应商创建成功')
+    }
+    providerModal.value = false
+    await loadWorkspace()
+  } catch (error) {
+    notify(error instanceof Error ? error.message : '保存模型供应商失败')
+  }
+}
+async function toggleProvider(provider: ModelProvider) {
+  try {
+    await request<ModelProvider>(\`/model-providers/\${provider.id}\`, 'PATCH', { enabled: !provider.enabled })
+    await loadWorkspace()
+    notify(provider.enabled ? '供应商已停用' : '供应商已启用')
+  } catch (error) {
+    notify(error instanceof Error ? error.message : '更新供应商状态失败')
+  }
+}
+async function deleteProvider(provider: ModelProvider) {
+  if (!window.confirm(\`确定删除模型供应商「\${provider.name}」吗？\`)) return
+  try {
+    await request<void>(\`/model-providers/\${provider.id}\`, 'DELETE')
+    await loadWorkspace()
+    notify('模型供应商已删除')
+  } catch (error) {
+    notify(error instanceof Error ? error.message : '删除失败；请检查是否仍有人格正在使用')
+  }
+}
+
+const kbModal = ref(false)
+const kbForm = ref({ name: '', description: '' })
+async function createKb() {
+  if (!kbForm.value.name.trim()) {
+    notify('请填写知识库名称')
+    return
+  }
+  try {
+    const created = await request<KnowledgeBase>('/knowledge-bases', 'POST', kbForm.value)
+    kbForm.value = { name: '', description: '' }
+    kbModal.value = false
+    await loadWorkspace()
+    selectedId.value = created.id
+    page.value = 'knowledgeDetail'
+    notify('知识库创建成功')
+  } catch (error) {
+    notify(error instanceof Error ? error.message : '创建知识库失败')
+  }
+}
+function openKb(kb: KnowledgeBaseView) {
+  selectedId.value = kb.id
+  page.value = 'knowledgeDetail'
+}
+async function deleteKb(kb: KnowledgeBaseView) {
+  if (!window.confirm(\`确定删除知识库「\${kb.name}」吗？关联关系也会一并移除。\`)) return
+  try {
+    await request<void>(\`/knowledge-bases/\${kb.id}\`, 'DELETE')
+    await loadWorkspace()
+    page.value = 'knowledge'
+    notify('知识库已删除')
+  } catch (error) {
+    notify(error instanceof Error ? error.message : '删除知识库失败')
+  }
+}
+function upload() {
+  notify('知识库文档上传、解析和向量化将在后续知识库阶段接入；当前已完成知识库元数据与人格关联')
+}
+
+const keyModal = ref(false)
+const secretModal = ref(false)
+const newKeyName = ref('我的应用')
+const newApiKeySecret = ref('')
+const baseUrl = \`\${API_BASE_URL}/v1\`
+const example = \`curl \${baseUrl}/chat/completions \\
+  -H "Authorization: Bearer YOUR_USER_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model": "customer-support",
+    "messages": [{"role": "user", "content": "你好"}]
+  }'\`
+async function createApiKey() {
+  if (!newKeyName.value.trim()) return notify('请填写密钥名称')
+  try {
+    const result = await request<ApiKeyCreated>('/api-keys', 'POST', { name: newKeyName.value.trim() })
+    newApiKeySecret.value = result.secret
+    keyModal.value = false
+    secretModal.value = true
+    await loadWorkspace()
+  } catch (error) {
+    notify(error instanceof Error ? error.message : '创建 API Key 失败')
+  }
+}
+async function rotateKey(key: ApiKey) {
+  if (!window.confirm(\`轮换「\${key.name}」后，旧密钥将立即失效。确定继续吗？\`)) return
+  try {
+    const result = await request<ApiKeyCreated>(\`/api-keys/\${key.id}/rotate\`, 'POST')
+    newApiKeySecret.value = result.secret
+    secretModal.value = true
+    await loadWorkspace()
+  } catch (error) {
+    notify(error instanceof Error ? error.message : '轮换 API Key 失败')
+  }
+}
+async function revokeKey(key: ApiKey) {
+  if (!window.confirm(\`确定撤销 API Key「\${key.name}」吗？\`)) return
+  try {
+    await request<void>(\`/api-keys/\${key.id}\`, 'DELETE')
+    await loadWorkspace()
+    notify('API Key 已撤销')
+  } catch (error) {
+    notify(error instanceof Error ? error.message : '撤销 API Key 失败')
+  }
+}
+
+const period = ref('日')
+const labels = computed(() =>
+  period.value === '日'
+    ? ['08', '09', '10', '11', '12', '13', '14', '15', '16', '17', '18', '19']
+    : period.value === '周'
+      ? ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
+      : ['06 月', '07 月', '08 月', '09 月', '10 月', '11 月'],
+)
+const bars = computed(() =>
+  period.value === '日'
+    ? [28, 42, 36, 58, 47, 72, 54, 66, 48, 83, 62, 76]
+    : period.value === '周'
+      ? [36, 52, 44, 68, 57, 83, 72]
+      : [42, 56, 48, 74, 62, 86],
+)
 </script>
 
 <template>
