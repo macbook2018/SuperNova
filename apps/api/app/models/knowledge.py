@@ -29,12 +29,12 @@ from app.db.base import Base
 event.listen(
     Base.metadata,
     "before_create",
-    DDL("CREATE EXTENSION IF NOT EXISTS vector").execute_if(dialect="postgresql"),
+    DDL("CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public").execute_if(dialect="postgresql"),
 )
 event.listen(
     Base.metadata,
     "before_create",
-    DDL("CREATE EXTENSION IF NOT EXISTS pg_trgm").execute_if(dialect="postgresql"),
+    DDL("CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA public").execute_if(dialect="postgresql"),
 )
 
 
