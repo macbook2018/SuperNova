@@ -52,6 +52,33 @@ class KnowledgeBase(Base):
     __table_args__ = (
         UniqueConstraint("tenant_id", "name", name="uq_knowledge_bases_tenant_name"),
         UniqueConstraint("tenant_id", "id", name="uq_knowledge_bases_tenant_id"),
+        ForeignKeyConstraint(
+            ["tenant_id", "embedding_provider_id"],
+            ["model_providers.tenant_id", "model_providers.id"],
+            name="fk_knowledge_bases_embedding_provider_same_tenant",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "embedding_source IN ('platform', 'byok')",
+            name="ck_knowledge_bases_embedding_source",
+        ),
+        CheckConstraint(
+            "(embedding_source = 'platform' AND embedding_provider_id IS NULL) "
+            "OR (embedding_source = 'byok' AND platform_embedding_model_id IS NULL)",
+            name="ck_knowledge_bases_embedding_source_reference",
+        ),
+        CheckConstraint(
+            "embedding_dimensions = 1536",
+            name="ck_knowledge_bases_embedding_dimensions",
+        ),
+        CheckConstraint(
+            "chunk_size BETWEEN 100 AND 4000 AND chunk_overlap >= 0 AND chunk_overlap < chunk_size",
+            name="ck_knowledge_bases_chunk_settings",
+        ),
+        CheckConstraint(
+            "retrieval_top_k BETWEEN 1 AND 20",
+            name="ck_knowledge_bases_retrieval_top_k",
+        ),
         Index("ix_knowledge_bases_tenant_created", "tenant_id", "created_at"),
     )
 
@@ -61,6 +88,21 @@ class KnowledgeBase(Base):
     )
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     description: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    embedding_source: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="platform", server_default="platform"
+    )
+    platform_embedding_model_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("platform_embedding_models.id", ondelete="RESTRICT"),
+    )
+    embedding_provider_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    embedding_model_name: Mapped[str | None] = mapped_column(String(120))
+    embedding_dimensions: Mapped[int] = mapped_column(Integer, nullable=False, default=1536, server_default="1536")
+    chunk_size: Mapped[int] = mapped_column(Integer, nullable=False, default=800, server_default="800")
+    chunk_overlap: Mapped[int] = mapped_column(Integer, nullable=False, default=120, server_default="120")
+    retrieval_top_k: Mapped[int] = mapped_column(Integer, nullable=False, default=5, server_default="5")
+    retrieval_score_threshold: Mapped[float] = mapped_column(Float, nullable=False, default=0.15, server_default="0.15")
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
