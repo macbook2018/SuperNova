@@ -268,6 +268,7 @@ def test_register_does_not_misreport_other_integrity_errors(
     monkeypatch.setattr(Session, "commit", fail_commit)
     response = client.post(
         "/auth/register",
+        headers={"Origin": "http://localhost:5173"},
         json={
             "email": "new-user@example.com",
             "password": "correct-horse-battery",
@@ -278,3 +279,4 @@ def test_register_does_not_misreport_other_integrity_errors(
     assert response.status_code == 500
     assert response.json()["error"]["code"] == "internal_error"
     assert response.json()["error"]["request_id"]
+    assert response.headers["access-control-allow-origin"] == "http://localhost:5173"
