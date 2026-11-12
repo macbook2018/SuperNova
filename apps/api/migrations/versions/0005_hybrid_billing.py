@@ -28,7 +28,10 @@ def upgrade() -> None:
         sa.Column("currency", sa.String(3), nullable=False),
         sa.Column("subscription_price_minor", sa.BigInteger(), nullable=False),
         sa.Column("status", sa.String(16), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), nullable=False,
+            server_default=sa.func.now(),
+        ),
         sa.UniqueConstraint("code", "revision", name="uq_billing_plan_code_revision"),
         sa.CheckConstraint("subscription_price_minor >= 0", name="ck_billing_plan_price"),
         sa.CheckConstraint(
@@ -61,7 +64,10 @@ def upgrade() -> None:
         sa.Column("currency", sa.String(3), nullable=False, server_default="CNY"),
         sa.Column("overage_enabled", sa.Boolean(), nullable=False, server_default=sa.text("false")),
         sa.Column("overage_budget_minor", sa.BigInteger(), nullable=False, server_default="0"),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), nullable=False,
+            server_default=sa.func.now(),
+        ),
         sa.ForeignKeyConstraint(["tenant_id"], ["tenants.id"], ondelete="CASCADE"),
         sa.CheckConstraint("overage_budget_minor >= 0", name="ck_tenant_billing_budget"),
     )
@@ -76,7 +82,10 @@ def upgrade() -> None:
         sa.Column(
             "cancel_at_period_end", sa.Boolean(), nullable=False, server_default=sa.text("false")
         ),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), nullable=False,
+            server_default=sa.func.now(),
+        ),
         sa.ForeignKeyConstraint(["tenant_id"], ["tenants.id"], ondelete="RESTRICT"),
         sa.ForeignKeyConstraint(["plan_id"], ["billing_plans.id"], ondelete="RESTRICT"),
     )
@@ -99,7 +108,10 @@ def upgrade() -> None:
         sa.Column("upstream_model_name", sa.String(120), nullable=False),
         sa.Column("credential_ref", sa.String(255)),
         sa.Column("enabled", sa.Boolean(), nullable=False, server_default=sa.text("false")),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), nullable=False,
+            server_default=sa.func.now(),
+        ),
     )
     op.create_table(
         "platform_model_prices",
@@ -111,9 +123,14 @@ def upgrade() -> None:
         sa.Column("output_per_million_minor", sa.Numeric(24, 8), nullable=False),
         sa.Column("effective_from", sa.DateTime(timezone=True), nullable=False),
         sa.Column("effective_until", sa.DateTime(timezone=True)),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), nullable=False,
+            server_default=sa.func.now(),
+        ),
         sa.ForeignKeyConstraint(["platform_model_id"], ["platform_models.id"], ondelete="RESTRICT"),
-        sa.UniqueConstraint("platform_model_id", "revision", name="uq_platform_model_price_revision"),
+        sa.UniqueConstraint(
+            "platform_model_id", "revision", name="uq_platform_model_price_revision"
+        ),
         sa.CheckConstraint("input_per_million_minor >= 0", name="ck_model_price_input"),
         sa.CheckConstraint("output_per_million_minor >= 0", name="ck_model_price_output"),
     )
@@ -128,9 +145,14 @@ def upgrade() -> None:
         sa.Column("quantity_units", sa.BigInteger(), nullable=False),
         sa.Column("status", sa.String(20), nullable=False),
         sa.Column("occurred_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), nullable=False,
+            server_default=sa.func.now(),
+        ),
         sa.ForeignKeyConstraint(["tenant_id"], ["tenants.id"], ondelete="RESTRICT"),
-        sa.ForeignKeyConstraint(["source_usage_record_id"], ["usage_records.id"], ondelete="SET NULL"),
+        sa.ForeignKeyConstraint(
+            ["source_usage_record_id"], ["usage_records.id"], ondelete="SET NULL"
+        ),
         sa.UniqueConstraint("tenant_id", "event_key", name="uq_billing_usage_tenant_event"),
         sa.CheckConstraint("quantity_units >= 0", name="ck_billing_usage_quantity"),
     )
@@ -149,7 +171,9 @@ def upgrade() -> None:
         sa.Column("currency", sa.String(3), nullable=False),
         sa.Column("state", sa.String(16), nullable=False),
         sa.Column("rated_at", sa.DateTime(timezone=True)),
-        sa.ForeignKeyConstraint(["usage_event_id"], ["billing_usage_events.id"], ondelete="RESTRICT"),
+        sa.ForeignKeyConstraint(
+            ["usage_event_id"], ["billing_usage_events.id"], ondelete="RESTRICT"
+        ),
         sa.ForeignKeyConstraint(["plan_id"], ["billing_plans.id"], ondelete="RESTRICT"),
         sa.ForeignKeyConstraint(
             ["price_version_id"], ["platform_model_prices.id"], ondelete="RESTRICT"
@@ -165,7 +189,10 @@ def upgrade() -> None:
         sa.Column("tenant_id", sa.Uuid(as_uuid=True)),
         sa.Column("currency", sa.String(3), nullable=False),
         sa.Column("kind", sa.String(32), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), nullable=False,
+            server_default=sa.func.now(),
+        ),
         sa.ForeignKeyConstraint(["tenant_id"], ["tenants.id"], ondelete="RESTRICT"),
     )
     op.create_index("ix_billing_ledger_account_tenant", "billing_ledger_accounts", ["tenant_id"])
@@ -177,7 +204,10 @@ def upgrade() -> None:
         sa.Column("currency", sa.String(3), nullable=False),
         sa.Column("reference_id", sa.String(160)),
         sa.Column("metadata_json", sa.JSON(), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), nullable=False,
+            server_default=sa.func.now(),
+        ),
     )
     op.create_index(
         "ix_billing_ledger_tx_created", "billing_ledger_transactions", ["created_at"]
@@ -188,7 +218,10 @@ def upgrade() -> None:
         sa.Column("transaction_id", sa.Uuid(as_uuid=True), nullable=False),
         sa.Column("account_id", sa.Uuid(as_uuid=True), nullable=False),
         sa.Column("amount_minor", sa.BigInteger(), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), nullable=False,
+            server_default=sa.func.now(),
+        ),
         sa.ForeignKeyConstraint(
             ["transaction_id"], ["billing_ledger_transactions.id"], ondelete="RESTRICT"
         ),
@@ -209,7 +242,10 @@ def upgrade() -> None:
         sa.Column("state", sa.String(20), nullable=False),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("settled_at", sa.DateTime(timezone=True)),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), nullable=False,
+            server_default=sa.func.now(),
+        ),
         sa.ForeignKeyConstraint(["tenant_id"], ["tenants.id"], ondelete="RESTRICT"),
         sa.UniqueConstraint("tenant_id", "event_key", name="uq_billing_reservation_event"),
         sa.CheckConstraint("max_amount_minor >= 0", name="ck_billing_reservation_amount"),
