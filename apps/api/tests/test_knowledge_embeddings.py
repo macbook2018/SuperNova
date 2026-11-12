@@ -1,5 +1,4 @@
 import pytest
-
 from app.knowledge.embeddings import EmbeddingConfig, embed_texts
 
 
