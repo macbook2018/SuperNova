@@ -65,6 +65,18 @@ def _claim_job() -> str | None:
         return str(job.id)
 
 
+def _extend_job_lease(job_id) -> None:
+    settings = get_settings()
+    with SessionLocal() as db:
+        job = db.get(KnowledgeIngestionJob, job_id)
+        if job is None or job.status != "running" or job.worker_id != WORKER_ID:
+            return
+        job.lease_expires_at = datetime.now(UTC) + timedelta(
+            seconds=settings.knowledge_worker_lease_seconds
+        )
+        db.commit()
+
+
 def _filename_from_response(url: str, content_type: str) -> str:
     parsed = urlparse(url)
     path_name = unquote(PurePosixPath(parsed.path).name)
@@ -174,7 +186,11 @@ def _process_ingest(db, job: KnowledgeIngestionJob, document: KnowledgeDocument,
         raise ValueError("document_chunk_limit_exceeded")
 
     embedding_config = resolve_embedding_config(db, kb)
-    batch = embed_texts(embedding_config, [item["content"] for item in chunks])
+    batch = embed_texts(
+        embedding_config,
+        [item["content"] for item in chunks],
+        on_batch=lambda: _extend_job_lease(job.id),
+    )
     if len(batch.vectors) != len(chunks):
         raise ValueError("embedding_count_mismatch")
 
