@@ -82,7 +82,7 @@ Chat Completions
 - Embedding 与 Chat 是不同模型能力，不能把 Chat 模型目录误当成 Embedding 模型目录。
 - 支持平台托管 Embedding 模型（credential_ref 由服务端解析）和 BYOK Embedding（复用当前租户加密保存的 ModelProvider）。
 - 知识库保存 embedding_source、模型引用、上游模型名、维度和模型配置版本。
-- 单个知识库的所有 chunks 必须使用同一模型配置和维度；切换模型时建立新索引版本，完成后原子切换，禁止混合不同向量空间。
+- 首个版本的 pgvector 列固定为 1536 维；平台与 BYOK Embedding 必须返回 1536 维。单个知识库的所有 chunks 必须使用同一模型配置和维度；切换模型时建立新索引版本，完成后原子切换，禁止混合不同向量空间。
 - Embedding 请求使用 OpenAI-compatible `POST /embeddings`；必须校验响应条数、向量长度、有限数值和 usage。
 - 不将密钥返回控制台、写入日志或写入文档元数据。
 - Embedding 用量先写独立的知识库用量记录，仅作运营与 shadow 统计。
