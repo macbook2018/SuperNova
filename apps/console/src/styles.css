@@ -55,3 +55,22 @@
 .usage-row small{font-size:9px;color:#98a3b2}
 .usage-row>span{font-size:10px;color:#64738a}
 @media(max-width:640px){.usage-mini-grid{grid-template-columns:1fr}.usage-row{grid-template-columns:1fr 1fr;gap:8px}.usage-row>div{grid-column:1/-1}}
+
+
+/* Phase 6: document ingestion and RAG playground */
+.kb-search-results{display:flex;flex-direction:column;gap:10px;margin-top:14px}
+.kb-search-hit{border:1px solid #e9edf4;border-radius:10px;background:#fafbfd;padding:13px 15px}
+.kb-search-hit>div{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.kb-search-hit b{font-size:11px;color:#3b4b63;overflow-wrap:anywhere}
+.kb-search-hit small{display:block;margin-top:7px;font-size:9px;color:#98a3b2}
+.kb-search-hit p{font-size:10px;line-height:1.8;color:#64738a;white-space:pre-wrap;margin:10px 0 0}
+.kb-detail{min-width:0}
+.kb-detail>div{min-width:0}
+.kb-detail small{overflow-wrap:anywhere}
+.kb-doc-actions{display:flex;gap:5px}
+@media(max-width:640px){
+ .kb-grid{grid-template-columns:1fr}
+ .kb-detail{align-items:flex-start;flex-wrap:wrap}
+ .kb-detail>button{margin-left:55px}
+ .kb-search-hit>div{align-items:flex-start;flex-direction:column}
+}
