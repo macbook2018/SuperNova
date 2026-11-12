@@ -24,6 +24,7 @@ from app.billing.metering import (
     estimate_input_token_upper_bound,
     finalize_gateway_request,
     fingerprint_gateway_request,
+    find_existing_gateway_request,
     reserve_gateway_request,
 )
 from app.core.config import get_settings
@@ -32,6 +33,7 @@ from app.core.security import hash_secret
 from app.models.billing import PlatformModel, PlatformModelPrice, TenantBillingPolicy
 from app.models.catalog import ModelProvider, Persona
 from app.models.identity import ApiKey, Tenant, TenantMembership, User
+from app.knowledge.retrieval import retrieve_persona_context
 from app.models.usage import UsageRecord
 from app.schemas.gateway import ChatCompletionRequest
 
@@ -433,9 +435,16 @@ def _record_usage(
         db.commit()
 
 
-def _upstream_payload(payload: ChatCompletionRequest, resolved: ResolvedModel) -> dict[str, Any]:
+def _upstream_payload(
+    payload: ChatCompletionRequest,
+    resolved: ResolvedModel,
+    rag_context: str = "",
+) -> dict[str, Any]:
     persona = resolved.persona
-    messages = [{"role": "system", "content": persona.system_prompt}]
+    system_prompt = persona.system_prompt
+    if rag_context:
+        system_prompt += "\n\n# 知识库检索参考资料\n" + rag_context
+    messages = [{"role": "system", "content": system_prompt}]
     messages.extend(message.model_dump(exclude_none=True) for message in payload.messages)
     max_tokens = min(payload.max_tokens or persona.max_tokens, persona.max_tokens)
     result: dict[str, Any] = {
@@ -576,7 +585,7 @@ def create_chat_completion(
     request_id = _request_id(request)
     resolved = _resolve_persona(db, principal, payload.model)
     persona = resolved.persona
-    upstream_payload = _upstream_payload(payload, resolved)
+    base_payload = _upstream_payload(payload, resolved)
 
     idempotency_key = (
         idempotency_key_header.strip()
@@ -595,12 +604,53 @@ def create_chat_completion(
         )
 
     request_hash = fingerprint_gateway_request(
-        upstream_payload,
+        base_payload,
         api_key_id=principal.api_key.id,
         persona_id=persona.id,
         model_source=resolved.model_source,
         price_version_id=resolved.price_version_id,
     )
+    existing = find_existing_gateway_request(
+        db,
+        tenant_id=principal.tenant.id,
+        idempotency_key=idempotency_key,
+        request_hash=request_hash,
+    )
+    if existing is not None and existing.replay_response is not None:
+        return JSONResponse(
+            content=existing.replay_response,
+            status_code=existing.replay_status or 200,
+        )
+
+    rag_context = ""
+    citations: list[dict] = []
+    latest_user_message = next(
+        (message.content for message in reversed(payload.messages) if message.role == "user"),
+        "",
+    )
+    if latest_user_message:
+        try:
+            rag_context, citations = retrieve_persona_context(
+                db,
+                tenant_id=principal.tenant.id,
+                persona_id=persona.id,
+                query=latest_user_message,
+            )
+        except Exception as exc:
+            logger.warning(
+                "knowledge_retrieval_failed",
+                request_id=request_id,
+                tenant_id=str(principal.tenant.id),
+                persona_id=str(persona.id),
+                error_type=type(exc).__name__,
+            )
+            raise _client_error(
+                503,
+                "knowledge_retrieval_failed",
+                "关联知识库暂时无法检索，请稍后重试",
+            ) from None
+
+    upstream_payload = _upstream_payload(payload, resolved, rag_context)
     reservation = reserve_gateway_request(
         db,
         tenant_id=principal.tenant.id,
@@ -621,7 +671,6 @@ def create_chat_completion(
     reservation_id = reservation.reservation_id
 
     endpoint = resolved.endpoint
-    upstream_payload = _upstream_payload(payload, resolved)
     headers = {
         "Authorization": "Bearer " + resolved.api_key,
         "Content-Type": "application/json",
@@ -737,6 +786,7 @@ def create_chat_completion(
         result["model"] = persona.slug
         if usage is not None:
             result["usage"] = usage
+        result["supernova"] = {"citations": citations}
         _record_usage(
             db,
             request_id=request_id,
@@ -823,6 +873,7 @@ def create_chat_completion(
 
     def stream_events():
         usage: dict[str, int] | None = None
+        pending_chunk: dict[str, Any] | None = None
         completed = False
         cancelled = False
         failure_code: str | None = None
@@ -837,23 +888,52 @@ def create_chat_completion(
                 raw = line[5:].strip()
                 if raw == "[DONE]":
                     completed = True
+                    if pending_chunk is not None:
+                        pending_chunk["supernova"] = {"citations": citations}
+                        encoded_chunk = json.dumps(
+                            pending_chunk, ensure_ascii=False, separators=(",", ":")
+                        )
+                        yield "data: " + encoded_chunk + "\n\n"
+                        pending_chunk = None
                     continue
                 try:
                     chunk = json.loads(raw)
                 except ValueError:
+                    if pending_chunk is not None:
+                        encoded_chunk = json.dumps(
+                            pending_chunk, ensure_ascii=False, separators=(",", ":")
+                        )
+                        yield "data: " + encoded_chunk + "\n\n"
+                        pending_chunk = None
                     yield line + "\n\n"
                     continue
                 if not isinstance(chunk, dict):
+                    if pending_chunk is not None:
+                        encoded_chunk = json.dumps(
+                            pending_chunk, ensure_ascii=False, separators=(",", ":")
+                        )
+                        yield "data: " + encoded_chunk + "\n\n"
+                        pending_chunk = None
                     yield line + "\n\n"
                     continue
                 chunk_usage = _extract_usage(chunk.get("usage"))
                 if chunk_usage is not None:
                     usage = chunk_usage
                 chunk["model"] = persona.slug
+                if pending_chunk is not None:
+                    encoded_chunk = json.dumps(
+                        pending_chunk, ensure_ascii=False, separators=(",", ":")
+                    )
+                    yield "data: " + encoded_chunk + "\n\n"
+                pending_chunk = chunk
+            if pending_chunk is not None:
+                if completed:
+                    pending_chunk["supernova"] = {"citations": citations}
                 encoded_chunk = json.dumps(
-                    chunk, ensure_ascii=False, separators=(",", ":")
+                    pending_chunk, ensure_ascii=False, separators=(",", ":")
                 )
                 yield "data: " + encoded_chunk + "\n\n"
+                pending_chunk = None
             if not completed:
                 failure_code = "provider_stream_incomplete"
         except GeneratorExit:
