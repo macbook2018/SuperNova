@@ -11,12 +11,6 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.db.base import Base
-from app.db.session import get_db
-from app.knowledge.chunking import chunk_blocks
-from app.knowledge.parsers import parse_document, validate_document_bytes
-from app.main import app
-
 
 @pytest.fixture
 def client() -> Generator[TestClient, None, None]:
