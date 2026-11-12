@@ -305,12 +305,13 @@ def retry_knowledge_document(
     )
     if document is None:
         raise HTTPException(status_code=404, detail={"code": "document_not_found", "message": "文档不存在"})
-    if document.status not in {"failed"}:
+    if document.status not in {"failed", "deleting"}:
         raise HTTPException(
             status_code=409,
-            detail={"code": "document_not_retryable", "message": "只有失败文档可以重试"},
+            detail={"code": "document_not_retryable", "message": "只有失败或删除失败的文档可以重试"},
         )
-    document.status = "queued"
+    retry_delete = document.status == "deleting"
+    document.status = "deleting" if retry_delete else "queued"
     document.error_code = None
     document.error_message = None
     document.pending_index_version = max(1, document.active_index_version + 1)
@@ -319,8 +320,8 @@ def retry_knowledge_document(
         tenant_id=principal.tenant.id,
         knowledge_base_id=knowledge_base_id,
         document_id=document.id,
-        job_type="ingest",
-        index_version=document.pending_index_version,
+        job_type="delete" if retry_delete else "ingest",
+        index_version=document.active_index_version if retry_delete else document.pending_index_version,
         dedupe_key=f"retry:{document.id}:{uuid4().hex}",
     )
     db.commit()
