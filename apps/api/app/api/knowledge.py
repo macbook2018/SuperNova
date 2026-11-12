@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import PurePosixPath
+from urllib.parse import quote
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
+from fastapi.responses import Response
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
@@ -12,7 +14,7 @@ from app.api.deps import CurrentPrincipal, DatabaseSession
 from app.core.config import get_settings
 from app.knowledge.parsers import validate_document_bytes
 from app.knowledge.retrieval import retrieve_knowledge_base
-from app.knowledge.storage import delete_object, put_object
+from app.knowledge.storage import delete_object, get_object, put_object
 from app.models.catalog import KnowledgeBase
 from app.models.knowledge import (
     KnowledgeDocument,
@@ -558,3 +560,41 @@ def reindex_knowledge_base(
         queued += 1
     db.commit()
     return {"queued_documents": queued, "status": "queued"}
+
+
+@router.get(
+    "/knowledge-bases/{knowledge_base_id}/documents/{document_id}/download",
+)
+def download_knowledge_document(
+    knowledge_base_id: UUID,
+    document_id: UUID,
+    principal: CurrentPrincipal,
+    db: DatabaseSession,
+) -> Response:
+    _get_knowledge_base(db, principal.tenant.id, knowledge_base_id)
+    document = db.scalar(
+        select(KnowledgeDocument).where(
+            KnowledgeDocument.id == document_id,
+            KnowledgeDocument.tenant_id == principal.tenant.id,
+            KnowledgeDocument.knowledge_base_id == knowledge_base_id,
+        )
+    )
+    if document is None or document.status == "deleted":
+        raise HTTPException(status_code=404, detail={"code": "document_not_found", "message": "文档不存在"})
+    settings = get_settings()
+    try:
+        body = get_object(
+            document.object_key,
+            max(settings.knowledge_max_upload_bytes, settings.knowledge_max_url_bytes),
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "object_storage_unavailable", "message": "原始文档暂时无法下载"},
+        ) from None
+    filename = quote(document.original_filename, safe="")
+    return Response(
+        content=body,
+        media_type=document.mime_type,
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename}"},
+    )
