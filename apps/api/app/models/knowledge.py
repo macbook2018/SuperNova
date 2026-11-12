@@ -18,8 +18,15 @@ from sqlalchemy import (
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.ext.compiler import compiles
 
 from app.db.base import Base
+
+
+@compiles(Vector, "sqlite")
+def _compile_vector_for_sqlite(_type, _compiler, **_kw):
+    # SQLite is used for fast API unit tests; production vector search runs on PostgreSQL.
+    return "JSON"
 
 
 class PlatformEmbeddingModel(Base):
