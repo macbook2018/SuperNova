@@ -1,13 +1,11 @@
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, HTTPException, Response, status
 from sqlalchemy import select
-from sqlalchemy.orm import Session
 
-from app.api.deps import Principal, get_current_principal
+from app.api.deps import CurrentPrincipal, DatabaseSession, Principal
 from app.core.security import hash_secret, new_api_key
-from app.db.session import get_db
 from app.models.identity import ApiKey
 from app.schemas.api_key import ApiKeyCreateRequest, ApiKeyCreated, ApiKeyRead
 
@@ -40,7 +38,7 @@ def _created_response(record: ApiKey, secret: str) -> ApiKeyCreated:
     )
 
 
-def _owned_key(db: Session, principal: Principal, key_id: UUID) -> ApiKey | None:
+def _owned_key(db: DatabaseSession, principal: Principal, key_id: UUID) -> ApiKey | None:
     return db.scalar(
         select(ApiKey).where(
             ApiKey.id == key_id,
@@ -53,21 +51,15 @@ def _owned_key(db: Session, principal: Principal, key_id: UUID) -> ApiKey | None
 @router.post("", response_model=ApiKeyCreated, status_code=status.HTTP_201_CREATED)
 def create_api_key(
     payload: ApiKeyCreateRequest,
-    principal: Principal = Depends(get_current_principal),
-    db: Session = Depends(get_db),
+    principal: CurrentPrincipal,
+    db: DatabaseSession,
 ) -> ApiKeyCreated:
-    name = payload.name.strip()
-    if not name:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"code": "invalid_key_name", "message": "密钥名称不能为空"},
-        )
     expires_at = (
         datetime.now(UTC) + timedelta(days=payload.expires_in_days)
         if payload.expires_in_days
         else None
     )
-    record, secret = _create_record(principal, name, expires_at)
+    record, secret = _create_record(principal, payload.name, expires_at)
     db.add(record)
     db.commit()
     db.refresh(record)
@@ -76,8 +68,8 @@ def create_api_key(
 
 @router.get("", response_model=list[ApiKeyRead])
 def list_api_keys(
-    principal: Principal = Depends(get_current_principal),
-    db: Session = Depends(get_db),
+    principal: CurrentPrincipal,
+    db: DatabaseSession,
 ) -> list[ApiKeyRead]:
     records = db.scalars(
         select(ApiKey)
@@ -104,8 +96,8 @@ def list_api_keys(
 @router.delete("/{key_id}", status_code=status.HTTP_204_NO_CONTENT)
 def revoke_api_key(
     key_id: UUID,
-    principal: Principal = Depends(get_current_principal),
-    db: Session = Depends(get_db),
+    principal: CurrentPrincipal,
+    db: DatabaseSession,
 ) -> Response:
     record = _owned_key(db, principal, key_id)
     if record is None:
@@ -123,8 +115,8 @@ def revoke_api_key(
 @router.post("/{key_id}/rotate", response_model=ApiKeyCreated)
 def rotate_api_key(
     key_id: UUID,
-    principal: Principal = Depends(get_current_principal),
-    db: Session = Depends(get_db),
+    principal: CurrentPrincipal,
+    db: DatabaseSession,
 ) -> ApiKeyCreated:
     record = _owned_key(db, principal, key_id)
     if record is None:
@@ -132,11 +124,12 @@ def rotate_api_key(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"code": "api_key_not_found", "message": "API 密钥不存在"},
         )
+
     now = datetime.now(UTC)
-    if record.status != "active" or (
-        record.expires_at is not None
-        and (record.expires_at.replace(tzinfo=UTC) if record.expires_at.tzinfo is None else record.expires_at) <= now
-    ):
+    expires_at = record.expires_at
+    if expires_at is not None and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    if record.status != "active" or (expires_at is not None and expires_at <= now):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={"code": "api_key_not_active", "message": "只有有效密钥可以轮换"},
