@@ -42,6 +42,19 @@ def _conflict(code: str, message: str) -> HTTPException:
     )
 
 
+def _reject_null_updates(updates: dict, nullable_fields: set[str] | None = None) -> None:
+    allowed_nulls = nullable_fields or set()
+    invalid = [field for field, value in updates.items() if value is None and field not in allowed_nulls]
+    if invalid:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "null_not_allowed",
+                "message": "以下字段不允许设置为 null：" + ", ".join(sorted(invalid)),
+            },
+        )
+
+
 def _provider_read(provider: ModelProvider) -> ModelProviderRead:
     hint = f"••••{provider.api_key_last4}" if provider.api_key_last4 else None
     return ModelProviderRead(
@@ -215,6 +228,7 @@ def update_model_provider(
     updates = payload.model_dump(exclude_unset=True)
     api_key = updates.pop("api_key", None)
     clear_api_key = updates.pop("clear_api_key", False)
+    _reject_null_updates(updates)
 
     if clear_api_key and api_key is not None:
         raise HTTPException(
@@ -265,7 +279,14 @@ def delete_model_provider(
     if used is not None:
         raise _conflict("model_provider_in_use", "该供应商仍被人格使用，请先修改相关人格配置")
     db.delete(provider)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise _conflict(
+            "model_provider_in_use",
+            "该供应商仍被人格使用，请先修改相关人格配置",
+        ) from None
 
 
 @router.get("/knowledge-bases", response_model=list[KnowledgeBaseRead])
@@ -335,7 +356,9 @@ def update_knowledge_base(
     db: DatabaseSession,
 ) -> KnowledgeBaseRead:
     record = _get_knowledge_base(db, principal, knowledge_base_id)
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    updates = payload.model_dump(exclude_unset=True)
+    _reject_null_updates(updates)
+    for field, value in updates.items():
         setattr(record, field, value)
     try:
         db.commit()
@@ -467,6 +490,7 @@ def update_persona(
         raise _not_found("persona")
 
     updates = payload.model_dump(exclude_unset=True, exclude={"knowledge_base_ids"})
+    _reject_null_updates(updates, nullable_fields={"provider_id"})
     if "provider_id" in updates:
         _validate_provider(db, principal, updates["provider_id"])
     if "knowledge_base_ids" in payload.model_fields_set:
