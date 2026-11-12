@@ -821,7 +821,7 @@ async function revokeKey(key: ApiKey) {
     <button v-if="page==='overview'||page==='personas'" class="btn primary" @click="editPersona()"><Plus :size="16"/>新建人格</button>
     <button v-else-if="page==='providers'" class="btn primary" @click="editProvider()"><Plus :size="16"/>添加供应商</button>
     <button v-else-if="page==='knowledge'" class="btn primary" @click="kbModal=true"><Plus :size="16"/>新建知识库</button>
-    <template v-else-if="page==='knowledgeDetail'"><button class="btn secondary" @click="go('knowledge')">返回知识库</button><button class="btn primary" @click="upload"><Upload :size="16"/>上传文档</button></template>
+    <template v-else-if="page==='knowledgeDetail'"><button class="btn secondary" @click="go('knowledge')">返回知识库</button><button class="btn secondary" @click="importKnowledgeUrl" :disabled="knowledgeBusy">导入网页</button><button class="btn primary" @click="upload" :disabled="knowledgeBusy"><Upload :size="16"/>上传文档</button></template>
     <button v-else-if="page==='api'" class="btn primary" @click="keyModal=true"><Plus :size="16"/>创建 API Key</button>
     <button v-else-if="page==='usage'" class="btn secondary" disabled><Download :size="16"/>暂无可导出数据</button>
     <button v-else-if="page==='billing'" class="btn secondary" @click="loadBilling(true)" :disabled="billingLoading"><Activity :size="16"/>刷新权益</button>
@@ -862,16 +862,75 @@ async function revokeKey(key: ApiKey) {
    </template>
 
    <template v-else-if="page==='knowledge'">
-    <section class="kb-summary"><div><Database :size="18"/><small>知识库总数</small><b>{{kbs.length}} 个</b></div><div><FileText :size="18"/><small>文档总数</small><b>{{totalDocs}} 份</b></div><div><CheckCircle2 :size="18"/><small>文档索引</small><b>待接入</b></div></section>
-    <section class="kb-grid"><article v-for="k in kbs" :key="k.id" class="kb-card"><div class="kb-card-head"><span class="kb-icon" :class="k.color"><Database :size="20"/></span><button @click="deleteKb(k)" aria-label="删除知识库"><Trash2 :size="17"/></button></div><h3>{{k.name}}</h3><p>{{k.description||'暂无描述'}}</p><div class="kb-meta"><span><FileText :size="13"/> {{k.documents_count}} 份文档</span><span>最近更新</span></div><footer><small><i></i>元数据已保存</small><a @click="openKb(k)">管理知识库 →</a></footer></article><button class="kb-create" @click="kbModal=true"><span><Plus :size="22"/></span><b>创建知识库</b><small>管理知识库元数据</small></button></section>
-    <div class="info"><AlertCircle :size="17"/><div><b>当前阶段边界</b><small>知识库元数据与人格关联已接入数据库。文档上传、解析、切片和向量化检索将在后续知识库阶段实现。</small></div></div>
+    <section class="kb-summary">
+     <div><Database :size="18"/><small>知识库总数</small><b>{{kbs.length}} 个</b></div>
+     <div><FileText :size="18"/><small>文档总数</small><b>{{totalDocs}} 份</b></div>
+     <div><CheckCircle2 :size="18"/><small>可检索文档</small><b>{{kbs.reduce((sum, kb) => sum + (kb.docs?.filter(doc => doc.status === 'ready').length ?? 0), 0)}} 份</b></div>
+    </section>
+    <section class="kb-grid">
+     <article v-for="k in kbs" :key="k.id" class="kb-card">
+      <div class="kb-card-head"><span class="kb-icon" :class="k.color"><Database :size="20"/></span><button @click="deleteKb(k)" aria-label="删除知识库"><Trash2 :size="17"/></button></div>
+      <h3>{{k.name}}</h3><p>{{k.description||'暂无描述'}}</p>
+      <div class="kb-meta"><span><FileText :size="13"/> {{k.documents_count}} 份文档</span><span>{{k.embedding_source==='platform'?'平台 Embedding':'BYOK Embedding'}}</span></div>
+      <footer><small><i></i>知识库已配置</small><a @click="openKb(k)">管理知识库 →</a></footer>
+     </article>
+     <button class="kb-create" @click="kbModal=true"><span><Plus :size="22"/></span><b>创建知识库</b><small>配置 Embedding 与检索参数</small></button>
+    </section>
+    <div v-if="!embeddingModels.length" class="info"><AlertCircle :size="17"/><div><b>平台 Embedding 尚未配置</b><small>管理员需要先在 /admin/platform/embedding-models 配置 1536 维度的 Embedding 模型；也可以在创建知识库时使用支持 Embedding 的 BYOK 供应商。</small></div></div>
    </template>
 
    <template v-else-if="page==='knowledgeDetail'">
-    <section class="panel kb-detail"><span class="kb-icon" :class="selectedKb.color"><Database :size="23"/></span><div><h2>{{selectedKb.name}}</h2><p>{{selectedKb.description}}</p><small>{{selectedKb.documents_count}} 份文档 · 文档处理待接入</small></div><button class="btn secondary" @click="deleteKb(selectedKb)"><Trash2 :size="15"/>删除知识库</button></section>
-    <section class="panel"><div class="panel-title"><div><b>文档管理</b><small>文档上传、解析和向量化检索将在后续知识库阶段实现。</small></div><button class="btn secondary small" @click="upload"><Upload :size="14"/>上传文档</button></div><div class="empty"><FileText :size="28"/><b>当前知识库还没有文档</b><small>本阶段已完成知识库元数据保存；文档处理流水线将在后续阶段接入。</small></div></section>
-    <section class="panel binding"><div class="panel-title"><div><b>已关联人格</b><small>一个知识库可以关联多个 AI 人格；在人格编辑窗口中管理关联。</small></div><a @click="go('personas')">管理人格 →</a></div><span v-for="persona in linkedPersonas" :key="persona.id"><Bot :size="14"/> {{persona.name}} <Check :size="13"/></span><div v-if="!linkedPersonas.length" class="empty"><b>尚未关联人格</b><small>编辑人格并选择此知识库即可建立关联。</small></div></section>
+    <section class="panel kb-detail">
+     <span class="kb-icon" :class="selectedKb.color"><Database :size="23"/></span>
+     <div><h2>{{selectedKb.name}}</h2><p>{{selectedKb.description}}</p><small>{{selectedKb.embedding_source==='platform'?'平台 Embedding':'BYOK Embedding'}} · {{selectedKb.embedding_model_name || embeddingModels.find(model => model.id === selectedKb.platform_embedding_model_id)?.model_name || '未配置模型'}} · {{selectedKb.embedding_dimensions}} 维</small></div>
+     <button class="btn secondary" @click="deleteKb(selectedKb)"><Trash2 :size="15"/>删除知识库</button>
+    </section>
+    <section class="metric-strip">
+     <div><small>文档总数</small><b>{{knowledgeUsage?.document_count ?? selectedKb.documents_count}}</b></div>
+     <div><small>可检索文档</small><b class="green-text">{{knowledgeUsage?.ready_documents ?? 0}}</b></div>
+     <div><small>处理中 / 失败</small><b>{{knowledgeUsage?.queued_documents ?? 0}} / {{knowledgeUsage?.failed_documents ?? 0}}</b></div>
+     <div><small>活动切片</small><b>{{knowledgeUsage?.active_chunks.toLocaleString() ?? '—'}}</b></div>
+    </section>
+    <section class="panel">
+     <div class="panel-title"><div><b>文档管理</b><small>支持 PDF、DOCX、PPTX、XLSX、TXT、Markdown、CSV、HTML；单文件默认上限 25 MB。</small></div><div class="heading-actions"><button class="btn secondary small" @click="importKnowledgeUrl" :disabled="knowledgeBusy">导入网页 URL</button><button class="btn primary small" @click="upload" :disabled="knowledgeBusy"><Upload :size="14"/>上传文件</button><button class="btn secondary small" @click="loadKnowledgeDetail(true)" :disabled="knowledgeBusy"><Activity :size="14"/>刷新</button></div></div>
+     <div v-if="knowledgeBusy && !knowledgeDocuments.length" class="empty"><Activity :size="25"/><b>正在读取知识库</b></div>
+     <div v-else-if="knowledgeDocuments.length" class="usage-list">
+      <div v-for="item in knowledgeDocuments" :key="item.id" class="usage-row">
+       <div><b>{{item.original_filename}}</b><small>{{item.source_type==='url'?'网页导入':'文件上传'}} · {{formatBytes(item.file_size_bytes)}} · {{item.chunk_count}} 个切片 · {{new Date(item.created_at).toLocaleString()}}</small><small v-if="item.error_message" class="warning">{{item.error_message}}</small></div>
+       <label :class="item.status==='ready'?'running':'paused'">{{item.status==='ready'?'可检索':item.status==='queued'?'排队中':item.status==='processing'?'处理中':item.status==='failed'?'失败':item.status==='deleting'?'删除中':'已删除'}}</label>
+       <div class="row-actions">
+        <button v-if="item.status==='failed'" @click="retryKnowledgeDocument(item)" aria-label="重试"><Activity :size="15"/></button>
+        <button v-if="item.status==='ready'" @click="reindexKnowledgeDocument(item)" aria-label="重建索引"><Zap :size="15/></button>
+        <button v-if="item.status!=='deleted' && item.status!=='deleting'" @click="deleteKnowledgeDocument(item)" aria-label="删除文档"><Trash2 :size="15"/></button>
+       </div>
+      </div>
+     </div>
+     <div v-else class="empty"><FileText :size="28"/><b>当前知识库还没有文档</b><small>上传文件或导入公开网页，后台 Worker 会自动解析、切片并建立向量索引。</small><button class="btn primary" @click="upload"><Upload :size="15"/>上传第一份文档</button></div>
+    </section>
+    <section class="panel">
+     <div class="panel-title"><div><b>检索调试</b><small>直接测试当前知识库的向量 + 关键词混合检索，并查看真实来源片段。</small></div></div>
+     <form class="toolbar" @submit.prevent="searchKnowledge"><label class="search"><Search :size="16"/><input v-model="knowledgeSearchQuery" placeholder="输入一个问题，例如：退货政策是什么？"></label><button class="btn primary small" type="submit" :disabled="knowledgeSearchBusy || !knowledgeSearchQuery.trim()">{{knowledgeSearchBusy?'检索中…':'测试检索'}}</button></form>
+     <div v-if="knowledgeSearchHits.length" class="kb-search-results">
+      <article v-for="hit in knowledgeSearchHits" :key="hit.chunk_id" class="kb-search-hit">
+       <div><b>{{hit.document_name}}</b><label class="running">{{Math.round(hit.score*100)}% 匹配</label></div>
+       <small>{{hit.page_number ? '第 '+hit.page_number+' 页' : hit.sheet_name ? '工作表 '+hit.sheet_name : hit.slide_number ? '幻灯片 '+hit.slide_number : '切片 '+(hit.chunk_index+1)}} · 向量排名 {{hit.vector_rank ?? '—'}} · 关键词排名 {{hit.lexical_rank ?? '—'}}</small>
+       <p>{{hit.snippet}}</p>
+      </article>
+     </div>
+     <div v-else class="empty"><Search :size="24"/><b>输入问题开始检索</b><small>检索结果会显示来源文档、页码和匹配分数；没有相关资料时不会虚构引用。</small></div>
+    </section>
+    <section class="panel">
+     <div class="panel-title"><div><b>知识库用量（仅统计，不扣费）</b><small>Embedding 和检索资源将在最后商业化阶段再纳入真实收费。</small></div><label class="paused">SHADOW · 不扣款</label></div>
+     <div class="usage-mini-grid">
+      <div><small>存储空间</small><b>{{formatBytes(knowledgeUsage?.storage_bytes ?? 0)}}</b></div>
+      <div><small>Embedding Token</small><b>{{knowledgeUsage?.embedding_tokens.toLocaleString() ?? '—'}}</b></div>
+      <div><small>Embedding 请求</small><b>{{knowledgeUsage?.embedding_requests.toLocaleString() ?? '—'}}</b></div>
+      <div><small>检索次数</small><b>{{knowledgeUsage?.retrieval_requests.toLocaleString() ?? '—'}}</b></div>
+     </div>
+    </section>
+    <section class="panel binding"><div class="panel-title"><div><b>已关联人格</b><small>Persona 关联此知识库后，Chat Completions 会自动执行 RAG 并返回引用。</small></div><a @click="go('personas')">管理人格 →</a></div><span v-for="persona in linkedPersonas" :key="persona.id"><Bot :size="14"/> {{persona.name}} <Check :size="13/></span><div v-if="!linkedPersonas.length" class="empty"><b>尚未关联人格</b><small>编辑人格并选择此知识库即可启用自动 RAG。</small></div></section>
    </template>
+
 
 
    <template v-else-if="page==='api'">
@@ -995,7 +1054,24 @@ async function revokeKey(key: ApiKey) {
   </div>
   <div class="modal-actions"><button class="btn secondary" @click="personaModal=false">取消</button><button class="btn primary" @click="savePersona"><Check :size="15"/>保存人格</button></div>
  </section></div>
- <div v-if="kbModal" class="modal-backdrop" @click.self="kbModal=false"><section class="modal small-modal"><div class="modal-title"><div><small>KNOWLEDGE BASE</small><h2>创建知识库</h2><p>建立独立资料空间，后续可关联到不同人格。</p></div><button @click="kbModal=false"><X :size="18"/></button></div><div class="form-grid"><label class="full">知识库名称 <b>*</b><input v-model="kbForm.name" placeholder="例如：产品资料库"></label><label class="full">知识库描述<textarea v-model="kbForm.description" rows="3" placeholder="说明知识库包含哪些内容..."></textarea></label></div><div class="modal-actions"><button class="btn secondary" @click="kbModal=false">取消</button><button class="btn primary" @click="createKb"><Plus :size="15"/>创建知识库</button></div></section></div>
+ <div v-if="kbModal" class="modal-backdrop" @click.self="kbModal=false"><section class="modal small-modal"><div class="modal-title"><div><small>KNOWLEDGE BASE</small><h2>创建知识库</h2><p>配置资料空间、Embedding 模型和检索参数。</p></div><button @click="kbModal=false"><X :size="18"/></button></div>
+  <div class="form-grid">
+   <label class="full">知识库名称 <b>*</b><input v-model="kbForm.name" maxlength="100" placeholder="例如：产品资料库"></label>
+   <label class="full">知识库描述<textarea v-model="kbForm.description" rows="2" maxlength="500" placeholder="说明知识库包含哪些内容..."></textarea></label>
+   <label class="full">Embedding 来源<select v-model="kbForm.embedding_source"><option value="platform">使用 SuperNova 平台 Embedding</option><option value="byok">使用自己的供应商 API Key（BYOK）</option></select></label>
+   <label v-if="kbForm.embedding_source==='platform'" class="full">平台 Embedding 模型<select v-model="kbForm.platform_embedding_model_id"><option value="">请选择模型</option><option v-for="model in embeddingModels" :key="model.id" :value="model.id">{{model.display_name}}（{{model.model_name}} · {{model.dimensions}} 维）</option></select><small v-if="!embeddingModels.length">管理员尚未发布可用的平台 Embedding 模型。</small></label>
+   <template v-else>
+    <label class="full">模型供应商<select v-model="kbForm.embedding_provider_id"><option value="">请选择已配置 API Key 的供应商</option><option v-for="provider in providers" :key="provider.id" :value="provider.id" :disabled="!provider.enabled || !provider.has_api_key || provider.provider_type==='anthropic'">{{provider.name}}（{{provider.provider_type}}）</option></select></label>
+    <label class="full">Embedding 模型名称<input v-model="kbForm.embedding_model_name" maxlength="120" placeholder="例如：text-embedding-3-small"><small>供应商必须兼容 OpenAI /embeddings 接口，并返回 1536 维向量。</small></label>
+   </template>
+   <label>切片长度（字符）<input v-model.number="kbForm.chunk_size" type="number" min="100" max="4000"></label>
+   <label>切片重叠（字符）<input v-model.number="kbForm.chunk_overlap" type="number" min="0" max="3999"></label>
+   <label>检索 Top K<input v-model.number="kbForm.retrieval_top_k" type="number" min="1" max="20"></label>
+   <label>相似度阈值<input v-model.number="kbForm.retrieval_score_threshold" type="number" min="0" max="1" step="0.05"></label>
+   <small class="form-hint full">当前向量索引固定为 1536 维。更换 Embedding 模型需要重建知识库索引，不能混用不同向量空间。</small>
+  </div>
+  <div class="modal-actions"><button class="btn secondary" @click="kbModal=false">取消</button><button class="btn primary" @click="createKb"><Plus :size="15"/>创建知识库</button></div>
+ </section></div>
  <div v-if="providerModal" class="modal-backdrop" @click.self="providerModal=false"><section class="modal small-modal"><div class="modal-title"><div><small>MODEL PROVIDER</small><h2>{{editingProviderId?'编辑模型供应商':'添加模型供应商'}}</h2><p>API Key 会在服务端加密保存，读取接口不会返回明文。</p></div><button @click="providerModal=false"><X :size="18"/></button></div>
   <div class="form-grid">
    <label class="full">供应商名称 <b>*</b><input v-model="providerForm.name" maxlength="80" placeholder="例如：DeepSeek 主账户"></label>
