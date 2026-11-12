@@ -407,3 +407,30 @@ export interface UsageRecord {
   error_code: string | null
   created_at: string
 }
+
+
+export async function downloadApiFile(path: string, filename: string): Promise<void> {
+  const session = getStoredSession()
+  const headers = new Headers()
+  if (session?.access_token) headers.set('Authorization', `Bearer ${session.access_token}`)
+  const response = await fetch(`${API_BASE_URL}${path}`, { method: 'GET', headers })
+  if (!response.ok) {
+    let message = `下载失败（HTTP ${response.status}）`
+    try {
+      const payload = await response.json() as { detail?: { message?: string } }
+      message = payload.detail?.message || message
+    } catch {
+      // Keep the HTTP fallback message.
+    }
+    throw new Error(message)
+  }
+  const blob = await response.blob()
+  const objectUrl = window.URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = objectUrl
+  anchor.download = filename
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  window.URL.revokeObjectURL(objectUrl)
+}
