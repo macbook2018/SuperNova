@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import mimetypes
 from pathlib import PurePosixPath
 from uuid import UUID, uuid4
 
