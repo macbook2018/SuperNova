@@ -30,7 +30,12 @@ def upgrade() -> None:
         sa.Column("credential_ref", sa.String(length=255), nullable=False),
         sa.Column("dimensions", sa.Integer(), nullable=False, server_default="1536"),
         sa.Column("enabled", sa.Boolean(), nullable=False, server_default=sa.false()),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
         sa.CheckConstraint("dimensions = 1536", name="ck_platform_embedding_dimensions"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("code", name="uq_platform_embedding_models_code"),
@@ -43,22 +48,44 @@ def upgrade() -> None:
 
     with op.batch_alter_table("knowledge_bases") as batch:
         batch.add_column(
-            sa.Column("embedding_source", sa.String(length=16), nullable=False, server_default="platform")
+            sa.Column(
+                "embedding_source",
+                sa.String(length=16),
+                nullable=False,
+                server_default="platform",
+            )
         )
-        batch.add_column(sa.Column("platform_embedding_model_id", sa.Uuid(as_uuid=True), nullable=True))
+        batch.add_column(
+            sa.Column("platform_embedding_model_id", sa.Uuid(as_uuid=True), nullable=True)
+        )
         batch.add_column(sa.Column("embedding_provider_id", sa.Uuid(as_uuid=True), nullable=True))
         batch.add_column(sa.Column("embedding_model_name", sa.String(length=120), nullable=True))
         batch.add_column(
             sa.Column("embedding_dimensions", sa.Integer(), nullable=False, server_default="1536")
         )
-        batch.add_column(sa.Column("chunk_size", sa.Integer(), nullable=False, server_default="800"))
-        batch.add_column(sa.Column("chunk_overlap", sa.Integer(), nullable=False, server_default="120"))
-        batch.add_column(sa.Column("retrieval_top_k", sa.Integer(), nullable=False, server_default="5"))
         batch.add_column(
-            sa.Column("retrieval_score_threshold", sa.Float(), nullable=False, server_default="0.15")
+            sa.Column("chunk_size", sa.Integer(), nullable=False, server_default="800")
         )
-        batch.add_column(sa.Column("enabled", sa.Boolean(), nullable=False, server_default=sa.true()))
-        batch.add_column(sa.Column("active_index_version", sa.Integer(), nullable=False, server_default="1"))
+        batch.add_column(
+            sa.Column("chunk_overlap", sa.Integer(), nullable=False, server_default="120")
+        )
+        batch.add_column(
+            sa.Column("retrieval_top_k", sa.Integer(), nullable=False, server_default="5")
+        )
+        batch.add_column(
+            sa.Column(
+                "retrieval_score_threshold",
+                sa.Float(),
+                nullable=False,
+                server_default="0.15",
+            )
+        )
+        batch.add_column(
+            sa.Column("enabled", sa.Boolean(), nullable=False, server_default=sa.true())
+        )
+        batch.add_column(
+            sa.Column("active_index_version", sa.Integer(), nullable=False, server_default="1")
+        )
         batch.create_foreign_key(
             "fk_knowledge_bases_platform_embedding_model",
             "platform_embedding_models",
@@ -117,7 +144,12 @@ def upgrade() -> None:
         sa.Column("active_index_version", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("pending_index_version", sa.Integer(), nullable=False, server_default="1"),
         sa.Column("chunk_count", sa.Integer(), nullable=False, server_default="0"),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.ForeignKeyConstraint(
             ["tenant_id", "knowledge_base_id"],
@@ -125,7 +157,10 @@ def upgrade() -> None:
             name="fk_knowledge_documents_kb_same_tenant",
             ondelete="CASCADE",
         ),
-        sa.CheckConstraint("source_type IN ('upload', 'url')", name="ck_knowledge_documents_source_type"),
+        sa.CheckConstraint(
+            "source_type IN ('upload', 'url')",
+            name="ck_knowledge_documents_source_type",
+        ),
         sa.CheckConstraint(
             "status IN ('queued', 'processing', 'ready', 'failed', 'deleting', 'deleted')",
             name="ck_knowledge_documents_status",
@@ -157,12 +192,22 @@ def upgrade() -> None:
         sa.Column("index_version", sa.Integer(), nullable=False, server_default="1"),
         sa.Column("attempts", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("max_attempts", sa.Integer(), nullable=False, server_default="5"),
-        sa.Column("available_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "available_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
         sa.Column("locked_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("lease_expires_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("worker_id", sa.String(length=120), nullable=True),
         sa.Column("last_error", sa.String(length=1000), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.ForeignKeyConstraint(
             ["tenant_id", "knowledge_base_id"],
@@ -181,7 +226,8 @@ def upgrade() -> None:
             name="ck_knowledge_jobs_type",
         ),
         sa.CheckConstraint(
-            "status IN ('queued', 'running', 'retry_wait', 'succeeded', 'dead_letter', 'cancelled')",
+            "status IN ('queued', 'running', 'retry_wait', 'succeeded', "
+            "'dead_letter', 'cancelled')",
             name="ck_knowledge_jobs_status",
         ),
         sa.PrimaryKeyConstraint("id"),
@@ -210,7 +256,12 @@ def upgrade() -> None:
         sa.Column("content_hash", sa.String(length=64), nullable=False),
         sa.Column("embedding", Vector(1536), nullable=False),
         sa.Column("metadata_json", sa.JSON(), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
         sa.ForeignKeyConstraint(
             ["tenant_id", "knowledge_base_id"],
             ["knowledge_bases.tenant_id", "knowledge_bases.id"],
@@ -263,7 +314,12 @@ def upgrade() -> None:
         sa.Column("chunk_count", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("latency_ms", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("status", sa.String(length=20), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
         sa.ForeignKeyConstraint(
             ["tenant_id", "knowledge_base_id"],
             ["knowledge_bases.tenant_id", "knowledge_bases.id"],
@@ -304,7 +360,10 @@ def downgrade() -> None:
         batch.drop_constraint("ck_knowledge_bases_embedding_dimensions", type_="check")
         batch.drop_constraint("ck_knowledge_bases_embedding_source_reference", type_="check")
         batch.drop_constraint("ck_knowledge_bases_embedding_source", type_="check")
-        batch.drop_constraint("fk_knowledge_bases_embedding_provider_same_tenant", type_="foreignkey")
+        batch.drop_constraint(
+            "fk_knowledge_bases_embedding_provider_same_tenant",
+            type_="foreignkey",
+        )
         batch.drop_constraint("fk_knowledge_bases_platform_embedding_model", type_="foreignkey")
         batch.drop_column("active_index_version")
         batch.drop_column("enabled")
