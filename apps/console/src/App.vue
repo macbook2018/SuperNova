@@ -940,7 +940,7 @@ async function revokeKey(key: ApiKey) {
      <form class="toolbar" @submit.prevent="searchKnowledge"><label class="search"><Search :size="16"/><input v-model="knowledgeSearchQuery" placeholder="输入一个问题，例如：退货政策是什么？"></label><button class="btn primary small" type="submit" :disabled="knowledgeSearchBusy || !knowledgeSearchQuery.trim()">{{knowledgeSearchBusy?'检索中…':'测试检索'}}</button></form>
      <div v-if="knowledgeSearchHits.length" class="kb-search-results">
       <article v-for="hit in knowledgeSearchHits" :key="hit.chunk_id" class="kb-search-hit">
-       <div><b>{{hit.document_name}}</b><label class="running">{{Math.round(hit.score*100)}% 匹配</label></div>
+       <div><b>{{hit.document_name}}</b><label class="running">{{Math.round(hit.score*100)}}% 匹配</label></div>
        <small>{{hit.page_number ? '第 '+hit.page_number+' 页' : hit.sheet_name ? '工作表 '+hit.sheet_name : hit.slide_number ? '幻灯片 '+hit.slide_number : '切片 '+(hit.chunk_index+1)}} · 向量排名 {{hit.vector_rank ?? '—'}} · 关键词排名 {{hit.lexical_rank ?? '—'}}</small>
        <p>{{hit.snippet}}</p>
       </article>
