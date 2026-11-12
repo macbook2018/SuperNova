@@ -92,6 +92,14 @@ class Persona(Base):
     description: Mapped[str] = mapped_column(String(500), nullable=False, default="")
     system_prompt: Mapped[str] = mapped_column(Text, nullable=False)
     provider_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    # Historic personas keep their BYOK provider configuration unchanged.
+    model_source: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="byok", server_default="byok"
+    )
+    platform_model_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("platform_models.id", ondelete="RESTRICT", name="fk_personas_platform_model"),
+    )
     model_name: Mapped[str] = mapped_column(String(120), nullable=False)
     temperature: Mapped[float] = mapped_column(Float, nullable=False, default=0.7)
     top_p: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
