@@ -138,7 +138,10 @@ def update_embedding_model(
     if any(value is None for value in updates.values()):
         raise HTTPException(
             status_code=422,
-            detail={"code": "null_not_allowed", "message": "平台 Embedding 模型字段不允许设置为 null"},
+            detail={
+                "code": "null_not_allowed",
+                "message": "平台 Embedding 模型字段不允许设置为 null",
+            },
         )
     for field, value in updates.items():
         setattr(model, field, value)
