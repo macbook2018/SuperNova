@@ -21,4 +21,6 @@ def decrypt_provider_api_key(ciphertext: str) -> str:
     try:
         return _fernet().decrypt(ciphertext.encode("ascii")).decode("utf-8")
     except InvalidToken:
-        raise RuntimeError("Unable to decrypt provider credential; check encryption key rotation") from None
+        raise RuntimeError(
+            "Unable to decrypt provider credential; check encryption key rotation"
+        ) from None
