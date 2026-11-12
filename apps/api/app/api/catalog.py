@@ -9,13 +9,13 @@ from sqlalchemy.orm import Session
 from app.api.deps import CurrentPrincipal, DatabaseSession, Principal
 from app.core.secret_encryption import encrypt_provider_api_key
 from app.models.billing import PlatformModel, PlatformModelPrice, TenantBillingPolicy
-from app.models.knowledge import KnowledgeDocument, PlatformEmbeddingModel
 from app.models.catalog import (
     KnowledgeBase,
     ModelProvider,
     Persona,
     PersonaKnowledgeBase,
 )
+from app.models.knowledge import KnowledgeDocument, PlatformEmbeddingModel
 from app.schemas.catalog import (
     KnowledgeBaseCreate,
     KnowledgeBaseRead,
