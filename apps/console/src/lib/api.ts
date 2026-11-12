@@ -43,9 +43,80 @@ export interface KnowledgeBase {
   id: string
   name: string
   description: string
+  embedding_source: 'platform' | 'byok'
+  platform_embedding_model_id: string | null
+  embedding_provider_id: string | null
+  embedding_model_name: string | null
+  embedding_dimensions: number
+  chunk_size: number
+  chunk_overlap: number
+  retrieval_top_k: number
+  retrieval_score_threshold: number
+  enabled: boolean
   documents_count: number
   created_at: string
   updated_at: string
+}
+
+export interface PlatformEmbeddingModel {
+  id: string
+  code: string
+  display_name: string
+  model_name: string
+  dimensions: number
+}
+
+export interface KnowledgeDocument {
+  id: string
+  knowledge_base_id: string
+  original_filename: string
+  source_type: 'upload' | 'url'
+  source_url: string | null
+  mime_type: string
+  file_size_bytes: number
+  sha256: string | null
+  status: 'queued' | 'processing' | 'ready' | 'failed' | 'deleting' | 'deleted'
+  active_index_version: number
+  chunk_count: number
+  error_code: string | null
+  error_message: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface KnowledgeUsageSummary {
+  document_count: number
+  ready_documents: number
+  queued_documents: number
+  failed_documents: number
+  storage_bytes: number
+  active_chunks: number
+  embedding_tokens: number
+  embedding_requests: number
+  retrieval_requests: number
+}
+
+export interface KnowledgeSearchHit {
+  chunk_id: string
+  document_id: string
+  document_name: string
+  source_type: string
+  source_url: string | null
+  page_number: number | null
+  sheet_name: string | null
+  slide_number: number | null
+  chunk_index: number
+  score: number
+  vector_rank: number | null
+  lexical_rank: number | null
+  snippet: string
+  metadata: Record<string, unknown>
+}
+
+export interface KnowledgeSearchResponse {
+  query: string
+  knowledge_base_id: string
+  hits: KnowledgeSearchHit[]
 }
 
 export interface PlatformModel {
@@ -266,7 +337,7 @@ async function parseResponse<T>(response: Response): Promise<T> {
 
 async function rawRequest<T>(path: string, init: RequestInit, token?: string): Promise<T> {
   const headers = new Headers(init.headers)
-  if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
+  if (init.body && !(init.body instanceof FormData) && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
   if (token) headers.set('Authorization', `Bearer ${token}`)
   const response = await fetch(`${API_BASE_URL}${path}`, { ...init, headers })
   return parseResponse<T>(response)
