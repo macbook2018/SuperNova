@@ -17,8 +17,8 @@ from sqlalchemy import (
     Uuid,
     func,
 )
-from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.ext.compiler import compiles
+from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
 
@@ -125,7 +125,8 @@ class KnowledgeIngestionJob(Base):
             name="ck_knowledge_jobs_type",
         ),
         CheckConstraint(
-            "status IN ('queued', 'running', 'retry_wait', 'succeeded', 'dead_letter', 'cancelled')",
+            "status IN ('queued', 'running', 'retry_wait', 'succeeded', "
+            "'dead_letter', 'cancelled')",
             name="ck_knowledge_jobs_status",
         ),
         Index("ix_knowledge_jobs_claim", "status", "available_at", "created_at"),
