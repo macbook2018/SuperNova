@@ -394,7 +394,10 @@ def _validate_knowledge_embedding_config(
         if embedding_provider_id is not None:
             raise HTTPException(
                 status_code=422,
-                detail={"code": "embedding_source_conflict", "message": "平台 Embedding 不能绑定租户供应商"},
+                detail={
+                    "code": "embedding_source_conflict",
+                    "message": "平台 Embedding 不能绑定租户供应商",
+                },
             )
         if platform_embedding_model_id is not None:
             model = db.get(PlatformEmbeddingModel, platform_embedding_model_id)
@@ -404,7 +407,10 @@ def _validate_knowledge_embedding_config(
         if platform_embedding_model_id is not None:
             raise HTTPException(
                 status_code=422,
-                detail={"code": "embedding_source_conflict", "message": "BYOK Embedding 不能绑定平台模型"},
+                detail={
+                    "code": "embedding_source_conflict",
+                    "message": "BYOK Embedding 不能绑定平台模型",
+                },
             )
         if embedding_provider_id is None or not embedding_model_name:
             raise HTTPException(
@@ -421,7 +427,10 @@ def _validate_knowledge_embedding_config(
                 "所选 Embedding 供应商未启用或未配置 API Key",
             )
         if provider.provider_type == "anthropic":
-            raise _conflict("embedding_provider_not_supported", "当前不支持该供应商的 Embedding 协议")
+            raise _conflict(
+                "embedding_provider_not_supported",
+                "当前不支持该供应商的 Embedding 协议",
+            )
     else:
         raise HTTPException(
             status_code=422,
@@ -500,8 +509,22 @@ def update_knowledge_base(
     updates = payload.model_dump(exclude_unset=True)
     _reject_null_updates(
         updates,
-        nullable_fields={"platform_embedding_model_id", "embedding_provider_id", "embedding_model_name"},
+        nullable_fields={
+            "platform_embedding_model_id",
+            "embedding_provider_id",
+            "embedding_model_name",
+        },
     )
+    target_chunk_size = updates.get("chunk_size", record.chunk_size)
+    target_chunk_overlap = updates.get("chunk_overlap", record.chunk_overlap)
+    if target_chunk_overlap >= target_chunk_size:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "invalid_chunk_settings",
+                "message": "chunk_overlap 必须小于 chunk_size",
+            },
+        )
     target_source = updates.get("embedding_source", record.embedding_source)
     target_platform_model = updates.get(
         "platform_embedding_model_id", record.platform_embedding_model_id
