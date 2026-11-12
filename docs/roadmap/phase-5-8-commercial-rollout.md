@@ -33,23 +33,23 @@ Phase 5D 编号保留，以便保持既有架构文档和计费设计的可追�
 - 文件原件进入 S3 兼容对象存储，数据库保存元数据、校验和、版本和处理状态。
 - 文档状态：queued / processing / ready / failed / deleting；支持重试、重新索引和删除。
 - PostgreSQL 持久化任务队列，Worker 使用行锁与租约领取任务；不能依赖 API 进程内 BackgroundTasks 保证任务可靠性。
-- 文件类型通过扩展名、MIME 和文件签名共同校验；限制文件大小、下载大小、解析耗时和 URL 出站范围。
+- 文件类型通过扩展名与文件签名/文本编码校验；限制文件大小、下载大小、解析内容规模和 URL 出站范围。
 
 ### 6B：解析、切片与 Embedding
 - 解析器统一输出带页码、工作表、幻灯片、标题路径等来源元数据的文本块。
 - 可配置 chunk_size / overlap；保留页码、段落、表格和原始文件位置。
 - 支持平台托管 Embedding 模型和租户 BYOK Embedding 模型；Embedding 模型与 Chat 模型目录分离或通过明确的 model_kind 区分。
 - 首个 pgvector 索引固定为 1536 维；每个知识库固定 Embedding 模型和索引版本，禁止混用不同向量空间。
-- 批量 Embedding、失败重试、模型变更后的全量重建索引。
+- 批量 Embedding、失败重试、同一模型配置下的单文档/全知识库重建索引；首版已有文档时禁止直接切换 Embedding 模型或切片参数，避免向量空间混用。
 - 记录 embedding tokens、文件字节数、chunk 数和处理耗时，先用于运营与 shadow 计量，不执行真实收费。
 
 ### 6C：检索与 RAG
 - pgvector 语义检索 + PostgreSQL 词法检索，使用 Reciprocal Rank Fusion 合并排序。
-- 可配置 top_k、相似度阈值、知识库范围、文档过滤；预留可插拔 reranker。
+- 可配置 top_k、相似度阈值和文档 ID 范围；首版使用向量 + pg_trgm 混合检索与 RRF，元数据过滤和 reranker 留待扩展。
 - 返回可追溯引用：文档 ID、文件名、页码/工作表/幻灯片、chunk、分数和片段。
 - OpenAI 兼容 Chat Completions 自动读取 Persona 关联的知识库，将检索结果作为不可信参考上下文注入；模型不得执行文档中的指令。
 - 响应提供 SuperNova 扩展 citations；流式和非流式响应都要有一致的引用语义。
-- 没有相关资料时不伪造引用；检索服务不可用时按明确配置 fail-open / fail-closed，默认不让无关租户资料泄漏或静默跨租户回退。
+- 没有相关资料时不伪造引用；Persona 关联知识库有文档但尚无 ready 索引时默认 fail-closed；空知识库不阻断聊天。
 
 ### 6D：控制台、运维与质量验收
 - 知识库详情页：上传、URL 导入、文档列表、处理状态、重试、删除、重建索引。
