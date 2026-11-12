@@ -68,6 +68,19 @@ def _auth_response(
     )
 
 
+def _is_email_unique_violation(exc: IntegrityError) -> bool:
+    original = exc.orig
+    constraint_name = getattr(getattr(original, "diag", None), "constraint_name", None)
+    if constraint_name is not None:
+        return constraint_name == "uq_users_email"
+
+    message = str(original).lower()
+    return (
+        "uq_users_email" in message
+        or "unique constraint failed: users.email" in message
+    )
+
+
 def _unauthorized() -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -106,12 +119,14 @@ def register(payload: RegisterRequest, db: DatabaseSession) -> AuthResponse:
     db.add_all([user, tenant, membership, refresh_session])
     try:
         db.commit()
-    except IntegrityError:
+    except IntegrityError as exc:
         db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={"code": "email_already_registered", "message": "该邮箱已注册"},
-        ) from None
+        if _is_email_unique_violation(exc):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"code": "email_already_registered", "message": "该邮箱已注册"},
+            ) from None
+        raise
 
     db.refresh(user)
     db.refresh(tenant)
