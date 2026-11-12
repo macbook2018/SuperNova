@@ -97,13 +97,27 @@ class KnowledgeBase(Base):
     )
     embedding_provider_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
     embedding_model_name: Mapped[str | None] = mapped_column(String(120))
-    embedding_dimensions: Mapped[int] = mapped_column(Integer, nullable=False, default=1536, server_default="1536")
-    chunk_size: Mapped[int] = mapped_column(Integer, nullable=False, default=800, server_default="800")
-    chunk_overlap: Mapped[int] = mapped_column(Integer, nullable=False, default=120, server_default="120")
-    retrieval_top_k: Mapped[int] = mapped_column(Integer, nullable=False, default=5, server_default="5")
-    retrieval_score_threshold: Mapped[float] = mapped_column(Float, nullable=False, default=0.15, server_default="0.15")
-    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
-    active_index_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    embedding_dimensions: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1536, server_default="1536"
+    )
+    chunk_size: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=800, server_default="800"
+    )
+    chunk_overlap: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=120, server_default="120"
+    )
+    retrieval_top_k: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=5, server_default="5"
+    )
+    retrieval_score_threshold: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.15, server_default="0.15"
+    )
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
+    active_index_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
