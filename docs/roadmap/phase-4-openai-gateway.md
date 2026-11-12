@@ -62,6 +62,9 @@ curl "$SUPERNOVA_BASE_URL/v1/chat/completions" \
 
 ## 模型供应商与网络安全
 
+- DeepSeek 官方 OpenAI 兼容 Base URL 使用 `https://api.deepseek.com`，网关请求路径为 `/chat/completions`，不自动插入 `/v1`。
+- 其他 OpenAI 兼容供应商：Base URL 若已包含 `/v1`，网关追加 `/chat/completions`；若未包含 `/v1`，网关追加 `/v1/chat/completions`。
+
 - 当前对话适配器支持 OpenAI Chat Completions 兼容协议；适用于 OpenAI、DeepSeek、Qwen 和其他兼容供应商。
 - 当前阶段不支持 Anthropic 原生 Messages 协议；选择 Anthropic 类型的人格会收到明确的 provider_not_supported 错误，不会伪装为兼容成功。
 - 供应商 API Key 在服务端 Fernet 解密，只通过服务端到服务端 Authorization Header 发送。
