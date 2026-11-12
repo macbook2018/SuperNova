@@ -10,6 +10,21 @@ permissions:
   contents: read
 
 jobs:
+  console:
+    name: Console typecheck and production build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install console dependencies
+        run: npm install --prefix apps/console --no-audit --no-fund
+      - name: Typecheck and build console
+        run: npm run build --prefix apps/console
+
   api:
     name: API lint, tests and migrations
     runs-on: ubuntu-latest
@@ -96,6 +111,15 @@ jobs:
           test "$(docker compose -f deploy/docker/compose.yaml exec -T api id -u)" != "0"
           docker compose -f deploy/docker/compose.yaml exec -T minio silo healthcheck ready
 
+      - name: Verify Chinese console
+        run: |
+          for attempt in $(seq 1 45); do
+            if curl -fsS http://127.0.0.1:5173/ >/dev/null 2>&1; then
+              break
+            fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:5173/ | grep -q "SuperNova"
       - name: Stop stack
         if: always()
         run: docker compose -f deploy/docker/compose.yaml down -v
