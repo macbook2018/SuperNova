@@ -4,9 +4,8 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
 
-from app.api.deps import Principal, get_current_principal
+from app.api.deps import CurrentPrincipal, DatabaseSession, Principal
 from app.core.config import get_settings
 from app.core.security import (
     create_access_token,
@@ -15,7 +14,6 @@ from app.core.security import (
     new_refresh_token,
     verify_password,
 )
-from app.db.session import get_db
 from app.models.identity import RefreshSession, Tenant, TenantMembership, User
 from app.schemas.auth import (
     AuthResponse,
@@ -54,7 +52,12 @@ def _new_refresh_session(
     return token, record
 
 
-def _auth_response(user: User, tenant: Tenant, membership: TenantMembership, refresh: str) -> AuthResponse:
+def _auth_response(
+    user: User,
+    tenant: Tenant,
+    membership: TenantMembership,
+    refresh: str,
+) -> AuthResponse:
     settings = get_settings()
     return AuthResponse(
         access_token=create_access_token(user.id, tenant.id),
@@ -73,7 +76,7 @@ def _unauthorized() -> HTTPException:
 
 
 @router.post("/register", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
-def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> AuthResponse:
+def register(payload: RegisterRequest, db: DatabaseSession) -> AuthResponse:
     email = str(payload.email).lower()
     if db.scalar(select(User.id).where(User.email == email)) is not None:
         raise HTTPException(
@@ -81,8 +84,8 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> AuthRes
             detail={"code": "email_already_registered", "message": "该邮箱已注册"},
         )
 
-    display_name = payload.display_name.strip()
-    tenant_name = (payload.workspace_name or f"{display_name} 的工作空间").strip()
+    display_name = payload.display_name
+    tenant_name = payload.workspace_name or f"{display_name} 的工作空间"
     user = User(
         id=uuid4(),
         email=email,
@@ -117,7 +120,7 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> AuthRes
 
 
 @router.post("/login", response_model=AuthResponse)
-def login(payload: LoginRequest, db: Session = Depends(get_db)) -> AuthResponse:
+def login(payload: LoginRequest, db: DatabaseSession) -> AuthResponse:
     email = str(payload.email).lower()
     user = db.scalar(select(User).where(User.email == email))
     if user is None or not verify_password(payload.password, user.password_hash):
@@ -145,7 +148,7 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> AuthResponse:
 
 
 @router.post("/refresh", response_model=AuthResponse)
-def refresh(payload: RefreshRequest, db: Session = Depends(get_db)) -> AuthResponse:
+def refresh(payload: RefreshRequest, db: DatabaseSession) -> AuthResponse:
     token_hash = hash_secret(payload.refresh_token)
     record = db.scalar(
         select(RefreshSession)
@@ -201,7 +204,7 @@ def refresh(payload: RefreshRequest, db: Session = Depends(get_db)) -> AuthRespo
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
-def logout(payload: LogoutRequest, db: Session = Depends(get_db)) -> Response:
+def logout(payload: LogoutRequest, db: DatabaseSession) -> Response:
     if payload.refresh_token:
         record = db.scalar(
             select(RefreshSession).where(
@@ -215,7 +218,7 @@ def logout(payload: LogoutRequest, db: Session = Depends(get_db)) -> Response:
 
 
 @router.get("/me", response_model=MeResponse)
-def me(principal: Principal = Depends(get_current_principal)) -> MeResponse:
+def me(principal: CurrentPrincipal) -> MeResponse:
     return MeResponse(
         user=UserRead.model_validate(principal.user),
         tenant=TenantRead(
