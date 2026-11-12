@@ -10,6 +10,7 @@ import {
 import {
   API_BASE_URL,
   apiRequest,
+  downloadApiFile,
   clearStoredSession,
   getStoredSession,
   storeSession,
@@ -706,6 +707,16 @@ async function reindexKnowledgeDocument(item: KnowledgeDocument) {
     notify(error instanceof Error ? error.message : '重建索引失败')
   }
 }
+async function downloadKnowledgeDocument(item: KnowledgeDocument) {
+  try {
+    await downloadApiFile(
+      `/knowledge-bases/${selectedId.value}/documents/${item.id}/download`,
+      item.original_filename,
+    )
+  } catch (error) {
+    notify(error instanceof Error ? error.message : '文档下载失败')
+  }
+}
 async function deleteKnowledgeDocument(item: KnowledgeDocument) {
   if (!window.confirm(`确定删除文档「${item.original_filename}」吗？`)) return
   try {
@@ -915,6 +926,7 @@ async function revokeKey(key: ApiKey) {
        <div><b>{{item.original_filename}}</b><small>{{item.source_type==='url'?'网页导入':'文件上传'}} · {{formatBytes(item.file_size_bytes)}} · {{item.chunk_count}} 个切片 · {{new Date(item.created_at).toLocaleString()}}</small><small v-if="item.error_message" class="warning">{{item.error_message}}</small></div>
        <label :class="item.status==='ready'?'running':'paused'">{{item.status==='ready'?'可检索':item.status==='queued'?'排队中':item.status==='processing'?'处理中':item.status==='failed'?'失败':item.status==='deleting'?'删除中':'已删除'}}</label>
        <div class="row-actions">
+        <button v-if="item.status==='ready'" @click="downloadKnowledgeDocument(item)" aria-label="下载文档"><Download :size="15"/></button>
         <button v-if="item.status==='failed' || item.status==='deleting'" @click="retryKnowledgeDocument(item)" aria-label="重试"><Activity :size="15"/></button>
         <button v-if="item.status==='ready'" @click="reindexKnowledgeDocument(item)" aria-label="重建索引"><Zap :size="15"/></button>
         <button v-if="item.status!=='deleted' && item.status!=='deleting'" @click="deleteKnowledgeDocument(item)" aria-label="删除文档"><Trash2 :size="15"/></button>
