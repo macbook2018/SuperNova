@@ -280,7 +280,11 @@ def _handle_failure(job_id: str, error: Exception) -> None:
         if job is None:
             return
         document = db.get(KnowledgeDocument, job.document_id)
-        message = str(error).splitlines()[0][:500] or error.__class__.__name__
+        message = (
+            str(error).splitlines()[0][:500]
+            if isinstance(error, (ValueError, RuntimeError))
+            else error.__class__.__name__
+        )
         final = job.attempts >= job.max_attempts or isinstance(error, ValueError)
         job.status = "dead_letter" if final else "retry_wait"
         job.last_error = message
