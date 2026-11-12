@@ -18,7 +18,12 @@ class RegisterRequest(BaseModel):
     @field_validator("display_name", "workspace_name")
     @classmethod
     def trim_names(cls, value: str | None) -> str | None:
-        return value.strip() if value is not None else None
+        if value is None:
+            return None
+        value = value.strip()
+        if not value:
+            raise ValueError("名称不能为空")
+        return value
 
 
 class LoginRequest(BaseModel):
