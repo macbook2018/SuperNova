@@ -206,6 +206,23 @@ def retrieve_persona_context(
 
     candidates: list[dict] = []
     for knowledge_base in knowledge_bases:
+        document_count = db.scalar(
+            select(func.count(KnowledgeDocument.id)).where(
+                KnowledgeDocument.tenant_id == tenant_id,
+                KnowledgeDocument.knowledge_base_id == knowledge_base.id,
+                KnowledgeDocument.status != "deleted",
+            )
+        )
+        ready_count = db.scalar(
+            select(func.count(KnowledgeDocument.id)).where(
+                KnowledgeDocument.tenant_id == tenant_id,
+                KnowledgeDocument.knowledge_base_id == knowledge_base.id,
+                KnowledgeDocument.status == "ready",
+                KnowledgeDocument.active_index_version > 0,
+            )
+        )
+        if document_count and not ready_count:
+            raise RuntimeError("knowledge_base_documents_not_ready")
         hits = retrieve_knowledge_base(
             db,
             tenant_id=tenant_id,
