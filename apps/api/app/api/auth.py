@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException, Response, status
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 
-from app.api.deps import CurrentPrincipal, DatabaseSession, Principal
+from app.api.deps import CurrentPrincipal, DatabaseSession
 from app.core.config import get_settings
 from app.core.security import (
     create_access_token,
