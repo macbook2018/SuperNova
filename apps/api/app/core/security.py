@@ -1,6 +1,6 @@
+import secrets
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
-import secrets
 from uuid import UUID, uuid4
 
 import jwt
