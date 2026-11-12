@@ -1,7 +1,6 @@
 from collections.abc import Generator
 
 import pytest
-
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
