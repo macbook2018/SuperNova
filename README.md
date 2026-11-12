@@ -58,7 +58,7 @@ make dev-migrate
 | --- | --- |
 | SuperNova 接口 | http://localhost:8001 |
 | 接口文档 | http://localhost:8001/docs |
-| 中文用户后台（交互原型） | http://localhost:5173 |
+| 中文用户后台 | http://localhost:5173 |
 | 存活检查 | http://localhost:8001/health/live |
 | 就绪检查 | http://localhost:8001/health/ready |
 | 对象存储管理控制台 | http://localhost:9001（右上角语言菜单可选“简体中文”） |
@@ -94,9 +94,9 @@ Authorization: Bearer <API_KEY>
 ## 六、开发阶段
 
 0. **工程基础（已完成）**：仓库规范、本地环境、数据库迁移、健康检查、结构化日志和自动化测试。
-1. **中文用户后台原型（已完成交互验收）**：工作台、人格、知识库、API、用量和账户设置页面；当前原型使用演示数据。
-2. **身份与租户管理（当前开发阶段）**：用户注册、登录、JWT 会话、租户上下文、用户级 API Key 及跨租户权限边界。
-3. **人格与模型管理**：人格创建、编辑、删除，模型供应商配置和密钥安全存储。
+1. **中文用户后台原型（已完成）**：工作台、人格、知识库、API、用量和账户设置页面；Phase 3 将页面逐步接入真实 API。
+2. **身份与租户管理（已完成开发）**：用户注册、登录、JWT 会话、租户上下文、用户级 API Key 及跨租户权限边界。
+3. **人格与模型管理（当前开发阶段）**：人格 CRUD、模型供应商配置、凭据加密保存、知识库元数据和人格关联。
 4. **统一接口网关**：兼容 OpenAI 的模型列表、对话接口、流式响应和用量记录。
 5. **知识库**：文档和链接导入、解析、切片、向量化、检索及租户隔离。
 6. **AstrBot 运行管理**：Worker 隔离部署、生命周期、适配器集成、健康监控和故障恢复。
@@ -135,9 +135,10 @@ docs/
 ## 九、当前进度
 
 - Phase 0 工程基础已通过 GitHub Actions 验收。
-- Phase 1 中文用户后台交互原型已完成并通过用户交互验收；当前仍使用演示数据。
-- Phase 2 身份、租户上下文和用户级 API Key 正在开发，完成后将把真实认证和密钥生命周期接入控制台。
-- 人格 CRUD、模型供应商、统一对话网关、知识库处理和 AstrBot Worker 尚未完成。
+- Phase 1 中文用户后台交互原型已完成。
+- Phase 2 用户身份、租户上下文和用户级 API Key 已完成开发，已提供注册、登录、刷新会话和密钥生命周期接口。
+- Phase 3 人格 CRUD、模型供应商加密配置、知识库元数据及多对多关联已完成开发；GitHub Actions 全部通过（27 项测试），待依赖 PR 合并与本机验收。
+- 统一对话网关、模型真实调用、知识库文档处理、Token 计量和 AstrBot Worker 尚未完成。
 
 ## 十、身份与密钥接口
 
@@ -156,6 +157,22 @@ docs/
 | DELETE | /api-keys/{key_id} | 撤销用户级 API Key |
 
 API Key 只绑定 user_id 和 tenant_id，不绑定人格。明文只在创建或轮换时展示一次，数据库只保存 SHA-256 摘要。此阶段尚未开放 API Key 对话认证，后续统一网关阶段完成。
+
+## 十二、人格、供应商与知识库目录接口
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET / POST | /model-providers | 列出或创建当前工作空间的模型供应商 |
+| PATCH / DELETE | /model-providers/{provider_id} | 编辑或删除供应商 |
+| GET / POST | /personas | 列出或创建人格 |
+| GET / PATCH / DELETE | /personas/{persona_id} | 查询、编辑或删除人格 |
+| GET / POST | /knowledge-bases | 列出或创建知识库元数据 |
+| PATCH / DELETE | /knowledge-bases/{knowledge_base_id} | 编辑或删除知识库元数据 |
+
+人格可配置 system_prompt、provider_id、model_name、temperature、top_p、max_tokens 和 knowledge_base_ids。知识库与人格为同租户多对多关联。当前知识库尚未接入文档上传和向量检索，模型供应商尚未执行真实连通性测试或推理调用。
+
+供应商 API Key 使用 Fernet 密文保存，读取接口仅返回密钥末四位提示。生产环境必须配置独立 Fernet key；更换密钥前必须迁移重加密现有供应商凭据。
+
 
 ## 十一、许可证
 

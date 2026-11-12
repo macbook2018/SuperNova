@@ -1,12 +1,14 @@
 from collections.abc import Generator
 
 import pytest
+from app.api.auth import _is_email_unique_violation
 from app.db.base import Base
 from app.db.session import get_db
-from app.main import app
+from app.main import app, asgi_app
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy import create_engine, event
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 
@@ -17,6 +19,12 @@ def client() -> Generator[TestClient, None, None]:
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
+    @event.listens_for(engine, "connect")
+    def _enable_sqlite_foreign_keys(connection, _record) -> None:
+        cursor = connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
     Base.metadata.create_all(engine)
     testing_session = sessionmaker(
         bind=engine,
@@ -30,7 +38,7 @@ def client() -> Generator[TestClient, None, None]:
             yield session
 
     app.dependency_overrides[get_db] = override_get_db
-    with TestClient(app) as test_client:
+    with TestClient(asgi_app, raise_server_exceptions=False) as test_client:
         yield test_client
     app.dependency_overrides.clear()
     Base.metadata.drop_all(engine)
@@ -228,3 +236,47 @@ def test_api_key_expiration_is_validated(client: TestClient) -> None:
         json={"name": "临时密钥", "expires_in_days": 366},
     )
     assert response.status_code == 422
+
+
+def test_email_integrity_error_classifier_only_matches_email_constraint() -> None:
+    email_error = IntegrityError(
+        "INSERT INTO users",
+        {},
+        Exception("UNIQUE constraint failed: users.email"),
+    )
+    other_error = IntegrityError(
+        "INSERT INTO tenants",
+        {},
+        Exception("UNIQUE constraint failed: tenants.name"),
+    )
+
+    assert _is_email_unique_violation(email_error) is True
+    assert _is_email_unique_violation(other_error) is False
+
+
+def test_register_does_not_misreport_other_integrity_errors(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_commit(self: Session) -> None:
+        raise IntegrityError(
+            "INSERT INTO tenants",
+            {},
+            Exception("UNIQUE constraint failed: tenants.name"),
+        )
+
+    monkeypatch.setattr(Session, "commit", fail_commit)
+    response = client.post(
+        "/auth/register",
+        headers={"Origin": "http://localhost:5173"},
+        json={
+            "email": "new-user@example.com",
+            "password": "correct-horse-battery",
+            "display_name": "New User",
+        },
+    )
+
+    assert response.status_code == 500
+    assert response.json()["error"]["code"] == "internal_error"
+    assert response.json()["error"]["request_id"]
+    assert response.headers["access-control-allow-origin"] == "http://localhost:5173"
