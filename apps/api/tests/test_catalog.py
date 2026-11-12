@@ -299,3 +299,31 @@ def test_knowledge_base_delete_removes_associations(client: TestClient) -> None:
     refreshed = client.get(f"/personas/{persona['id']}", headers=headers(auth))
     assert refreshed.status_code == 200
     assert refreshed.json()["knowledge_base_ids"] == []
+
+
+def test_catalog_patch_rejects_null_for_required_fields(client: TestClient) -> None:
+    auth = register(client)
+    provider = create_provider(client, auth)
+    kb = create_knowledge_base(client, auth)
+    persona = create_persona(client, auth, provider["id"])
+
+    provider_null = client.patch(
+        f"/model-providers/{provider['id']}",
+        headers=headers(auth),
+        json={"name": None},
+    )
+    assert provider_null.status_code == 422
+
+    knowledge_null = client.patch(
+        f"/knowledge-bases/{kb['id']}",
+        headers=headers(auth),
+        json={"description": None},
+    )
+    assert knowledge_null.status_code == 422
+
+    persona_null = client.patch(
+        f"/personas/{persona['id']}",
+        headers=headers(auth),
+        json={"name": None},
+    )
+    assert persona_null.status_code == 422
