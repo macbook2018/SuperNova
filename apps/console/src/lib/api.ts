@@ -130,7 +130,7 @@ async function parseResponse<T>(response: Response): Promise<T> {
   if (response.status === 204) return undefined as T
   const payload = await response.json().catch(() => null)
   if (!response.ok) {
-    throw new Error(errorMessage(payload, \`请求失败（HTTP \${response.status}）\`))
+    throw new Error(errorMessage(payload, `请求失败（HTTP ${response.status}）`))
   }
   return payload as T
 }
@@ -138,8 +138,8 @@ async function parseResponse<T>(response: Response): Promise<T> {
 async function rawRequest<T>(path: string, init: RequestInit, token?: string): Promise<T> {
   const headers = new Headers(init.headers)
   if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
-  if (token) headers.set('Authorization', \`Bearer \${token}\`)
-  const response = await fetch(\`\${API_BASE_URL}\${path}\`, { ...init, headers })
+  if (token) headers.set('Authorization', `Bearer ${token}`)
+  const response = await fetch(`${API_BASE_URL}${path}`, { ...init, headers })
   return parseResponse<T>(response)
 }
 
