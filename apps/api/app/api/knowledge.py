@@ -519,3 +519,42 @@ def search_knowledge_base(
         knowledge_base_id=knowledge_base.id,
         hits=hits,
     )
+
+
+@router.post(
+    "/knowledge-bases/{knowledge_base_id}/reindex",
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def reindex_knowledge_base(
+    knowledge_base_id: UUID,
+    principal: CurrentPrincipal,
+    db: DatabaseSession,
+) -> dict:
+    _get_knowledge_base(db, principal.tenant.id, knowledge_base_id)
+    documents = db.scalars(
+        select(KnowledgeDocument).where(
+            KnowledgeDocument.tenant_id == principal.tenant.id,
+            KnowledgeDocument.knowledge_base_id == knowledge_base_id,
+            KnowledgeDocument.status.in_(("ready", "failed")),
+        )
+    ).all()
+    queued = 0
+    for document in documents:
+        next_version = max(1, document.active_index_version + 1)
+        job_type = "reindex" if document.active_index_version > 0 else "ingest"
+        document.pending_index_version = next_version
+        document.status = "ready" if document.active_index_version > 0 else "queued"
+        document.error_code = None
+        document.error_message = None
+        _enqueue_job(
+            db,
+            tenant_id=principal.tenant.id,
+            knowledge_base_id=knowledge_base_id,
+            document_id=document.id,
+            job_type=job_type,
+            index_version=next_version,
+            dedupe_key=f"reindex-all:{document.id}:{next_version}:{uuid4().hex}",
+        )
+        queued += 1
+    db.commit()
+    return {"queued_documents": queued, "status": "queued"}
