@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import PurePosixPath
+from typing import Annotated
 from urllib.parse import quote
 from uuid import UUID, uuid4
 
@@ -128,7 +129,7 @@ def upload_knowledge_document(
     knowledge_base_id: UUID,
     principal: CurrentPrincipal,
     db: DatabaseSession,
-    file: UploadFile = File(...),
+    file: Annotated[UploadFile, File()],
 ) -> KnowledgeDocumentRead:
     knowledge_base = _get_knowledge_base(db, principal.tenant.id, knowledge_base_id)
     settings = get_settings()
@@ -306,11 +307,17 @@ def retry_knowledge_document(
         )
     )
     if document is None:
-        raise HTTPException(status_code=404, detail={"code": "document_not_found", "message": "文档不存在"})
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "document_not_found", "message": "文档不存在"},
+        )
     if document.status not in {"failed", "deleting"}:
         raise HTTPException(
             status_code=409,
-            detail={"code": "document_not_retryable", "message": "只有失败或删除失败的文档可以重试"},
+            detail={
+                "code": "document_not_retryable",
+                "message": "只有失败或删除失败的文档可以重试",
+            },
         )
     retry_delete = document.status == "deleting"
     document.status = "deleting" if retry_delete else "queued"
@@ -323,7 +330,11 @@ def retry_knowledge_document(
         knowledge_base_id=knowledge_base_id,
         document_id=document.id,
         job_type="delete" if retry_delete else "ingest",
-        index_version=document.active_index_version if retry_delete else document.pending_index_version,
+        index_version=(
+            document.active_index_version
+            if retry_delete
+            else document.pending_index_version
+        ),
         dedupe_key=f"retry:{document.id}:{uuid4().hex}",
     )
     db.commit()
@@ -455,7 +466,9 @@ def get_knowledge_usage(
     return KnowledgeUsageSummary(
         document_count=len(documents),
         ready_documents=sum(item.status == "ready" for item in documents),
-        queued_documents=sum(item.status in {"queued", "processing", "deleting"} for item in documents),
+        queued_documents=sum(
+            item.status in {"queued", "processing", "deleting"} for item in documents
+        ),
         failed_documents=sum(item.status == "failed" for item in documents),
         storage_bytes=sum(item.file_size_bytes for item in documents),
         active_chunks=sum(item.chunk_count for item in documents if item.status == "ready"),
