@@ -378,3 +378,28 @@ def test_gateway_request_validation_uses_openai_error_shape(client: TestClient) 
     assert response.status_code == 422
     assert "error" in response.json()
     assert response.json()["error"]["type"] == "invalid_request_error"
+
+
+def test_gateway_rejects_provider_redirect_instead_of_following_it(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner = register(client)
+    provider = create_provider(client, owner)
+    persona = create_persona(client, owner, provider["id"])
+    key = create_api_key(client, owner)
+    FakeClient.calls = []
+    FakeClient.response = FakeResponse({}, status_code=302)
+    monkeypatch.setattr(gateway.httpx, "Client", FakeClient)
+
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {key}"},
+        json={
+            "model": persona["slug"],
+            "messages": [{"role": "user", "content": "你好"}],
+        },
+    )
+
+    assert response.status_code == 502
+    assert response.json()["error"]["code"] == "upstream_error"

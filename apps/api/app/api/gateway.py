@@ -51,7 +51,8 @@ def get_gateway_principal(
 ) -> GatewayPrincipal:
     if not authorization:
         raise _unauthorized()
-    scheme, _, secret = authorization.partition(" ")
+    scheme, _, secret = authorization.strip().partition(" ")
+    secret = secret.strip()
     if scheme.lower() != "bearer" or not secret.startswith("sn_live_"):
         raise _unauthorized()
 
@@ -113,7 +114,14 @@ def _validate_provider_target(base_url: str) -> None:
             status_code=403,
             detail={"code": "provider_url_not_allowed", "message": "模型供应商必须使用 HTTPS"},
         )
-    if parsed.port not in (None, 443) and not (development and local_target):
+    try:
+        port = parsed.port
+    except ValueError:
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "provider_url_not_allowed", "message": "模型供应商端口格式无效"},
+        ) from None
+    if port not in (None, 443) and not (development and local_target):
         raise HTTPException(
             status_code=403,
             detail={
@@ -440,7 +448,7 @@ def create_chat_completion(
             raise _client_error(502, "provider_connection_error", "无法连接模型供应商") from None
 
         latency_ms = int((time.monotonic() - started) * 1000)
-        if upstream.status_code >= 400:
+        if not 200 <= upstream.status_code < 300:
             _record_usage(
                 db,
                 request_id=request_id,
