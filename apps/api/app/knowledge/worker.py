@@ -278,7 +278,6 @@ def _process_ingest(
 
 
 def _handle_failure(job_id: str, error: Exception) -> None:
-    settings = get_settings()
     with SessionLocal() as db:
         job = db.get(KnowledgeIngestionJob, job_id)
         if job is None:
