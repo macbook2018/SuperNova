@@ -10,6 +10,7 @@ from app.models import (  # noqa: F401
     RefreshSession,
     Tenant,
     TenantMembership,
+    UsageRecord,
     User,
 )
 from sqlalchemy import create_engine, pool
