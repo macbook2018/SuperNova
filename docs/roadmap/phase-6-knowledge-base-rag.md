@@ -2,7 +2,7 @@
 
 - 开发分支：`feat/phase-6-knowledge-base-rag`
 - 基线：Phase 5C（`feat/phase-5c-idempotent-metering-settlement`）
-- 状态：规划与架构基线已建立，功能开发按本文件分批验收
+- 状态：6A/6B/6C 基础代码已开始落地；最终状态以 CI 和端到端验收为准
 - 商业化边界：不接支付、不扣余额、不产生真实 Embedding 费用
 
 ## 1. 产品目标
