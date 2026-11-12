@@ -185,6 +185,24 @@ def _existing_decision(
     raise HTTPException(status_code=409, detail={"code": code, "message": message})
 
 
+def find_existing_gateway_request(
+    db: Session,
+    *,
+    tenant_id: UUID,
+    idempotency_key: str,
+    request_hash: str,
+) -> ReservationDecision | None:
+    reservation = db.scalar(
+        select(BillingReservation).where(
+            BillingReservation.tenant_id == tenant_id,
+            BillingReservation.event_key == idempotency_key,
+        )
+    )
+    if reservation is None:
+        return None
+    return _existing_decision(reservation, request_hash)
+
+
 def reserve_gateway_request(
     db: Session,
     *,
