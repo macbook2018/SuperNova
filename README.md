@@ -58,6 +58,7 @@ make dev-migrate
 | --- | --- |
 | SuperNova 接口 | http://localhost:8001 |
 | 接口文档 | http://localhost:8001/docs |
+| 中文用户后台（交互原型） | http://localhost:5173 |
 | 存活检查 | http://localhost:8001/health/live |
 | 就绪检查 | http://localhost:8001/health/ready |
 | 对象存储管理控制台 | http://localhost:9001（右上角语言菜单可选“简体中文”） |
@@ -66,6 +67,7 @@ make dev-migrate
 
 ```bash
 make dev-logs       # 查看服务日志
+make console-build   # 构建中文用户后台
 make dev-down       # 停止开发环境
 make api-install    # 安装接口服务开发依赖
 make api-lint       # 执行代码规范检查
@@ -106,6 +108,7 @@ Authorization: Bearer <API_KEY>
 ```text
 apps/
   api/                 服务端控制平面与统一接口网关
+  console/             Vue 3 + TypeScript 中文用户后台
   console/             中文用户控制台（后续阶段）
   worker-manager/      AstrBot 运行实例管理（后续阶段）
 packages/
@@ -131,7 +134,7 @@ docs/
 
 ## 九、当前进度
 
-工程基础阶段已通过 GitHub Actions 自动验收。下一阶段进入用户身份、租户上下文和用户级接口密钥开发。中文用户控制台将在后续前端阶段实现；当前仓库尚未包含可供用户登录的完整后台。
+工程基础阶段已通过 GitHub Actions 自动验收。下一阶段进入用户身份、租户上下文和用户级接口密钥开发。中文用户控制台交互原型已加入 apps/console，可通过 http://localhost:5173 预览。当前为演示数据，尚未接入登录、数据库和真实业务 API。
 
 ## 十、许可证
 
