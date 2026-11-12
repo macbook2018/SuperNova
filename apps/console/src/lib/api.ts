@@ -118,6 +118,40 @@ function errorMessage(payload: unknown, fallback: string): string {
     if (detail && typeof detail === 'object' && 'message' in detail) {
       return String((detail as Record<string, unknown>).message)
     }
+    if (Array.isArray(detail)) {
+      const fieldNames: Record<string, string> = {
+        name: '人格名称',
+        slug: '调用标识',
+        description: '人格简介',
+        system_prompt: '系统提示词',
+        provider_id: '模型供应商',
+        model_name: '模型名称',
+        temperature: 'Temperature',
+        top_p: 'Top P',
+        max_tokens: '最大输出 Token',
+        knowledge_base_ids: '关联知识库',
+      }
+      const issues = detail.map((item) => {
+        if (!item || typeof item !== 'object') return ''
+        const issue = item as Record<string, unknown>
+        const location = Array.isArray(issue.loc) ? issue.loc : []
+        const field = String(location[location.length - 1] ?? '')
+        const label = fieldNames[field] ?? field
+        const message = typeof issue.msg === 'string' ? issue.msg : '参数格式不正确'
+        if (message.includes('String should match pattern')) {
+          return `${label}只能使用小写英文字母、数字和连字符`
+        }
+        if (message === 'Field required') return `${label}为必填项`
+        if (message.includes('Input should be less than or equal to')) {
+          return `${label}超过允许的最大值`
+        }
+        if (message.includes('Input should be greater than or equal to')) {
+          return `${label}低于允许的最小值`
+        }
+        return `${label}：${message}`
+      }).filter(Boolean)
+      if (issues.length) return `请求参数不符合要求：${issues.join('；')}`
+    }
     if (typeof detail === 'string') return detail
     if (value.error && typeof value.error === 'object') {
       const error = value.error as Record<string, unknown>

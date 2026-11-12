@@ -228,6 +228,9 @@ const personaForm = ref({
   knowledge_base_ids: [] as string[],
   enabled: true,
 })
+function newPersonaSlug(): string {
+  return `persona-${crypto.randomUUID().slice(0, 8)}`
+}
 function editPersona(persona?: PersonaView) {
   editingId.value = persona?.id ?? null
   personaForm.value = persona
@@ -246,7 +249,7 @@ function editPersona(persona?: PersonaView) {
       }
     : {
         name: '',
-        slug: '',
+        slug: newPersonaSlug(),
         description: '',
         system_prompt: '',
         provider_id: providers.value[0]?.id ?? '',
@@ -263,6 +266,17 @@ async function savePersona() {
   if (!personaForm.value.name.trim() || !personaForm.value.slug.trim() ||
       !personaForm.value.system_prompt.trim() || !personaForm.value.model_name.trim()) {
     notify('请填写人格名称、调用标识、模型名称和系统提示词')
+    return
+  }
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(personaForm.value.slug.trim())) {
+    notify('调用标识只能使用小写英文字母、数字和连字符')
+    return
+  }
+  if (personaForm.value.temperature < 0 || personaForm.value.temperature > 2 ||
+      personaForm.value.top_p < 0 || personaForm.value.top_p > 1 ||
+      !Number.isInteger(personaForm.value.max_tokens) ||
+      personaForm.value.max_tokens < 1 || personaForm.value.max_tokens > 65536) {
+    notify('模型参数超出允许范围，请检查 Temperature、Top P 和最大输出 Token')
     return
   }
   const payload = {
