@@ -72,7 +72,7 @@ def create_provider(client: TestClient, tokens: dict) -> dict:
         json={
             "name": "DeepSeek",
             "provider_type": "deepseek",
-            "base_url": "https://api.deepseek.com/v1",
+            "base_url": "https://api.deepseek.com",
             "api_key": "sk-provider-secret-1234",
         },
     )
@@ -96,7 +96,7 @@ def create_persona(
             "description": "测试人格",
             "system_prompt": "你是一名耐心、专业的客服。",
             "provider_id": provider_id,
-            "model_name": "deepseek-chat",
+            "model_name": "deepseek-flash",
             "temperature": 0.4,
             "top_p": 0.9,
             "max_tokens": max_tokens,
@@ -195,7 +195,7 @@ def test_chat_completion_routes_persona_and_records_actual_usage(
             "id": "chatcmpl-test",
             "object": "chat.completion",
             "created": 1800000000,
-            "model": "deepseek-chat",
+            "model": "deepseek-flash",
             "choices": [
                 {
                     "index": 0,
@@ -222,9 +222,9 @@ def test_chat_completion_routes_persona_and_records_actual_usage(
     assert response.json()["model"] == "customer-support"
     assert response.json()["usage"]["total_tokens"] == 34
     call = FakeClient.calls[0]
-    assert call["url"] == "https://api.deepseek.com/v1/chat/completions"
+    assert call["url"] == "https://api.deepseek.com/chat/completions"
     assert call["headers"]["Authorization"] == "Bearer sk-provider-secret-1234"
-    assert call["json"]["model"] == "deepseek-chat"
+    assert call["json"]["model"] == "deepseek-flash"
     assert call["json"]["max_tokens"] == 1024
     assert call["json"]["messages"][0] == {
         "role": "system",
@@ -258,7 +258,7 @@ def test_streaming_chat_completion_records_usage_and_openai_done_marker(
                 "id": "chatcmpl-stream",
                 "object": "chat.completion.chunk",
                 "created": 1800000000,
-                "model": "deepseek-chat",
+                "model": "deepseek-flash",
                 "choices": [{"index": 0, "delta": {"content": "你好"}, "finish_reason": None}],
             },
             ensure_ascii=False,
@@ -268,7 +268,7 @@ def test_streaming_chat_completion_records_usage_and_openai_done_marker(
                 "id": "chatcmpl-stream",
                 "object": "chat.completion.chunk",
                 "created": 1800000000,
-                "model": "deepseek-chat",
+                "model": "deepseek-flash",
                 "choices": [],
                 "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
             },
@@ -299,6 +299,25 @@ def test_streaming_chat_completion_records_usage_and_openai_done_marker(
     summary = client.get("/usage/summary", headers=jwt_headers(owner))
     assert summary.json()["all_time"]["requests"] == 1
     assert summary.json()["all_time"]["total_tokens"] == 7
+
+
+def test_chat_completions_url_uses_provider_specific_base_url_rules() -> None:
+    assert (
+        gateway._chat_completions_url("https://api.deepseek.com", "deepseek")
+        == "https://api.deepseek.com/chat/completions"
+    )
+    assert (
+        gateway._chat_completions_url("https://api.deepseek.com/v1", "deepseek")
+        == "https://api.deepseek.com/v1/chat/completions"
+    )
+    assert (
+        gateway._chat_completions_url("https://api.example.com", "openai_compatible")
+        == "https://api.example.com/v1/chat/completions"
+    )
+    assert (
+        gateway._chat_completions_url("https://api.example.com/v1", "openai_compatible")
+        == "https://api.example.com/v1/chat/completions"
+    )
 
 
 def test_gateway_rejects_missing_or_revoked_api_key(client: TestClient) -> None:
