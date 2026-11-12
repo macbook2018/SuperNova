@@ -18,7 +18,6 @@ def validate_public_service_url(url: str) -> None:
         not host
         or parsed.username
         or parsed.password
-        or parsed.query
         or parsed.fragment
     ):
         raise ValueError("service_url_invalid")
