@@ -7,7 +7,7 @@ from sqlalchemy import select
 from app.api.deps import CurrentPrincipal, DatabaseSession, Principal
 from app.core.security import hash_secret, new_api_key
 from app.models.identity import ApiKey
-from app.schemas.api_key import ApiKeyCreateRequest, ApiKeyCreated, ApiKeyRead
+from app.schemas.api_key import ApiKeyCreated, ApiKeyCreateRequest, ApiKeyRead
 
 router = APIRouter(prefix="/api-keys", tags=["用户级 API 密钥"])
 
