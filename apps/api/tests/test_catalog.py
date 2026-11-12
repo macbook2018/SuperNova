@@ -327,3 +327,20 @@ def test_catalog_patch_rejects_null_for_required_fields(client: TestClient) -> N
         json={"name": None},
     )
     assert persona_null.status_code == 422
+
+
+def test_persona_slug_is_trimmed_before_pattern_validation(client: TestClient) -> None:
+    auth = register(client)
+    response = client.post(
+        "/personas",
+        headers=headers(auth),
+        json={
+            "name": "空格测试人格",
+            "slug": "  customer-support-2  ",
+            "system_prompt": "你是一个测试人格。",
+            "model_name": "deepseek-chat",
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["slug"] == "customer-support-2"

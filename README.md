@@ -79,9 +79,10 @@ make dev-migrate    # 执行数据库迁移
 
 ## 五、统一接口约定
 
-- GET /v1/models：返回当前接口密钥所属用户可用的人格列表。
-- POST /v1/chat/completions：根据请求中的 model 选择人格并执行对话。
+- GET /v1/models：返回当前 API Key 所属用户可调用的人格列表，模型 ID 为人格 slug。
+- POST /v1/chat/completions：根据请求中的 model 人格 slug 路由到人格配置的模型供应商。
 - stream=true：启用 SSE 流式响应，结束标记为 data: [DONE]。
+- GET /usage/summary 与 GET /usage/records：登录用户查看真实 Token 用量与调用记录。
 
 认证使用标准请求头：
 
@@ -97,7 +98,7 @@ Authorization: Bearer <API_KEY>
 1. **中文用户后台原型（已完成）**：工作台、人格、知识库、API、用量和账户设置页面；Phase 3 将页面逐步接入真实 API。
 2. **身份与租户管理（已完成开发）**：用户注册、登录、JWT 会话、租户上下文、用户级 API Key 及跨租户权限边界。
 3. **人格与模型管理（当前开发阶段）**：人格 CRUD、模型供应商配置、凭据加密保存、知识库元数据和人格关联。
-4. **统一接口网关**：兼容 OpenAI 的模型列表、对话接口、流式响应和用量记录。
+4. **统一接口网关（当前阶段）**：用户级 API Key 认证、人格路由、OpenAI 兼容模型列表与对话接口、SSE 流式响应和 Token 用量记录。
 5. **知识库**：文档和链接导入、解析、切片、向量化、检索及租户隔离。
 6. **AstrBot 运行管理**：Worker 隔离部署、生命周期、适配器集成、健康监控和故障恢复。
 7. **渠道与运营**：微信渠道、会话管理、用量限制、套餐计费、管理后台和生产环境加固。
@@ -137,8 +138,9 @@ docs/
 - Phase 0 工程基础已通过 GitHub Actions 验收。
 - Phase 1 中文用户后台交互原型已完成。
 - Phase 2 用户身份、租户上下文和用户级 API Key 已完成开发，已提供注册、登录、刷新会话和密钥生命周期接口。
-- Phase 3 人格 CRUD、模型供应商加密配置、知识库元数据及多对多关联已完成开发；GitHub Actions 全部通过（27 项测试），待依赖 PR 合并与本机验收。
-- 统一对话网关、模型真实调用、知识库文档处理、Token 计量和 AstrBot Worker 尚未完成。
+- Phase 3 人格 CRUD、模型供应商加密配置、知识库元数据及多对多关联已完成开发；等待依赖 PR 合并。
+- Phase 4 正在实现统一 OpenAI 兼容网关、真实模型调用、SSE 流式响应和 Token 用量记录；完成自动化验收后再进行本机真实供应商联调。
+- 知识库文档处理、金额计费/充值、套餐额度和 AstrBot Worker 尚未完成。
 
 ## 十、身份与密钥接口
 
@@ -156,7 +158,7 @@ docs/
 | POST | /api-keys/{key_id}/rotate | 轮换用户级 API Key |
 | DELETE | /api-keys/{key_id} | 撤销用户级 API Key |
 
-API Key 只绑定 user_id 和 tenant_id，不绑定人格。明文只在创建或轮换时展示一次，数据库只保存 SHA-256 摘要。此阶段尚未开放 API Key 对话认证，后续统一网关阶段完成。
+API Key 只绑定 user_id 和 tenant_id，不绑定人格。明文只在创建或轮换时展示一次，数据库只保存 SHA-256 摘要。统一网关通过 Bearer API Key 认证；同一用户级 Key 可调用当前工作空间内多个已启用人格。
 
 ## 十二、人格、供应商与知识库目录接口
 

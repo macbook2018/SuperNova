@@ -131,6 +131,11 @@ class PersonaCreate(BaseModel):
     enabled: bool = True
     knowledge_base_ids: list[UUID] = Field(default_factory=list)
 
+    @field_validator("slug", mode="before")
+    @classmethod
+    def normalize_slug(cls, value: str) -> str:
+        return value.strip() if isinstance(value, str) else value
+
     @field_validator("name", "slug", "system_prompt", "model_name")
     @classmethod
     def trim_required(cls, value: str) -> str:
@@ -159,6 +164,11 @@ class PersonaUpdate(BaseModel):
     max_tokens: int | None = Field(default=None, ge=1, le=65536)
     enabled: bool | None = None
     knowledge_base_ids: list[UUID] | None = None
+
+    @field_validator("slug", mode="before")
+    @classmethod
+    def normalize_slug(cls, value: str | None) -> str | None:
+        return value.strip() if isinstance(value, str) else value
 
     @field_validator("name", "slug", "system_prompt", "model_name")
     @classmethod

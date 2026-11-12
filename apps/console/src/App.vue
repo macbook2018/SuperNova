@@ -21,6 +21,8 @@ import {
   type Persona,
   type Tenant,
   type User,
+  type UsageRecord,
+  type UsageSummary,
 } from './lib/api'
 
 type Page = 'overview' | 'personas' | 'providers' | 'knowledge' | 'knowledgeDetail' | 'api' | 'usage' | 'settings'
@@ -56,8 +58,8 @@ const descriptions: Record<Page, string> = {
   providers: '集中管理模型供应商、兼容接口地址和加密保存的 API Key。',
   knowledge: '集中管理知识库资料空间，并关联到一个或多个 AI 人格。',
   knowledgeDetail: '管理知识库基本信息及其关联人格。',
-  api: '管理用户级 API Key；统一对话网关将在下一阶段开放。',
-  usage: 'Token 计量和账单将在统一 API 网关阶段接入。',
+  api: '使用一个用户级 API Key，通过 OpenAI 兼容接口调用多个独立人格。',
+  usage: '查看真实模型调用次数、输入输出 Token 和响应时间；金额计费将在定价规则接入后开放。',
   settings: '查看账户资料与安全设置。',
 }
 const nav = [
@@ -87,6 +89,9 @@ const personas = ref<PersonaView[]>([])
 const providers = ref<ModelProvider[]>([])
 const kbs = ref<KnowledgeBaseView[]>([])
 const apiKeys = ref<ApiKey[]>([])
+const usageSummary = ref<UsageSummary | null>(null)
+const usageRecords = ref<UsageRecord[]>([])
+const usageLoading = ref(false)
 const selectedId = ref('')
 const selectedKb = computed<KnowledgeBaseView>(() =>
   kbs.value.find(k => k.id === selectedId.value) ??
@@ -144,12 +149,29 @@ async function loadWorkspace() {
   apiKeys.value = keyData
   if (!kbs.value.some(kb => kb.id === selectedId.value)) selectedId.value = kbs.value[0]?.id ?? ''
 }
+async function loadUsage(showError = false) {
+  if (!authenticated.value) return
+  usageLoading.value = true
+  try {
+    const [summary, records] = await Promise.all([
+      request<UsageSummary>('/usage/summary'),
+      request<UsageRecord[]>('/usage/records?limit=10'),
+    ])
+    usageSummary.value = summary
+    usageRecords.value = records
+  } catch (error) {
+    if (showError) notify(error instanceof Error ? error.message : '读取 Token 用量失败')
+  } finally {
+    usageLoading.value = false
+  }
+}
 async function loadIdentity() {
   const identity = await request<{ user: User; tenant: Tenant }>('/auth/me')
   currentUser.value = identity.user
   currentTenant.value = identity.tenant
   authenticated.value = true
   await loadWorkspace()
+  await loadUsage()
 }
 onMounted(async () => {
   if (!getStoredSession()) return
@@ -211,6 +233,7 @@ function go(next: Page) {
   page.value = next
   mobileOpen.value = false
   query.value = ''
+  if (next === 'usage' || next === 'overview') void loadUsage()
 }
 
 const personaModal = ref(false)
@@ -281,6 +304,11 @@ async function savePersona() {
   }
   const payload = {
     ...personaForm.value,
+    name: personaForm.value.name.trim(),
+    slug: personaForm.value.slug.trim(),
+    description: personaForm.value.description.trim(),
+    system_prompt: personaForm.value.system_prompt.trim(),
+    model_name: personaForm.value.model_name.trim(),
     provider_id: personaForm.value.provider_id || null,
   }
   try {
@@ -536,10 +564,10 @@ async function revokeKey(key: ApiKey) {
      <article><div><span class="ico green"><Wallet :size="18"/></span>剩余额度<button @click="go('usage')"><MoreHorizontal :size="17"/></button></div><strong>—</strong><footer><span>计费模块尚未接入</span><a @click="go('usage')">了解进度 →</a></footer></article>
      <article><div><span class="ico amber"><Database :size="18"/></span>知识库文档<button @click="go('knowledge')"><MoreHorizontal :size="17"/></button></div><strong>{{totalDocs}}<small>份</small></strong><footer><span>{{kbs.length}} 个知识库</span><a @click="go('knowledge')">管理知识库 →</a></footer></article>
     </section>
-    <section class="dashboard"><article class="panel chart-panel"><div class="panel-title"><div><b>Token 使用趋势</b><small>模型调用和 Token 计量将在统一 API 网关阶段接入。</small></div><label class="paused">待接入</label></div><div class="empty"><Activity :size="28"/><b>暂无真实用量数据</b><small>当前阶段不展示模拟 Token 数值，避免与实际账单混淆。</small></div></article>
+    <section class="dashboard"><article class="panel chart-panel"><div class="panel-title"><div><b>本月 Token 用量</b><small>根据模型供应商返回的实际 usage 字段统计。</small></div><label class="running">真实计量</label></div><div class="usage-mini-grid"><div><small>输入 Token</small><b>{{usageSummary?.current_month.prompt_tokens.toLocaleString() ?? '—'}}</b></div><div><small>输出 Token</small><b>{{usageSummary?.current_month.completion_tokens.toLocaleString() ?? '—'}}</b></div><div><small>总 Token</small><b>{{usageSummary?.current_month.total_tokens.toLocaleString() ?? '—'}}</b></div></div><small class="usage-footnote">{{usageSummary?.current_month.unmetered_requests ?? 0}} 次请求暂未获得供应商 usage 统计，不计入 Token 总量。</small></article>
      <article class="panel resource"><div class="panel-title"><div><b>资源概览</b><small>当前工作空间资源使用情况</small></div><Gauge :size="18"/></div><div class="resource-line"><div><span>人格启用状态</span><b>{{personas.filter(p=>p.enabled).length}}/{{personas.length}}</b></div><i><span :style="{width:personaRatio+'%'}"></span></i><small>已启用的人格</small></div><div class="resource-line"><div><span>模型供应商</span><b>{{providers.filter(p=>p.enabled).length}}/{{providers.length}}</b></div><i><span class="violet" :style="{width:(providers.length?providers.filter(p=>p.enabled).length/providers.length*100:0)+'%'}"></span></i><small>已启用的模型供应商</small></div><div class="secure-note"><ShieldCheck :size="16"/>数据按用户空间隔离，其他用户无法访问你的资源。</div></article></section>
     <section class="panel"><div class="panel-title"><div><b>最近使用的人格</b><small>快速进入人格配置</small></div><a @click="go('personas')">查看全部 →</a></div><div v-if="personas.length" class="persona-shortcuts"><button v-for="p in personas" :key="p.id" @click="editPersona(p)"><span class="persona-icon" :class="p.color"><Bot :size="18"/></span><span><b>{{p.name}}</b><small>{{p.model_name}}</small></span><i :class="{off:!p.enabled}"></i><ChevronRight :size="15"/></button></div><div v-else class="empty"><b>尚未创建人格</b><small>创建人格并选择模型供应商，即可保存专属 AI 助手配置。</small><button class="btn primary" @click="editPersona()"><Plus :size="15"/>新建人格</button></div></section>
-    <section class="panel"><div class="panel-title"><div><b>最近调用</b><small>真实调用记录将在统一 API 网关阶段接入</small></div><a @click="go('usage')">用量说明 →</a></div><div class="empty"><Activity :size="26"/><b>暂时没有真实调用记录</b><small>人格和模型配置已持久化；对话网关将在 Phase 4 开放。</small></div></section>
+    <section class="panel"><div class="panel-title"><div><b>最近调用</b><small>最近 10 条模型网关请求</small></div><a @click="go('usage')">查看全部 →</a></div><div v-if="usageRecords.length" class="usage-list"><div v-for="record in usageRecords.slice(0,5)" :key="record.id" class="usage-row"><div><b>{{record.persona_slug}}</b><small>{{new Date(record.created_at).toLocaleString()}}</small></div><span>{{record.total_tokens?.toLocaleString() ?? '未统计'}} Token</span><label :class="record.status==='succeeded'?'running':'paused'">{{record.status==='succeeded'?'成功':record.status==='cancelled'?'已取消':'失败'}}</label></div></div><div v-else class="empty"><Activity :size="26"/><b>暂时没有调用记录</b><small>创建 API Key 并通过 /v1/chat/completions 发起一次请求后，这里会显示真实用量。</small></div></section>
    </template>
 
    <template v-else-if="page==='personas'">
@@ -576,22 +604,24 @@ async function revokeKey(key: ApiKey) {
 
 
    <template v-else-if="page==='api'">
-    <section class="api-notice"><ShieldCheck :size="21"/><div><b>一个用户级密钥，未来调用多个独立人格</b><p>密钥已接入真实账户与数据库。OpenAI 兼容对话网关将在 Phase 4 开放，当前尚不能使用此地址发起模型请求。</p></div></section>
+    <section class="api-notice"><ShieldCheck :size="21"/><div><b>一个用户级密钥，调用多个独立人格</b><p>OpenAI 兼容网关已开放。所有人格共用当前用户的 API Key，通过请求中的 model 字段选择人格。</p></div></section>
     <section class="api-grid"><div class="api-main">
      <article class="panel"><div class="panel-title"><div><b>我的 API Key</b><small>密钥明文仅在创建或轮换时展示一次。</small></div><button class="btn primary small" @click="keyModal=true"><Plus :size="14"/>创建密钥</button></div>
       <div v-if="apiKeys.length" class="key-list">
        <div v-for="key in apiKeys" :key="key.id" class="key-item"><div><b>{{key.name}}</b><small><code>{{key.key_prefix}}••••</code> · {{new Date(key.created_at).toLocaleString()}}</small><label :class="key.status==='active'?'running':'paused'">{{key.status==='active'?'有效':key.status==='revoked'?'已撤销':'已过期'}}</label></div><div class="row-actions"><button @click="rotateKey(key)" :disabled="key.status!=='active'" aria-label="轮换密钥"><Zap :size="15"/></button><button @click="revokeKey(key)" :disabled="key.status!=='active'" aria-label="撤销密钥"><Trash2 :size="15"/></button></div></div>
       </div>
-      <div v-else class="empty"><KeyRound :size="28"/><b>还没有 API Key</b><small>创建一个用户级密钥，后续可用于调用该工作空间中的任意人格。</small><button class="btn primary" @click="keyModal=true"><Plus :size="15"/>创建 API Key</button></div>
+      <div v-else class="empty"><KeyRound :size="28"/><b>还没有 API Key</b><small>创建一个用户级密钥，可调用当前工作空间中已启用且配置好模型供应商的人格。</small><button class="btn primary" @click="keyModal=true"><Plus :size="15"/>创建 API Key</button></div>
      </article>
-     <article class="panel"><div class="panel-title"><div><b>接口连接信息</b><small>统一对话网关将在 Phase 4 提供 OpenAI 兼容接口。</small></div><label class="paused">待开放</label></div><div class="endpoint"><div><small>预定 Base URL</small><code>{{baseUrl}}</code></div><button @click="copy(baseUrl,'Base URL 已复制')"><Copy :size="15"/></button></div><div class="endpoint"><div><small>预定 API 路径</small><code>/chat/completions</code></div><button @click="copy('/chat/completions')"><Copy :size="15"/></button></div><div class="endpoint"><div><small>认证方式</small><code>Authorization: Bearer YOUR_USER_API_KEY</code></div><button @click="copy('Authorization: Bearer YOUR_USER_API_KEY')"><Copy :size="15"/></button></div><p class="warning"><AlertCircle :size="14"/>当前只完成 API Key 生命周期管理；真实请求路由、流式响应和 Token 计量尚未上线。</p></article>
-     <article class="panel"><div class="panel-title"><div><b>调用示例（预览）</b><small>Phase 4 上线后可使用此请求结构。</small></div><a @click="copy(example,'示例代码已复制')"><Copy :size="14"/>复制代码</a></div><pre>{{example}}</pre></article>
-    </div><aside class="api-side"><article class="panel"><div class="panel-title"><div><b>已启用的人格</b><small>可在统一网关上线后通过 model 选择</small></div></div><div v-for="persona in personas.filter(p=>p.enabled)" :key="persona.id" class="model-row"><span class="persona-icon" :class="persona.color"><Bot :size="15"/></span><div><b>{{persona.name}}</b><small>{{persona.slug}}</small></div><i></i></div><div v-if="!personas.some(p=>p.enabled)" class="empty"><small>暂无已启用的人格</small></div><a @click="go('personas')">管理人格 →</a></article><article class="panel tips"><LifeBuoy :size="18"/><b>密钥安全提示</b><ul><li>不要将 API Key 提交到代码仓库。</li><li>生产环境使用 HTTPS 和独立密钥管理。</li><li>轮换后旧密钥立即失效。</li><li>密钥明文无法再次查看，请妥善保存。</li></ul></article></aside></section>
+     <article class="panel"><div class="panel-title"><div><b>接口连接信息</b><small>兼容 OpenAI Chat Completions API。</small></div><label class="running">已开放</label></div><div class="endpoint"><div><small>Base URL</small><code>{{baseUrl}}</code></div><button @click="copy(baseUrl,'Base URL 已复制')"><Copy :size="15"/></button></div><div class="endpoint"><div><small>模型列表</small><code>GET /models</code></div><button @click="copy('/models')"><Copy :size="15"/></button></div><div class="endpoint"><div><small>对话补全</small><code>POST /chat/completions</code></div><button @click="copy('/chat/completions')"><Copy :size="15"/></button></div><div class="endpoint"><div><small>认证方式</small><code>Authorization: Bearer YOUR_USER_API_KEY</code></div><button @click="copy('Authorization: Bearer YOUR_USER_API_KEY')"><Copy :size="15"/></button></div><p class="warning"><AlertCircle :size="14"/>当前支持标准消息对话与 SSE 流式响应。Token 按供应商返回的 usage 记录；尚未配置套餐价格和余额扣费。</p></article>
+     <article class="panel"><div class="panel-title"><div><b>调用示例</b><small>Model 填写人格调用标识，不是供应商模型名称。</small></div><a @click="copy(example,'示例代码已复制')"><Copy :size="14"/>复制代码</a></div><pre>{{example}}</pre></article>
+    </div><aside class="api-side"><article class="panel"><div class="panel-title"><div><b>已启用的人格</b><small>使用同一把用户级 API Key 调用</small></div></div><div v-for="persona in personas.filter(p=>p.enabled)" :key="persona.id" class="model-row"><span class="persona-icon" :class="persona.color"><Bot :size="15"/></span><div><b>{{persona.name}}</b><small>{{persona.slug}}</small></div><i></i></div><div v-if="!personas.some(p=>p.enabled)" class="empty"><small>暂无已启用的人格</small></div><a @click="go('personas')">管理人格 →</a></article><article class="panel tips"><LifeBuoy :size="18"/><b>密钥安全提示</b><ul><li>不要将 API Key 提交到代码仓库。</li><li>生产环境使用 HTTPS 和独立密钥管理。</li><li>轮换后旧密钥立即失效。</li><li>密钥明文无法再次查看，请妥善保存。</li></ul></article></aside></section>
    </template>
 
 
    <template v-else-if="page==='usage'">
-    <section class="panel empty"><Activity :size="30"/><b>真实用量计量尚未接入</b><small>统一 API 网关将在 Phase 4 记录输入 Token、输出 Token、模型调用次数和响应时间。</small><button class="btn secondary" @click="go('api')">查看 API 接入规划</button></section>
+    <section class="metric-strip"><div><small>本月请求次数</small><b>{{usageSummary?.current_month.requests.toLocaleString() ?? '—'}}</b></div><div><small>输入 Token</small><b>{{usageSummary?.current_month.prompt_tokens.toLocaleString() ?? '—'}}</b></div><div><small>输出 Token</small><b>{{usageSummary?.current_month.completion_tokens.toLocaleString() ?? '—'}}</b></div><div><small>本月总 Token</small><b class="green-text">{{usageSummary?.current_month.total_tokens.toLocaleString() ?? '—'}}</b></div></section>
+    <section class="panel"><div class="panel-title"><div><b>用量统计</b><small>本月数据从 {{usageSummary ? new Date(usageSummary.month_start).toLocaleDateString() : '—'}} 起累计</small></div><button class="btn secondary small" @click="loadUsage(true)" :disabled="usageLoading"><Activity :size="14"/>刷新</button></div><div class="usage-mini-grid"><div><small>累计请求</small><b>{{usageSummary?.all_time.requests.toLocaleString() ?? '—'}}</b></div><div><small>累计 Token</small><b>{{usageSummary?.all_time.total_tokens.toLocaleString() ?? '—'}}</b></div><div><small>未返回 usage 的请求</small><b>{{usageSummary?.all_time.unmetered_requests.toLocaleString() ?? '—'}}</b></div></div><small class="usage-footnote">仅统计模型供应商明确返回的 Token 数量。未返回 usage 的请求会单独标记，不会估算或虚构 Token。当前阶段尚未启用金额扣费、充值和套餐余额。</small></section>
+    <section class="panel"><div class="panel-title"><div><b>最近调用记录</b><small>记录人格、供应商模型、状态、Token 和响应时间；不保存对话正文。</small></div></div><div v-if="usageRecords.length" class="usage-list"><div v-for="record in usageRecords" :key="record.id" class="usage-row"><div><b>{{record.persona_slug}}</b><small>{{record.model_name}} · {{new Date(record.created_at).toLocaleString()}}</small></div><span>{{record.prompt_tokens?.toLocaleString() ?? '—'}} / {{record.completion_tokens?.toLocaleString() ?? '—'}}</span><span>{{record.total_tokens?.toLocaleString() ?? '未统计'}} Token</span><label :class="record.status==='succeeded'?'running':'paused'">{{record.status==='succeeded'?'成功':record.status==='cancelled'?'已取消':'失败'}}</label><small>{{record.latency_ms.toLocaleString()}} ms</small></div></div><div v-else class="empty"><Activity :size="28"/><b>暂无模型调用记录</b><small>通过 API 接口发起一次模型请求后，真实记录会显示在这里。</small></div></section>
    </template>
 
 
@@ -600,7 +630,7 @@ async function revokeKey(key: ApiKey) {
     <section class="panel settings"><div class="panel-title"><div><b>安全与隐私</b><small>保护你的账户和 API 资源</small></div></div><div class="setting-row"><ShieldCheck :size="18"/><div><b>登录密码</b><small>定期更新密码，保护账户安全</small></div><button class="btn secondary small" @click="notify('密码修改接口将在后续账户安全阶段接入')">修改密码</button></div><div class="setting-row"><KeyRound :size="18"/><div><b>API 密钥</b><small>管理第三方应用的访问凭证</small></div><a @click="go('api')">前往管理 →</a></div></section>
     <section class="panel settings"><div class="panel-title"><div><b>通知偏好</b><small>选择你希望接收的系统通知</small></div></div><div class="setting-row"><Bell :size="18"/><div><b>用量提醒</b><small>当 Token 额度即将耗尽时提醒我</small></div><span class="toggle on"></span></div><div class="setting-row"><MessageSquare :size="18"/><div><b>系统公告</b><small>接收产品更新和维护通知</small></div><span class="toggle"></span></div></section>
    </template>
-   <footer class="page-footer"><span>© 2026 SuperNova · 智能体服务平台</span><span>● 控制平面 API 已连接</span><span>人格、供应商和知识库元数据已接入后端 · 对话与文档处理待接入</span></footer>
+   <footer class="page-footer"><span>© 2026 SuperNova · 智能体服务平台</span><span>● 控制平面 API 已连接</span><span>OpenAI 兼容网关与 Token 计量已接入 · 知识库文档处理与 AstrBot Worker 待接入</span></footer>
   </div>
  </main>
 
