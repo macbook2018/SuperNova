@@ -13,8 +13,10 @@ class Settings(BaseSettings):
     app_name: str = "SuperNova API"
     environment: str = "development"
     log_level: str = "INFO"
-    database_url: str = "postgresql://supernova:supernova_dev_only@localhost:5432/supernova"
-    redis_url: str = "redis://localhost:6379/0"
+    database_url: str = (
+        "postgresql://supernova:change-me-local-only@localhost:5432/supernova"
+    )
+    redis_url: str = "redis://:change-me-local-only@localhost:6379/0"
 
 
 @lru_cache
