@@ -119,8 +119,11 @@ function errorMessage(payload: unknown, fallback: string): string {
       return String((detail as Record<string, unknown>).message)
     }
     if (typeof detail === 'string') return detail
-    if (value.error && typeof value.error === 'object' && 'message' in value.error) {
-      return String((value.error as Record<string, unknown>).message)
+    if (value.error && typeof value.error === 'object') {
+      const error = value.error as Record<string, unknown>
+      const message = 'message' in error ? String(error.message) : fallback
+      const requestId = typeof error.request_id === 'string' ? error.request_id : null
+      return requestId ? `${message}（请求编号：${requestId}）` : message
     }
   }
   return fallback
