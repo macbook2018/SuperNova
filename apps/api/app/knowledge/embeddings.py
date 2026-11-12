@@ -3,8 +3,6 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from urllib.parse import urlparse
-from uuid import UUID
-
 import httpx
 from fastapi import HTTPException
 from sqlalchemy import select
