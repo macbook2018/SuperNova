@@ -198,6 +198,7 @@ class BillingUsageEvent(Base):
     __table_args__ = (
         UniqueConstraint("tenant_id", "event_key", name="uq_billing_usage_tenant_event"),
         Index("ix_billing_usage_tenant_time", "tenant_id", "occurred_at"),
+        Index("ix_billing_usage_reservation", "reservation_id"),
         CheckConstraint("quantity_units >= 0", name="ck_billing_usage_quantity"),
     )
 
@@ -207,6 +208,9 @@ class BillingUsageEvent(Base):
     )
     source_usage_record_id: Mapped[UUID | None] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("usage_records.id", ondelete="SET NULL")
+    )
+    reservation_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("billing_reservations.id", ondelete="SET NULL")
     )
     event_key: Mapped[str] = mapped_column(String(160), nullable=False)
     resource_code: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -222,6 +226,11 @@ class BillingUsageEvent(Base):
 class BillingRatedItem(Base):
     __tablename__ = "billing_rated_items"
     __table_args__ = (
+        CheckConstraint(
+            "state IN ('shadow', 'included', 'unmetered', 'unrated')",
+            name="ck_billing_rated_state",
+        ),
+        Index("ix_billing_rated_state", "state"),
         CheckConstraint("included_units >= 0", name="ck_billing_rated_included"),
         CheckConstraint("overage_units >= 0", name="ck_billing_rated_overage"),
         CheckConstraint("amount_minor_decimal >= 0", name="ck_billing_rated_amount"),
@@ -245,6 +254,7 @@ class BillingRatedItem(Base):
     amount_minor_decimal: Mapped[Decimal] = mapped_column(
         Numeric(24, 8), nullable=False
     )
+    unit_price_minor_per_unit: Mapped[Decimal | None] = mapped_column(Numeric(24, 16))
     currency: Mapped[str] = mapped_column(String(3), nullable=False)
     state: Mapped[str] = mapped_column(String(16), nullable=False, default="unrated")
     rated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -268,13 +278,19 @@ class BillingLedgerAccount(Base):
 
 class BillingLedgerTransaction(Base):
     __tablename__ = "billing_ledger_transactions"
-    __table_args__ = (Index("ix_billing_ledger_tx_created", "created_at"),)
+    __table_args__ = (
+        CheckConstraint("mode IN ('shadow', 'live')", name="ck_billing_ledger_transaction_mode"),
+        Index("ix_billing_ledger_tx_created", "created_at"),
+    )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     idempotency_key: Mapped[str] = mapped_column(
         String(160), nullable=False, unique=True
     )
     kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    mode: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="shadow", server_default="shadow"
+    )
     currency: Mapped[str] = mapped_column(String(3), nullable=False)
     reference_id: Mapped[str | None] = mapped_column(String(160))
     metadata_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
@@ -311,6 +327,11 @@ class BillingReservation(Base):
     __table_args__ = (
         UniqueConstraint("tenant_id", "event_key", name="uq_billing_reservation_event"),
         CheckConstraint("max_amount_minor >= 0", name="ck_billing_reservation_amount"),
+        CheckConstraint(
+            "state IN ('held', 'settled', 'released', 'unknown')",
+            name="ck_billing_reservation_state",
+        ),
+        Index("ix_billing_reservations_tenant_state", "tenant_id", "state", "expires_at"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
@@ -318,10 +339,107 @@ class BillingReservation(Base):
         Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False
     )
     event_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    request_hash: Mapped[str | None] = mapped_column(String(64))
+    model_source: Mapped[str | None] = mapped_column(String(16))
+    subscription_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenant_subscriptions.id", ondelete="SET NULL")
+    )
+    plan_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("billing_plans.id", ondelete="RESTRICT")
+    )
+    price_version_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("platform_model_prices.id", ondelete="RESTRICT")
+    )
+    period_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    period_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    usage_record_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("usage_records.id", ondelete="SET NULL")
+    )
+    response_status: Mapped[int | None] = mapped_column(Integer)
+    response_json: Mapped[dict | None] = mapped_column(JSON)
     max_amount_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
     state: Mapped[str] = mapped_column(String(20), nullable=False, default="held")
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     settled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class BillingReservationItem(Base):
+    __tablename__ = "billing_reservation_items"
+    __table_args__ = (
+        UniqueConstraint("reservation_id", "resource_code", name="uq_billing_reservation_resource"),
+        CheckConstraint("reserved_units >= 0", name="ck_billing_reservation_item_reserved"),
+        CheckConstraint("consumed_units >= 0", name="ck_billing_reservation_item_consumed"),
+        CheckConstraint(
+            "consumed_units <= reserved_units",
+            name="ck_billing_reservation_item_consumed_le_reserved",
+        ),
+        CheckConstraint(
+            "state IN ('held', 'settled', 'released', 'unknown')",
+            name="ck_billing_reservation_item_state",
+        ),
+        Index("ix_billing_reservation_items_resource_state", "resource_code", "state"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    reservation_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("billing_reservations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    resource_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    reserved_units: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    consumed_units: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    state: Mapped[str] = mapped_column(String(20), nullable=False, default="held")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class BillingAuditEvent(Base):
+    __tablename__ = "billing_audit_events"
+    __table_args__ = (
+        Index("ix_billing_audit_tenant_created", "tenant_id", "created_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("tenants.id", ondelete="SET NULL")
+    )
+    actor_user_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
+    )
+    action: Mapped[str] = mapped_column(String(64), nullable=False)
+    subject_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    subject_id: Mapped[str] = mapped_column(String(160), nullable=False)
+    reason: Mapped[str | None] = mapped_column(String(500))
+    metadata_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class BillingReconciliationRun(Base):
+    __tablename__ = "billing_reconciliation_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('completed', 'needs_review')",
+            name="ck_billing_reconciliation_status",
+        ),
+        Index("ix_billing_reconciliation_created", "created_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    period_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    period_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    report_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_by_user_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

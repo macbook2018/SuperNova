@@ -44,19 +44,32 @@
 - 套餐权益按订阅周期计算，超额请求返回明确 quota_exceeded。
 - 并发额度预留/防透支属于 Phase 5C，不在本阶段宣称已完成。
 
-## Phase 5C — 额度、计价与账本（先影子计费）
+## Phase 5C — 额度、计价与账本（先影子计费，已实现）
+
+**完成日期：2026-11-12；CI：68 项 API 测试通过，PostgreSQL 并发集成测试、迁移、Docker smoke 和 Console 构建全部通过。**
 
 交付：
-- 订阅/套餐权益计算与按模型输入输出分别计价。
-- 同一业务请求去重、并发资源预留、成功结算与剩余额度释放。
-- 账本平衡分录、不可变价格版本、运营审计和日报对账。
-- 后台用量、剩余额度、预估费用和账单细目（先影子数据）。
+- PostgreSQL 租户级行锁与 reservation items，实现 API 请求、平台模型请求、输入/输出 Token 的并发额度预留。
+- Chat Completions 支持 Idempotency-Key；同 Key 同请求的非流式成功响应重放，冲突 Payload 返回 409；SSE 重放返回 409，不重复调用上游。
+- 可信 usage 才能结算；输入/输出按调用时价格版本分别 Decimal 计价，BYOK Token 费用为 0。
+- unknown usage 保留 Token 预留；管理员可基于供应商账单人工补录结算，或审计后释放。
+- 成对平衡的 shadow ledger postings、不可变价格版本引用、人工处理审计和对账运行记录。
+- 租户控制台显示 reserved/remaining、影子估算金额、平台/BYOK Token 和最近影子账本。
+- 币种最小单位精度覆盖 0/2/3/4 位小数。
 
 验收：
-- 重试、同时多请求、流式中断不能重复扣费或透支。
-- 未测到可信 usage 时不得凭空扣费。
-- 跨套餐结算周期规则、退款/调整、币种/精度/舍入边界通过测试。
-- 管理员可核对供应商用量与内部结算差异。
+- 幂等 Key 重放、Key 与 Payload 冲突、预留阻止额度透支有自动化测试。
+- PostgreSQL 并发集成测试验证两个并发请求争抢最后一个 API request 额度时只有一个成功预留。
+- 缺失/不可信 usage 不生成 Token 评级；未知预留等待人工核对。
+- 影子账本每笔交易至少两条 posting，净额为 0；对账核对评级总额与账本正向分录。
+- JPY/KRW、CNY/USD、KWD、CLF 等币种精度有测试。
+- 本阶段不扣真实余额、不启用超额收费、不接支付。
+
+运维边界：
+- `POST /admin/billing/reconciliation/run` 可执行日报；由部署环境 Cron/调度器每日调用。
+- 过期 held reservation 先标记为 unknown；管理员核实后 settle 或 release。
+- 完整实施说明见 `docs/phase-5c-implementation-report.md`。
+
 
 ## Phase 5D — 商业化支付及真实收费
 

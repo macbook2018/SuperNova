@@ -3,13 +3,16 @@ from app.core.config import get_settings
 from app.db.base import Base
 from app.models import (  # noqa: F401
     ApiKey,
+    BillingAuditEvent,
     BillingLedgerAccount,
     BillingLedgerPosting,
     BillingLedgerTransaction,
     BillingPlan,
     BillingPlanEntitlement,
     BillingRatedItem,
+    BillingReconciliationRun,
     BillingReservation,
+    BillingReservationItem,
     BillingUsageEvent,
     KnowledgeBase,
     ModelProvider,
