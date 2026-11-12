@@ -30,7 +30,9 @@ class Settings(BaseSettings):
         if self.environment.lower() in {"production", "prod"} and (
             self.jwt_secret == _DEFAULT_JWT_SECRET or len(self.jwt_secret) < 32
         ):
-            raise ValueError("SUPERNOVA_JWT_SECRET must be a unique secret of at least 32 characters")
+            raise ValueError(
+                "SUPERNOVA_JWT_SECRET must be a unique secret of at least 32 characters"
+            )
         if self.access_token_ttl_minutes < 5 or self.access_token_ttl_minutes > 60:
             raise ValueError("SUPERNOVA_ACCESS_TOKEN_TTL_MINUTES must be between 5 and 60")
         if self.refresh_token_ttl_days < 1 or self.refresh_token_ttl_days > 90:
