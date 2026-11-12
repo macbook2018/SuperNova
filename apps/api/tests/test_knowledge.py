@@ -1,7 +1,7 @@
 from collections.abc import Generator
 
-import pytest
 from fastapi.testclient import TestClient
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -74,7 +74,10 @@ def test_text_and_html_parsers_keep_clean_text_and_metadata() -> None:
     assert len(blocks) == 1
     assert "30 days" in blocks[0].text
 
-    html = b"<html><head><title>Help</title><script>secret()</script></head><body><h1>FAQ</h1><p>Shipping takes 3 days.</p></body></html>"
+    html = (
+        b"<html><head><title>Help</title><script>secret()</script></head>"
+        b"<body><h1>FAQ</h1><p>Shipping takes 3 days.</p></body></html>"
+    )
     html_mime = validate_document_bytes("help.html", "text/html", html)
     html_blocks = parse_document("help.html", html_mime, html)
     assert "Shipping takes 3 days" in html_blocks[0].text
