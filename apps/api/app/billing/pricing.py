@@ -42,8 +42,8 @@ def quote_model_tokens(
     model_source: str,
     input_tokens: int,
     output_tokens: int,
-    input_per_million_minor: Decimal,
-    output_per_million_minor: Decimal,
+    input_per_million_minor: Decimal | None = None,
+    output_per_million_minor: Decimal | None = None,
 ) -> ModelUsageQuote:
     """Return exact platform-model price in minor currency units.
 
@@ -55,12 +55,14 @@ def quote_model_tokens(
         raise ValueError("model_source must be 'platform' or 'byok'")
     _valid_units(input_tokens, "input_tokens")
     _valid_units(output_tokens, "output_tokens")
-    input_rate = _valid_rate(input_per_million_minor)
-    output_rate = _valid_rate(output_per_million_minor)
-
     if model_source == "byok":
+        # BYOK needs no platform-model price version. The provider bills the user.
         amount = Decimal(0)
     else:
+        if input_per_million_minor is None or output_per_million_minor is None:
+            raise ValueError("platform model pricing requires a published rate version")
+        input_rate = _valid_rate(input_per_million_minor)
+        output_rate = _valid_rate(output_per_million_minor)
         denominator = Decimal(1_000_000)
         amount = (
             Decimal(input_tokens) * input_rate / denominator

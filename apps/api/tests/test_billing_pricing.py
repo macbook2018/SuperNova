@@ -158,3 +158,11 @@ def test_billing_schema_is_inert_and_has_new_tables() -> None:
             assert session.query(BillingLedgerAccount).count() == 0
     finally:
         engine.dispose()
+
+
+def test_byok_needs_no_platform_model_price_or_credential() -> None:
+    quote = quote_model_tokens(model_source="byok", input_tokens=567, output_tokens=42)
+    assert quote.amount_minor_exact == Decimal(0)
+
+    with pytest.raises(ValueError):
+        quote_model_tokens(model_source="platform", input_tokens=567, output_tokens=42)
