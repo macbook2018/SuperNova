@@ -70,7 +70,7 @@ services:
       SUPERNOVA_DATABASE_URL: postgresql://${POSTGRES_USER:-supernova}:${POSTGRES_PASSWORD:-change-me-local-only}@postgres:5432/${POSTGRES_DB:-supernova}
       SUPERNOVA_REDIS_URL: redis://:${REDIS_PASSWORD:-change-me-local-only}@redis:6379/0
     ports:
-      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:8001:8000"
     depends_on:
       postgres:
         condition: service_healthy

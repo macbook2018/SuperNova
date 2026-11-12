@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "supernova-api"
 version = "0.1.0"
-description = "SuperNova 多租户智能体服务平台控制面与统一接口网关"
+description = "SuperNova multi-tenant AI Agent SaaS control plane and API gateway"
 requires-python = ">=3.12"
 dependencies = [
   "fastapi>=0.115,<1.0",

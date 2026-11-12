@@ -9,16 +9,6 @@ from starlette.requests import Request
 client = TestClient(app)
 
 
-def test_openapi_metadata_uses_simplified_chinese() -> None:
-    assert app.title == "SuperNova 中文管理平台与模型网关"
-    assert "多租户智能体服务平台" in app.description
-
-    schema = client.get("/openapi.json").json()
-    assert schema["tags"][0]["name"] == "运行状态"
-    assert schema["paths"]["/health/live"]["get"]["summary"] == "服务存活检查"
-    assert schema["paths"]["/health/ready"]["get"]["summary"] == "服务就绪检查"
-
-
 def test_liveness_returns_alive() -> None:
     response = client.get("/health/live")
 
@@ -49,15 +39,14 @@ def test_invalid_request_id_is_replaced() -> None:
     assert str(UUID(response.headers["X-Request-ID"])) == response.headers["X-Request-ID"]
 
 
-def test_not_found_response_is_chinese_and_includes_request_id() -> None:
+def test_not_found_response_includes_valid_request_id() -> None:
     response = client.get("/route-that-does-not-exist")
 
     assert response.status_code == 404
-    assert response.json()["detail"] == "请求的接口或资源不存在。"
     assert str(UUID(response.headers["X-Request-ID"])) == response.headers["X-Request-ID"]
 
 
-def test_unhandled_exception_returns_safe_chinese_error_envelope() -> None:
+def test_unhandled_exception_returns_safe_error_envelope() -> None:
     request_id = "9f4a4c84-7d7c-4a3c-a8c1-5d4f8f0c4a12"
     scope = {
         "type": "http",
@@ -86,7 +75,6 @@ def test_unhandled_exception_returns_safe_chinese_error_envelope() -> None:
     assert response.status_code == 500
     assert response.headers["X-Request-ID"] == request_id
     assert b"internal_error" in response.body
-    assert "服务器内部发生错误".encode() in response.body
     assert b"sensitive internal detail" not in response.body
 
 

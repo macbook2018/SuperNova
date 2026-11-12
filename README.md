@@ -56,11 +56,11 @@ make dev-migrate
 
 | 服务 | 地址 |
 | --- | --- |
-| SuperNova 接口 | http://localhost:8000 |
-| 接口文档 | http://localhost:8000/docs |
-| 存活检查 | http://localhost:8000/health/live |
-| 就绪检查 | http://localhost:8000/health/ready |
-| 对象存储管理控制台 | http://localhost:9001 |
+| SuperNova 接口 | http://localhost:8001 |
+| 接口文档 | http://localhost:8001/docs |
+| 存活检查 | http://localhost:8001/health/live |
+| 就绪检查 | http://localhost:8001/health/ready |
+| 对象存储管理控制台 | http://localhost:9001（右上角语言菜单可选“简体中文”） |
 
 常用命令：
 

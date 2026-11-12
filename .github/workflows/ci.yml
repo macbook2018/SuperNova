@@ -83,13 +83,13 @@ jobs:
       - name: Verify API health
         run: |
           for attempt in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:8000/health/ready >/dev/null 2>&1; then
+            if curl -fsS http://127.0.0.1:8001/health/ready >/dev/null 2>&1; then
               break
             fi
             sleep 2
           done
-          curl -fsS http://127.0.0.1:8000/health/live
-          curl -fsS http://127.0.0.1:8000/health/ready
+          curl -fsS http://127.0.0.1:8001/health/live
+          curl -fsS http://127.0.0.1:8001/health/ready
 
       - name: Verify non-root API and S3 storage readiness
         run: |
