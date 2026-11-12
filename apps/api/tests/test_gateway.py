@@ -224,7 +224,7 @@ def test_chat_completion_routes_persona_and_records_actual_usage(
     call = FakeClient.calls[0]
     assert call["url"] == "https://api.deepseek.com/chat/completions"
     assert call["headers"]["Authorization"] == "Bearer sk-provider-secret-1234"
-    assert call["json"]["model"] == "deepseek-chat"
+    assert call["json"]["model"] == "deepseek-flash"
     assert call["json"]["max_tokens"] == 1024
     assert call["json"]["messages"][0] == {
         "role": "system",
@@ -258,7 +258,7 @@ def test_streaming_chat_completion_records_usage_and_openai_done_marker(
                 "id": "chatcmpl-stream",
                 "object": "chat.completion.chunk",
                 "created": 1800000000,
-                "model": "deepseek-chat",
+                "model": "deepseek-flash",
                 "choices": [{"index": 0, "delta": {"content": "你好"}, "finish_reason": None}],
             },
             ensure_ascii=False,
@@ -268,7 +268,7 @@ def test_streaming_chat_completion_records_usage_and_openai_done_marker(
                 "id": "chatcmpl-stream",
                 "object": "chat.completion.chunk",
                 "created": 1800000000,
-                "model": "deepseek-chat",
+                "model": "deepseek-flash",
                 "choices": [],
                 "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
             },
