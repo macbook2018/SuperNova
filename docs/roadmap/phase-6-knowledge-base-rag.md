@@ -128,7 +128,7 @@ Chat Completions
 - 语义检索：pgvector cosine distance。
 - 词法检索：PostgreSQL trigram / 关键词检索，兼顾中文和英文。
 - 混合排序：Reciprocal Rank Fusion；保留 vector_rank、lexical_rank、final_score。
-- 参数：top_k、score_threshold、candidate_k、document_ids、metadata filters。
+- 参数：top_k、score_threshold、candidate_k、document_ids；元数据过滤留待扩展。
 - Reranker 为可插拔接口；初版可以关闭，不强制额外模型调用。
 - 检索只访问 Persona 显式关联且当前租户拥有的知识库。
 - RAG 上下文标注为不可信引用材料，并明确禁止遵从文档内的指令或提示词注入。
