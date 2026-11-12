@@ -4,7 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.api.auth import _is_email_unique_violation
@@ -33,7 +33,7 @@ def client() -> Generator[TestClient, None, None]:
             yield session
 
     app.dependency_overrides[get_db] = override_get_db
-    with TestClient(app) as test_client:
+    with TestClient(app, raise_server_exceptions=False) as test_client:
         yield test_client
     app.dependency_overrides.clear()
     Base.metadata.drop_all(engine)
@@ -247,3 +247,29 @@ def test_email_integrity_error_classifier_only_matches_email_constraint() -> Non
 
     assert _is_email_unique_violation(email_error) is True
     assert _is_email_unique_violation(other_error) is False
+
+
+def test_register_does_not_misreport_other_integrity_errors(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_commit(self: Session) -> None:
+        raise IntegrityError(
+            "INSERT INTO tenants",
+            {},
+            Exception("UNIQUE constraint failed: tenants.name"),
+        )
+
+    monkeypatch.setattr(Session, "commit", fail_commit)
+    response = client.post(
+        "/auth/register",
+        json={
+            "email": "new-user@example.com",
+            "password": "correct-horse-battery",
+            "display_name": "New User",
+        },
+    )
+
+    assert response.status_code == 500
+    assert response.json()["error"]["code"] == "internal_error"
+    assert response.json()["error"]["request_id"]
