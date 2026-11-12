@@ -109,7 +109,7 @@ alembic -c apps/api/alembic.ini upgrade head
 
 ## 7. CI 验收记录
 
-最终开发分支提交 `ec5f51a28e86535b518b4dd0a30655ef64fb449d` 的 GitHub Actions 全部通过：
+最终开发分支提交 `6b733b55195b4dd5eb4177fcff7c8839899f49b7` 的 GitHub Actions 全部通过：
 
 | 检查项 | 结果 |
 |---|---|
@@ -120,6 +120,6 @@ alembic -c apps/api/alembic.ini upgrade head
 | Docker Compose build / smoke test | 通过 |
 | Console TypeScript / production build | 通过 |
 
-GitHub Actions：[43229056315](https://github.com/macbook2018/SuperNova/actions/runs/43229056315)
+GitHub Actions：[43229524089](https://github.com/macbook2018/SuperNova/actions/runs/43229056315)
 
 测试包含相同幂等 Key 重放、不同 Payload/不同 API Key 冲突、预留额度阻止透支、平台模型 shadow rating、平衡账本、未知 usage 人工补录、租户账单 API、对账和币种精度。
