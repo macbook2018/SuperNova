@@ -2,10 +2,10 @@
 import { computed, onMounted, ref } from 'vue'
 import {
   Activity, AlertCircle, ArrowRight, ArrowUpRight, Bell, Bot, Check, CheckCircle2,
-  ChevronDown, ChevronRight, CircleHelp, Clock3, Copy, Cpu, Database, Download,
-  Eye, EyeOff, FileText, Filter, Gauge, KeyRound, LayoutDashboard, LifeBuoy,
-  LogOut, Mail, Menu, MessageSquare, MoreHorizontal, Pencil, Plus, Search, Server,
-  Settings2, ShieldCheck, Sparkles, Trash2, Upload, UserRound, Wallet, X, Zap,
+  ChevronDown, ChevronRight, CircleHelp, Copy, Cpu, Database, Download, FileText,
+  Filter, Gauge, KeyRound, LayoutDashboard, LifeBuoy, LogOut, Menu, MessageSquare,
+  MoreHorizontal, Pencil, Plus, Search, Server, Settings2, ShieldCheck, Sparkles,
+  Trash2, Upload, Wallet, X, Zap,
 } from 'lucide-vue-next'
 import {
   API_BASE_URL,
@@ -573,7 +573,6 @@ const bars = computed(() =>
   </div>
   <div class="modal-actions"><button class="btn secondary" @click="personaModal=false">取消</button><button class="btn primary" @click="savePersona"><Check :size="15"/>保存人格</button></div>
  </section></div> <div v-if="kbModal" class="modal-backdrop" @click.self="kbModal=false"><section class="modal small-modal"><div class="modal-title"><div><small>KNOWLEDGE BASE</small><h2>创建知识库</h2><p>建立独立资料空间，后续可关联到不同人格。</p></div><button @click="kbModal=false"><X :size="18"/></button></div><div class="form-grid"><label class="full">知识库名称 <b>*</b><input v-model="kbForm.name" placeholder="例如：产品资料库"></label><label class="full">知识库描述<textarea v-model="kbForm.description" rows="3" placeholder="说明知识库包含哪些内容..."></textarea></label></div><div class="modal-actions"><button class="btn secondary" @click="kbModal=false">取消</button><button class="btn primary" @click="createKb"><Plus :size="15"/>创建知识库</button></div></section></div>
- <Transition name="toast"><div v-if="toast" class="toast"><CheckCircle2 :size="17"/>{{toast}}</div></Transition>
  <div v-if="providerModal" class="modal-backdrop" @click.self="providerModal=false"><section class="modal small-modal"><div class="modal-title"><div><small>MODEL PROVIDER</small><h2>{{editingProviderId?'编辑模型供应商':'添加模型供应商'}}</h2><p>API Key 会在服务端加密保存，读取接口不会返回明文。</p></div><button @click="providerModal=false"><X :size="18"/></button></div>
   <div class="form-grid">
    <label class="full">供应商名称 <b>*</b><input v-model="providerForm.name" maxlength="80" placeholder="例如：DeepSeek 主账户"></label>
