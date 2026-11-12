@@ -284,11 +284,18 @@ def process_job(job_id: str) -> None:
             kb = db.get(KnowledgeBase, job.knowledge_base_id)
             if document is None or kb is None:
                 raise ValueError("knowledge_resource_not_found")
+            if document.status == "deleting" and job.job_type != "delete":
+                job.status = "cancelled"
+                job.worker_id = None
+                job.lease_expires_at = None
+                db.commit()
+                return
             if job.job_type == "delete":
                 _process_delete(db, job, document)
             else:
-                document.status = "processing"
-                db.commit()
+                if job.job_type != "reindex" or document.active_index_version == 0:
+                    document.status = "processing"
+                    db.commit()
                 _process_ingest(db, job, document, kb)
     except Exception as exc:
         _handle_failure(job_id, exc)
