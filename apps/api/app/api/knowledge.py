@@ -408,7 +408,10 @@ def delete_knowledge_document(
         )
     )
     if document is None:
-        raise HTTPException(status_code=404, detail={"code": "document_not_found", "message": "文档不存在"})
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "document_not_found", "message": "文档不存在"},
+        )
     if document.status == "deleted":
         return {"status": "deleted"}
     db.query(KnowledgeIngestionJob).filter(
@@ -596,7 +599,10 @@ def download_knowledge_document(
         )
     )
     if document is None or document.status == "deleted":
-        raise HTTPException(status_code=404, detail={"code": "document_not_found", "message": "文档不存在"})
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "document_not_found", "message": "文档不存在"},
+        )
     settings = get_settings()
     try:
         body = get_object(
