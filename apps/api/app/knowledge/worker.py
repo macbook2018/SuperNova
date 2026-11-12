@@ -66,6 +66,7 @@ def _claim_job() -> str | None:
 
 
 def _extend_job_lease(job_id) -> None:
+    settings = get_settings()
     with SessionLocal() as db:
         job = db.get(KnowledgeIngestionJob, job_id)
         if job is None or job.status != "running" or job.worker_id != WORKER_ID:
