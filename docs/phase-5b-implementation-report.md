@@ -3,8 +3,8 @@
 - 完成日期：2026-11-12
 - 开发分支：`feat/phase-5b-platform-model-routing`
 - 基线分支：`feat/phase-5-hybrid-billing-foundation`
-- 验收提交：`c22404cfef810d24ed92a8b34d3aacd5d5f98d34`
-- GitHub Actions：`43215697087`
+- 验收提交：`71ae7dbfaa0433e741833db1bc8f3ad21f113b4c`
+- GitHub Actions：`43216473504`
 
 ## 1. 交付范围
 
