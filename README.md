@@ -93,8 +93,9 @@ Authorization: Bearer <API_KEY>
 
 ## 六、开发阶段
 
-1. **工程基础**：仓库规范、本地环境、数据库迁移、健康检查、结构化日志和自动化测试。
-2. **身份与租户管理**：用户注册、登录、租户上下文、用户级接口密钥及权限边界。
+0. **工程基础（已完成）**：仓库规范、本地环境、数据库迁移、健康检查、结构化日志和自动化测试。
+1. **中文用户后台原型（已完成交互验收）**：工作台、人格、知识库、API、用量和账户设置页面；当前原型使用演示数据。
+2. **身份与租户管理（当前开发阶段）**：用户注册、登录、JWT 会话、租户上下文、用户级 API Key 及跨租户权限边界。
 3. **人格与模型管理**：人格创建、编辑、删除，模型供应商配置和密钥安全存储。
 4. **统一接口网关**：兼容 OpenAI 的模型列表、对话接口、流式响应和用量记录。
 5. **知识库**：文档和链接导入、解析、切片、向量化、检索及租户隔离。
@@ -109,7 +110,6 @@ Authorization: Bearer <API_KEY>
 apps/
   api/                 服务端控制平面与统一接口网关
   console/             Vue 3 + TypeScript 中文用户后台
-  console/             中文用户控制台（后续阶段）
   worker-manager/      AstrBot 运行实例管理（后续阶段）
 packages/
   contracts/           共享接口数据结构（后续阶段）
@@ -134,8 +134,29 @@ docs/
 
 ## 九、当前进度
 
-工程基础阶段已通过 GitHub Actions 自动验收。下一阶段进入用户身份、租户上下文和用户级接口密钥开发。中文用户控制台交互原型已加入 apps/console，可通过 http://localhost:5173 预览。当前为演示数据，尚未接入登录、数据库和真实业务 API。
+- Phase 0 工程基础已通过 GitHub Actions 验收。
+- Phase 1 中文用户后台交互原型已完成并通过用户交互验收；当前仍使用演示数据。
+- Phase 2 身份、租户上下文和用户级 API Key 正在开发，完成后将把真实认证和密钥生命周期接入控制台。
+- 人格 CRUD、模型供应商、统一对话网关、知识库处理和 AstrBot Worker 尚未完成。
 
-## 十、许可证
+## 十、身份与密钥接口
+
+身份接口使用 Bearer JWT；Access Token 默认 15 分钟，Refresh Token 默认 30 天并在每次刷新时轮换。
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| POST | /auth/register | 注册用户并创建默认工作空间 |
+| POST | /auth/login | 邮箱密码登录 |
+| POST | /auth/refresh | 轮换 Refresh Token |
+| POST | /auth/logout | 撤销 Refresh Token |
+| GET | /auth/me | 获取当前用户与工作空间 |
+| POST | /api-keys | 创建用户级 API Key |
+| GET | /api-keys | 列出当前用户的密钥元数据 |
+| POST | /api-keys/{key_id}/rotate | 轮换用户级 API Key |
+| DELETE | /api-keys/{key_id} | 撤销用户级 API Key |
+
+API Key 只绑定 user_id 和 tenant_id，不绑定人格。明文只在创建或轮换时展示一次，数据库只保存 SHA-256 摘要。此阶段尚未开放 API Key 对话认证，后续统一网关阶段完成。
+
+## 十一、许可证
 
 正式公开发布前确定许可证及分发条款。
