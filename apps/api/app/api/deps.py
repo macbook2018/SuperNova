@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Annotated
 from uuid import UUID
 
 import jwt
@@ -7,9 +8,9 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.security import decode_access_token
 from app.db.session import get_db
 from app.models.identity import Tenant, TenantMembership, User
-from app.core.security import decode_access_token
 
 _bearer = HTTPBearer(auto_error=False)
 
@@ -21,9 +22,12 @@ class Principal:
     membership: TenantMembership
 
 
+DatabaseSession = Annotated[Session, Depends(get_db)]
+
+
 def get_current_principal(
-    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
-    db: Session = Depends(get_db),
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
+    db: DatabaseSession,
 ) -> Principal:
     unauthorized = HTTPException(
         status_code=401,
@@ -53,3 +57,6 @@ def get_current_principal(
         raise unauthorized
 
     return Principal(user=user, tenant=tenant, membership=membership)
+
+
+CurrentPrincipal = Annotated[Principal, Depends(get_current_principal)]
