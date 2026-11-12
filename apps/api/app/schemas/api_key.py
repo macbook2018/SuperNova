@@ -1,18 +1,20 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class ApiKeyCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     expires_in_days: int | None = Field(default=None, ge=1, le=365)
 
+    @field_validator("name")
     @classmethod
-    def model_validate(cls, obj, *args, **kwargs):
-        if isinstance(obj, dict) and isinstance(obj.get("name"), str):
-            obj = {**obj, "name": obj["name"].strip()}
-        return super().model_validate(obj, *args, **kwargs)
+    def trim_name(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("密钥名称不能为空")
+        return value
 
 
 class ApiKeyRead(BaseModel):
