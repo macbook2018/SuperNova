@@ -865,7 +865,7 @@ async function revokeKey(key: ApiKey) {
     <section class="kb-summary">
      <div><Database :size="18"/><small>知识库总数</small><b>{{kbs.length}} 个</b></div>
      <div><FileText :size="18"/><small>文档总数</small><b>{{totalDocs}} 份</b></div>
-     <div><CheckCircle2 :size="18"/><small>可检索文档</small><b>{{kbs.reduce((sum, kb) => sum + (kb.docs?.filter(doc => doc.status === 'ready').length ?? 0), 0)}} 份</b></div>
+     <div><CheckCircle2 :size="18"/><small>已配置 Embedding</small><b>{{kbs.filter(kb => kb.embedding_source === 'byok' ? !!kb.embedding_provider_id : !!kb.platform_embedding_model_id).length}} 个</b></div>
     </section>
     <section class="kb-grid">
      <article v-for="k in kbs" :key="k.id" class="kb-card">
@@ -900,7 +900,7 @@ async function revokeKey(key: ApiKey) {
        <label :class="item.status==='ready'?'running':'paused'">{{item.status==='ready'?'可检索':item.status==='queued'?'排队中':item.status==='processing'?'处理中':item.status==='failed'?'失败':item.status==='deleting'?'删除中':'已删除'}}</label>
        <div class="row-actions">
         <button v-if="item.status==='failed'" @click="retryKnowledgeDocument(item)" aria-label="重试"><Activity :size="15"/></button>
-        <button v-if="item.status==='ready'" @click="reindexKnowledgeDocument(item)" aria-label="重建索引"><Zap :size="15/></button>
+        <button v-if="item.status==='ready'" @click="reindexKnowledgeDocument(item)" aria-label="重建索引"><Zap :size="15"/></button>
         <button v-if="item.status!=='deleted' && item.status!=='deleting'" @click="deleteKnowledgeDocument(item)" aria-label="删除文档"><Trash2 :size="15"/></button>
        </div>
       </div>
@@ -928,7 +928,7 @@ async function revokeKey(key: ApiKey) {
       <div><small>检索次数</small><b>{{knowledgeUsage?.retrieval_requests.toLocaleString() ?? '—'}}</b></div>
      </div>
     </section>
-    <section class="panel binding"><div class="panel-title"><div><b>已关联人格</b><small>Persona 关联此知识库后，Chat Completions 会自动执行 RAG 并返回引用。</small></div><a @click="go('personas')">管理人格 →</a></div><span v-for="persona in linkedPersonas" :key="persona.id"><Bot :size="14"/> {{persona.name}} <Check :size="13/></span><div v-if="!linkedPersonas.length" class="empty"><b>尚未关联人格</b><small>编辑人格并选择此知识库即可启用自动 RAG。</small></div></section>
+    <section class="panel binding"><div class="panel-title"><div><b>已关联人格</b><small>Persona 关联此知识库后，Chat Completions 会自动执行 RAG 并返回引用。</small></div><a @click="go('personas')">管理人格 →</a></div><span v-for="persona in linkedPersonas" :key="persona.id"><Bot :size="14"/> {{persona.name}} <Check :size="13"/></span><div v-if="!linkedPersonas.length" class="empty"><b>尚未关联人格</b><small>编辑人格并选择此知识库即可启用自动 RAG。</small></div></section>
    </template>
 
 
