@@ -135,7 +135,7 @@ Chat Completions
 - 返回 citations：document_id、document_name、page/sheet/slide、chunk_id、score、snippet、source_url。
 - 非流式响应返回 `supernova.citations`；SSE 在最终完成 chunk 返回相同扩展信息。
 - 无命中时 citations 为空；不得虚构来源。
-- 检索失败策略可配置，默认在 KB 未就绪时返回明确可观测的状态，不跨租户、不静默使用其他资料。
+- 关联知识库存在文档但尚无 ready 索引时，默认 fail-closed 返回明确错误；空知识库不阻断聊天。不跨租户、不静默使用其他资料。
 
 ## 9. 安全要求
 
