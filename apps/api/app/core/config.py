@@ -27,6 +27,16 @@ class Settings(BaseSettings):
     access_token_ttl_minutes: int = 15
     refresh_token_ttl_days: int = 30
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+    platform_admin_emails: str = ""
+    platform_credentials_json: str = "{}"
+
+    @property
+    def platform_admin_email_set(self) -> frozenset[str]:
+        return frozenset(
+            email.strip().lower()
+            for email in self.platform_admin_emails.split(",")
+            if email.strip()
+        )
 
     @model_validator(mode="after")
     def validate_secrets_and_ttls(self) -> "Settings":

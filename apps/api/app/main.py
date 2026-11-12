@@ -10,9 +10,11 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.api_keys import router as api_keys_router
 from app.api.auth import router as auth_router
+from app.api.billing import router as billing_router
 from app.api.catalog import router as catalog_router
 from app.api.gateway import router as gateway_router
 from app.api.health import router as health_router
+from app.api.platform_models import router as platform_models_router
 from app.api.usage import router as usage_router
 from app.core.config import get_settings
 from app.core.logging import configure_logging
@@ -31,6 +33,8 @@ app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(api_keys_router)
 app.include_router(catalog_router)
+app.include_router(platform_models_router)
+app.include_router(billing_router)
 app.include_router(gateway_router)
 app.include_router(usage_router)
 

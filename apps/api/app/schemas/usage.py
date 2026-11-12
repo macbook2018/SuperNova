@@ -28,6 +28,8 @@ class UsageRecordRead(BaseModel):
     persona_slug: str
     provider_type: str
     model_name: str
+    model_source: str = "byok"
+    platform_model_id: UUID | None = None
     status: str
     prompt_tokens: int | None
     completion_tokens: int | None

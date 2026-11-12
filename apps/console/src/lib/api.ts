@@ -48,14 +48,77 @@ export interface KnowledgeBase {
   updated_at: string
 }
 
+export interface PlatformModel {
+  id: string
+  code: string
+  display_name: string
+  provider_type: string
+  model_name: string
+  currency: string
+  input_per_million_minor: string | number
+  output_per_million_minor: string | number
+  price_revision: number
+}
+
+export interface BillingPlan {
+  id: string
+  code: string
+  revision: number
+  name: string
+  billing_interval: 'month' | 'year'
+  currency: string
+  subscription_price_minor: number
+  status: string
+  entitlements: Array<{
+    id: string
+    resource_code: string
+    unit: string
+    included_units: number
+    hard_limit_units: number | null
+    overage_rate_minor_per_unit: string | number
+    overage_behavior: string
+  }>
+  created_at: string
+}
+
+export interface BillingSubscription {
+  id: string
+  tenant_id: string
+  plan_id: string
+  plan_code: string
+  plan_name: string
+  status: string
+  current_period_start: string
+  current_period_end: string
+  cancel_at_period_end: boolean
+  created_at: string
+}
+
+export interface BillingEntitlements {
+  legacy_unmetered: boolean
+  subscription: BillingSubscription | null
+  resources: Array<{
+    resource_code: string
+    unit: string
+    included_units: number
+    hard_limit_units: number | null
+    used_units: number
+    remaining_units: number
+    overage_behavior: string
+  }>
+}
+
 export interface Persona {
   id: string
   name: string
   slug: string
   description: string
   system_prompt: string
+  model_source: 'platform' | 'byok'
   provider_id: string | null
   provider_name: string | null
+  platform_model_id: string | null
+  platform_model_name: string | null
   model_name: string
   temperature: number
   top_p: number
@@ -234,6 +297,8 @@ export interface UsageRecord {
   persona_slug: string
   provider_type: string
   model_name: string
+  model_source: 'platform' | 'byok'
+  platform_model_id: string | null
   status: string
   prompt_tokens: number | null
   completion_tokens: number | null

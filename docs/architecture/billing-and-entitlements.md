@@ -174,3 +174,18 @@ billing_reservations：
 ## 8. 验收边界
 
 本设计与数据库准备完成，不代表完成了支付、实际扣费、余额保护或平台模型代理。上线前应覆盖：双租户隔离、幂等重放、并发预留、账本平衡、价格版本不可变、换套餐中途处理、流式断连、usage 缺失、不足额、回调重放、账单对账、密钥泄露和数据保留。
+
+
+## 9. Phase 5B 实际实现边界（2026-11-12）
+
+Phase 5B 在 0006 迁移中为平台模型增加 base_url，为 usage_records 增加 model_source 和 platform_model_id，并为 personas 增加来源一致性约束。旧人格继续 BYOK，不进行自动迁移。
+
+已实现的运行路径：
+- platform：Persona.platform_model_id → PlatformModel → 当前租户币种的有效 PlatformModelPrice → credential_ref 对应的服务端凭据 → OpenAI 兼容上游。
+- byok：Persona.provider_id（必须属于当前租户）→ ModelProvider → Fernet 解密用户 Key → OpenAI 兼容上游。
+- 两条路径都使用相同的 API Key 身份认证、租户隔离和套餐权益预检查；来源由数据库人格配置决定，客户端不能覆盖。
+- usage_records 记录来源、平台模型 ID、供应商类型、上游模型名和实际 usage。BYOK 不产生平台模型 Token 费用。
+- 新注册租户创建 TenantBillingPolicy。没有 BillingPolicy 的历史租户保留 BYOK 兼容；新租户必须有有效订阅。
+- 平台管理员由 SUPERNOVA_PLATFORM_ADMIN_EMAILS 白名单控制；平台凭据由 SUPERNOVA_PLATFORM_CREDENTIALS_JSON 的 credential_ref 映射解析。真实 Key 不写入数据库或返回租户。
+
+Phase 5B 的额度检查是**调用前读取当前订阅周期用量并拒绝超额**，不是并发安全的预留。并发请求可能在同一时刻通过预检查，因此正式商用前必须由 Phase 5C 实现数据库预留、幂等事件和结算；当前不得启用实际超额收费。
