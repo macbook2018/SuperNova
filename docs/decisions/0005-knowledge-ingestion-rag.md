@@ -14,7 +14,7 @@
 2. 文档摄取由独立 Worker 执行，任务持久化在 PostgreSQL，使用行锁、租约和重试；不依赖 FastAPI 进程内 BackgroundTasks。
 3. 文档通过统一 parser adapter 转换为带来源元数据的结构化文本，再按知识库配置切片和 Embedding。
 4. Embedding 模型与 Chat 模型能力分开建模；支持平台托管和 BYOK，不假设每个 Chat 模型都支持 /embeddings。
-5. 每个知识库的活动索引固定模型、维度和版本。重建索引先写入新版本，完成后原子切换，避免新索引失败破坏旧索引。
+5. 首个版本的 pgvector 列固定为 1536 维；平台与 BYOK Embedding 必须返回 1536 维。每个知识库的活动索引固定模型和版本。重建索引先写入新版本，完成后原子切换，避免新索引失败破坏旧索引。
 6. 检索使用 pgvector 语义召回与 PostgreSQL 词法召回，再用 Reciprocal Rank Fusion 合并；Reranker 是可选 adapter。
 7. RAG 只读取 Persona 明确关联、同一 tenant 拥有且处于 ready 状态的知识库。
 8. 检索内容以不可信引用上下文注入系统提示词；回答引用通过 `supernova.citations` 扩展返回，绝不伪造来源。
