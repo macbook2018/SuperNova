@@ -116,8 +116,13 @@ def register(payload: RegisterRequest, db: DatabaseSession) -> AuthResponse:
     )
     refresh_token, refresh_session = _new_refresh_session(user.id, tenant.id)
 
-    db.add_all([user, tenant, membership, refresh_session])
     try:
+        # Persist the parent rows before inserting rows that reference them.
+        # These models intentionally use explicit tenant/user IDs without ORM
+        # relationships, so a single flush does not guarantee FK insert order.
+        db.add_all([user, tenant])
+        db.flush()
+        db.add_all([membership, refresh_session])
         db.commit()
     except IntegrityError as exc:
         db.rollback()
