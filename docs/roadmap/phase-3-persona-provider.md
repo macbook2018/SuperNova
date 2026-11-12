@@ -1,6 +1,6 @@
 # Phase 3：人格、模型供应商与知识库元数据
 
-- 状态：开发完成，自动化验收进行中
+- 状态：开发完成，GitHub Actions 全部通过，待依赖 PR 合并与本机验收
 - 基础分支：feat/phase-2-identity-tenant
 - 实现分支：feat/phase-3-persona-provider
 
@@ -22,7 +22,7 @@
 - [x] Vue 登录/注册页面、JWT 会话保存、自动刷新和退出登录。
 - [x] 前端人格、模型供应商、知识库和 API Key 页面接入真实后端。
 - [x] 删除控制台中用于冒充真实业务结果的示例人格、示例供应商、示例文档、演示 API Key 和模拟用量。
-- [ ] GitHub Actions 全量验收通过。
+- [x] GitHub Actions 全量验收通过。
 - [ ] 合并依赖 PR 后进行本机注册、登录、供应商配置和人格关联验收。
 
 ## API
@@ -80,3 +80,15 @@
 5. 人格创建/更新能完整保存模型参数和知识库关联。
 6. 删除供应商前检查引用；删除知识库时清理关联关系。
 7. Alembic 从空数据库升级成功；Ruff、pytest、控制台生产构建和 Docker Compose 冒烟检查全部通过。
+
+## 自动化验收结果
+
+- GitHub Actions run #115：全部 jobs success。
+- Ruff：通过。
+- pytest：27 项通过。
+- Alembic：从空 PostgreSQL 数据库升级至 head 成功。
+- Docker Compose：构建、数据库迁移、API 健康检查、Silo 存储就绪和中文控制台 HTTP 冒烟检查通过。
+- Vue TypeScript 类型检查和 Vite 生产构建通过。
+- 运行记录：https://github.com/macbook2018/SuperNova/actions/runs/43148639762
+
+用户本机尚未执行真实注册、登录、模型供应商凭据保存和人格/知识库关联验收。请在依赖 PR 合并后完成一次端到端手工验收。
