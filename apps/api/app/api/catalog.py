@@ -44,7 +44,11 @@ def _conflict(code: str, message: str) -> HTTPException:
 
 def _reject_null_updates(updates: dict, nullable_fields: set[str] | None = None) -> None:
     allowed_nulls = nullable_fields or set()
-    invalid = [field for field, value in updates.items() if value is None and field not in allowed_nulls]
+    invalid = [
+        field
+        for field, value in updates.items()
+        if value is None and field not in allowed_nulls
+    ]
     if invalid:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
