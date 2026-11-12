@@ -511,7 +511,7 @@ async function revokeKey(key: ApiKey) {
     <button v-else-if="page==='knowledge'" class="btn primary" @click="kbModal=true"><Plus :size="16"/>新建知识库</button>
     <template v-else-if="page==='knowledgeDetail'"><button class="btn secondary" @click="go('knowledge')">返回知识库</button><button class="btn primary" @click="upload"><Upload :size="16"/>上传文档</button></template>
     <button v-else-if="page==='api'" class="btn primary" @click="keyModal=true"><Plus :size="16"/>创建 API Key</button>
-    <button v-else-if="page==='usage'" class="btn secondary" @click="notify('报表导出将在正式版开放')"><Download :size="16"/>导出报表</button>
+    <button v-else-if="page==='usage'" class="btn secondary" disabled><Download :size="16"/>暂无可导出数据</button>
    </div></div>
 
    <template v-if="page==='overview'">
@@ -586,7 +586,7 @@ async function revokeKey(key: ApiKey) {
     <section class="panel settings"><div class="panel-title"><div><b>安全与隐私</b><small>保护你的账户和 API 资源</small></div></div><div class="setting-row"><ShieldCheck :size="18"/><div><b>登录密码</b><small>定期更新密码，保护账户安全</small></div><button class="btn secondary small" @click="notify('密码修改接口将在后续账户安全阶段接入')">修改密码</button></div><div class="setting-row"><KeyRound :size="18"/><div><b>API 密钥</b><small>管理第三方应用的访问凭证</small></div><a @click="go('api')">前往管理 →</a></div></section>
     <section class="panel settings"><div class="panel-title"><div><b>通知偏好</b><small>选择你希望接收的系统通知</small></div></div><div class="setting-row"><Bell :size="18"/><div><b>用量提醒</b><small>当 Token 额度即将耗尽时提醒我</small></div><span class="toggle on"></span></div><div class="setting-row"><MessageSquare :size="18"/><div><b>系统公告</b><small>接收产品更新和维护通知</small></div><span class="toggle"></span></div></section>
    </template>
-   <footer class="page-footer"><span>© 2026 SuperNova · 智能体服务平台</span><span>● 所有系统运行正常</span><span>交互原型 · 业务数据尚未连接后端</span></footer>
+   <footer class="page-footer"><span>© 2026 SuperNova · 智能体服务平台</span><span>● 控制平面 API 已连接</span><span>人格、供应商和知识库元数据已接入后端 · 对话与文档处理待接入</span></footer>
   </div>
  </main>
 
@@ -618,7 +618,7 @@ async function revokeKey(key: ApiKey) {
   <div class="modal-actions"><button class="btn secondary" @click="providerModal=false">取消</button><button class="btn primary" @click="saveProvider"><Check :size="15"/>保存供应商</button></div>
  </section></div>
  <div v-if="keyModal" class="modal-backdrop" @click.self="keyModal=false"><section class="modal small-modal"><div class="modal-title"><div><small>USER API KEY</small><h2>创建 API Key</h2><p>该密钥绑定当前用户和工作空间，可供后续多个 AI 人格共用。</p></div><button @click="keyModal=false"><X :size="18"/></button></div><div class="form-grid"><label class="full">密钥名称 <b>*</b><input v-model="newKeyName" maxlength="80" placeholder="例如：生产环境业务系统"></label></div><div class="modal-actions"><button class="btn secondary" @click="keyModal=false">取消</button><button class="btn primary" @click="createApiKey"><Plus :size="15"/>创建密钥</button></div></section></div>
- <div v-if="secretModal" class="modal-backdrop" @click.self="secretModal=false"><section class="modal small-modal"><div class="modal-title"><div><small>SECRET CREATED</small><h2>请立即保存 API Key</h2><p>出于安全考虑，关闭窗口后将无法再次查看完整密钥。</p></div><button @click="secretModal=false"><X :size="18"/></button></div><div class="key-field secret-field"><code>{{newApiKeySecret}}</code><button @click="copy(newApiKeySecret,'API Key 已复制')"><Copy :size="16"/></button></div><p class="warning"><AlertCircle :size="14"/>请将密钥保存在安全的密码管理器中，不要提交到代码仓库。</p><div class="modal-actions"><button class="btn secondary" @click="copy(newApiKeySecret,'API Key 已复制')"><Copy :size="15"/>复制密钥</button><button class="btn primary" @click="secretModal=false;newApiKeySecret=''">我已保存</button></div></section></div>
+ <div v-if="secretModal" class="modal-backdrop" @click.self="secretModal=false;newApiKeySecret=''"><section class="modal small-modal"><div class="modal-title"><div><small>SECRET CREATED</small><h2>请立即保存 API Key</h2><p>出于安全考虑，关闭窗口后将无法再次查看完整密钥。</p></div><button @click="secretModal=false;newApiKeySecret=''"><X :size="18"/></button></div><div class="key-field secret-field"><code>{{newApiKeySecret}}</code><button @click="copy(newApiKeySecret,'API Key 已复制')"><Copy :size="16"/></button></div><p class="warning"><AlertCircle :size="14"/>请将密钥保存在安全的密码管理器中，不要提交到代码仓库。</p><div class="modal-actions"><button class="btn secondary" @click="copy(newApiKeySecret,'API Key 已复制')"><Copy :size="15"/>复制密钥</button><button class="btn primary" @click="secretModal=false;newApiKeySecret=''">我已保存</button></div></section></div>
  <Transition name="toast"><div v-if="toast" class="toast"><CheckCircle2 :size="17"/>{{toast}}</div></Transition>
 </div>
 </template>
