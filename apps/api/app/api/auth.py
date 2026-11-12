@@ -200,8 +200,8 @@ def refresh(payload: RefreshRequest, db: Session = Depends(get_db)) -> AuthRespo
     return _auth_response(user, tenant, membership, new_token)
 
 
-@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
-def logout(payload: LogoutRequest, response: Response, db: Session = Depends(get_db)) -> Response:
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
+def logout(payload: LogoutRequest, db: Session = Depends(get_db)) -> Response:
     if payload.refresh_token:
         record = db.scalar(
             select(RefreshSession).where(
@@ -211,8 +211,7 @@ def logout(payload: LogoutRequest, response: Response, db: Session = Depends(get
         if record is not None and record.revoked_at is None:
             record.revoked_at = datetime.now(UTC)
             db.commit()
-    response.status_code = status.HTTP_204_NO_CONTENT
-    return response
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/me", response_model=MeResponse)
