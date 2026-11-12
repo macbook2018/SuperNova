@@ -1,10 +1,6 @@
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import create_engine, inspect
-from sqlalchemy.orm import Session
-from sqlalchemy.pool import StaticPool
-
 from app.billing.pricing import (
     quote_model_tokens,
     quote_resource_overage,
@@ -20,6 +16,9 @@ from app.models.billing import (
     PlatformModel,
     TenantBillingPolicy,
 )
+from sqlalchemy import create_engine, inspect
+from sqlalchemy.orm import Session
+from sqlalchemy.pool import StaticPool
 
 
 def test_model_pricing_platform_and_byok_are_distinct() -> None:
