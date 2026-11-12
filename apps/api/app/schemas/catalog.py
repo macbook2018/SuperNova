@@ -3,8 +3,7 @@ from typing import Literal
 from urllib.parse import urlparse
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
-
+from pydantic import BaseModel, Field, field_validator
 
 ProviderType = Literal["openai_compatible", "openai", "deepseek", "qwen", "anthropic"]
 
