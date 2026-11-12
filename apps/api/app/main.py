@@ -22,13 +22,6 @@ app = FastAPI(
     description="SuperNova multi-tenant control plane and OpenAI-compatible gateway.",
 )
 app.state.settings = settings
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.allowed_origins,
-    allow_credentials=False,
-    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
-)
 app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(api_keys_router)
@@ -50,6 +43,17 @@ async def request_id_middleware(request: Request, call_next):
     response = await call_next(request)
     response.headers["X-Request-ID"] = request_id
     return response
+
+
+# Keep CORS outside request-id and exception handling middleware so even
+# unhandled 500 responses carry CORS headers and remain readable by browsers.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.allowed_origins,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
+)
 
 
 @app.exception_handler(Exception)
