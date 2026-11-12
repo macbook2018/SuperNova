@@ -163,10 +163,22 @@ def _validate_provider_target(base_url: str) -> None:
         )
 
 
-def _chat_completions_url(base_url: str) -> str:
+def _chat_completions_url(base_url: str, provider_type: str) -> str:
     base = base_url.rstrip("/")
     parsed = urlparse(base)
-    if parsed.path.rstrip("/").endswith("/v1"):
+    path = parsed.path.rstrip("/")
+
+    # DeepSeek's official OpenAI-compatible endpoint is
+    # https://api.deepseek.com/chat/completions (without an implicit /v1).
+    # Preserve an explicitly configured path prefix, if one is present.
+    if provider_type == "deepseek":
+        if path.endswith("/chat/completions"):
+            return base
+        return base + "/chat/completions"
+
+    if path.endswith("/chat/completions"):
+        return base
+    if path.endswith("/v1"):
         return base + "/chat/completions"
     return base + "/v1/chat/completions"
 
@@ -241,7 +253,12 @@ def _resolve_persona(
         ) from None
 
     _validate_provider_target(provider.base_url)
-    return persona, provider, provider_secret, _chat_completions_url(provider.base_url)
+    return (
+        persona,
+        provider,
+        provider_secret,
+        _chat_completions_url(provider.base_url, provider.provider_type),
+    )
 
 
 def _extract_usage(value: Any) -> dict[str, int] | None:
@@ -331,6 +348,41 @@ def _client_error(status_code: int, code: str, message: str) -> HTTPException:
     return HTTPException(
         status_code=status_code,
         detail={"code": code, "message": message},
+    )
+
+
+def _log_upstream_rejection(
+    response: httpx.Response,
+    *,
+    request_id: str,
+    provider: ModelProvider,
+) -> None:
+    upstream_code: str | None = None
+    upstream_message: str | None = None
+    try:
+        body = response.json()
+    except ValueError:
+        body = None
+
+    if isinstance(body, dict):
+        error = body.get("error", body)
+        if isinstance(error, dict):
+            code = error.get("code") or error.get("type")
+            message = error.get("message")
+            if isinstance(code, str):
+                upstream_code = " ".join(code.split())[:100]
+            if isinstance(message, str):
+                upstream_message = " ".join(message.split())[:300]
+
+    # Never log provider credentials, request headers, or conversation content.
+    logger.warning(
+        "gateway_upstream_rejected",
+        request_id=request_id,
+        provider_type=provider.provider_type,
+        provider_name=provider.name,
+        upstream_status=response.status_code,
+        upstream_code=upstream_code,
+        upstream_message=upstream_message,
     )
 
 
@@ -449,6 +501,11 @@ def create_chat_completion(
 
         latency_ms = int((time.monotonic() - started) * 1000)
         if not 200 <= upstream.status_code < 300:
+            _log_upstream_rejection(
+                upstream,
+                request_id=request_id,
+                provider=provider,
+            )
             _record_usage(
                 db,
                 request_id=request_id,
@@ -562,6 +619,11 @@ def create_chat_completion(
         raise _client_error(502, "provider_connection_error", "无法连接模型供应商") from None
 
     if upstream.status_code >= 400:
+        _log_upstream_rejection(
+            upstream,
+            request_id=request_id,
+            provider=provider,
+        )
         upstream.close()
         client.close()
         _record_usage(
