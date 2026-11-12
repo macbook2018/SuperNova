@@ -4,7 +4,6 @@ import math
 from dataclasses import dataclass
 from urllib.parse import urlparse
 import httpx
-from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
