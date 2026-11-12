@@ -211,19 +211,15 @@ class KnowledgeUsageRecord(Base):
             name="fk_knowledge_usage_kb_same_tenant",
             ondelete="CASCADE",
         ),
-        ForeignKeyConstraint(
-            ["tenant_id", "document_id"],
-            ["knowledge_documents.tenant_id", "knowledge_documents.id"],
-            name="fk_knowledge_usage_document_same_tenant",
-            ondelete="SET NULL",
-        ),
         Index("ix_knowledge_usage_tenant_created", "tenant_id", "created_at"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     knowledge_base_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
-    document_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    document_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("knowledge_documents.id", ondelete="SET NULL")
+    )
     operation: Mapped[str] = mapped_column(String(32), nullable=False)
     embedding_model_name: Mapped[str | None] = mapped_column(String(120))
     input_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
