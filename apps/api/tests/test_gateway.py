@@ -8,11 +8,9 @@ from app.db.session import get_db
 from app.main import app, asgi_app
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, event, select
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy import create_engine, event
+from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
-
-from app.models.usage import UsageRecord
 
 
 @pytest.fixture

@@ -281,6 +281,11 @@ async function savePersona() {
   }
   const payload = {
     ...personaForm.value,
+    name: personaForm.value.name.trim(),
+    slug: personaForm.value.slug.trim(),
+    description: personaForm.value.description.trim(),
+    system_prompt: personaForm.value.system_prompt.trim(),
+    model_name: personaForm.value.model_name.trim(),
     provider_id: personaForm.value.provider_id || null,
   }
   try {

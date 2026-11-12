@@ -2,11 +2,11 @@ from uuid import UUID, uuid4
 
 import structlog
 from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
-from fastapi.encoders import jsonable_encoder
 
 from app.api.api_keys import router as api_keys_router
 from app.api.auth import router as auth_router
