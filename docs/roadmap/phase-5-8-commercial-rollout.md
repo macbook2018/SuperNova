@@ -39,7 +39,7 @@ Phase 5D 编号保留，以便保持既有架构文档和计费设计的可追�
 - 解析器统一输出带页码、工作表、幻灯片、标题路径等来源元数据的文本块。
 - 可配置 chunk_size / overlap；保留页码、段落、表格和原始文件位置。
 - 支持平台托管 Embedding 模型和租户 BYOK Embedding 模型；Embedding 模型与 Chat 模型目录分离或通过明确的 model_kind 区分。
-- 每个知识库固定 Embedding 模型、维度和版本；禁止同一知识库混用不同维度或不同模型版本的向量。
+- 首个 pgvector 索引固定为 1536 维；每个知识库固定 Embedding 模型和索引版本，禁止混用不同向量空间。
 - 批量 Embedding、失败重试、模型变更后的全量重建索引。
 - 记录 embedding tokens、文件字节数、chunk 数和处理耗时，先用于运营与 shadow 计量，不执行真实收费。
 
