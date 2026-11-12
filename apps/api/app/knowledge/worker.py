@@ -11,7 +11,6 @@ from uuid import uuid4
 import httpx
 import structlog
 from sqlalchemy import or_, select
-from sqlalchemy.exc import IntegrityError
 
 from app.core.config import get_settings
 from app.db.session import SessionLocal
