@@ -99,7 +99,7 @@ class KnowledgeImportUrlRequest(BaseModel):
         value = value.strip()
         parsed = urlparse(value)
         if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-            raise ValueError("仅支持 HTTP 或 HTTPS 网页地址")
+            raise ValueError("支持 HTTP/HTTPS URL；公网网页必须使用 HTTPS")
         if parsed.username or parsed.password:
             raise ValueError("URL 不允许包含用户名或密码")
         if parsed.fragment:
