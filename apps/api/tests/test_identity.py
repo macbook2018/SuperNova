@@ -1,6 +1,9 @@
 from collections.abc import Generator
 
 import pytest
+from sqlalchemy.exc import IntegrityError
+
+from app.api.auth import _is_email_unique_violation
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
@@ -228,3 +231,19 @@ def test_api_key_expiration_is_validated(client: TestClient) -> None:
         json={"name": "临时密钥", "expires_in_days": 366},
     )
     assert response.status_code == 422
+
+
+def test_email_integrity_error_classifier_only_matches_email_constraint() -> None:
+    email_error = IntegrityError(
+        "INSERT INTO users",
+        {},
+        Exception("UNIQUE constraint failed: users.email"),
+    )
+    other_error = IntegrityError(
+        "INSERT INTO tenants",
+        {},
+        Exception("UNIQUE constraint failed: tenants.name"),
+    )
+
+    assert _is_email_unique_violation(email_error) is True
+    assert _is_email_unique_violation(other_error) is False
