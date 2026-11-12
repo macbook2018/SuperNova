@@ -40,3 +40,18 @@
 .secret-field{height:auto;min-height:48px;gap:8px;padding:8px 10px}
 .secret-field code{font-size:10px;word-break:break-all;white-space:normal}
 @media(max-width:640px){.auth-card{padding:25px 20px}.checkbox-grid{grid-template-columns:1fr}.key-item{align-items:flex-start}.key-item .row-actions{flex-direction:row}}
+
+
+/* Phase 4: real gateway usage views */
+.usage-mini-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:18px 0 8px}
+.usage-mini-grid>div{display:flex;flex-direction:column;gap:7px;padding:14px;border:1px solid #edf0f5;border-radius:10px;background:#fafbfd}
+.usage-mini-grid small{font-size:10px;color:#929eaf}
+.usage-mini-grid b{font-size:20px;color:#34445d;overflow-wrap:anywhere}
+.usage-footnote{display:block;margin-top:12px;color:#9aa5b5;font-size:9px;line-height:1.7}
+.usage-list{display:flex;flex-direction:column}
+.usage-row{display:grid;grid-template-columns:minmax(150px,1.5fr) minmax(90px,1fr) minmax(100px,1fr) auto auto;align-items:center;gap:14px;padding:13px 0;border-top:1px solid #f0f2f6}
+.usage-row>div{display:flex;flex-direction:column;gap:5px;min-width:0}
+.usage-row b{font-size:11px;color:#3b4b63;overflow-wrap:anywhere}
+.usage-row small{font-size:9px;color:#98a3b2}
+.usage-row>span{font-size:10px;color:#64738a}
+@media(max-width:640px){.usage-mini-grid{grid-template-columns:1fr}.usage-row{grid-template-columns:1fr 1fr;gap:8px}.usage-row>div{grid-column:1/-1}}

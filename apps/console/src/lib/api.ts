@@ -210,3 +210,35 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}): Promi
 export function jsonBody(value: unknown): RequestInit {
   return { method: 'POST', body: JSON.stringify(value) }
 }
+
+
+export interface UsageTotals {
+  requests: number
+  successful_requests: number
+  failed_requests: number
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+  unmetered_requests: number
+}
+
+export interface UsageSummary {
+  month_start: string
+  current_month: UsageTotals
+  all_time: UsageTotals
+}
+
+export interface UsageRecord {
+  id: string
+  request_id: string
+  persona_slug: string
+  provider_type: string
+  model_name: string
+  status: string
+  prompt_tokens: number | null
+  completion_tokens: number | null
+  total_tokens: number | null
+  latency_ms: number
+  error_code: string | null
+  created_at: string
+}
