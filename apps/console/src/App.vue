@@ -524,11 +524,57 @@ const bars = computed(() =>
     <button v-if="page==='overview'||page==='personas'" class="btn primary" @click="editPersona()"><Plus :size="16"/>新建人格</button>
     <button v-else-if="page==='providers'" class="btn primary" @click="editProvider()"><Plus :size="16"/>添加供应商</button>
     <button v-else-if="page==='knowledge'" class="btn primary" @click="kbModal=true"><Plus :size="16"/>新建知识库</button>
-    <template v-else-if="page==='knowledgeDetail'">
+    <template v-else-if="page==='knowledgeDetail'"><button class="btn secondary" @click="go('knowledge')">返回知识库</button><button class="btn primary" @click="upload"><Upload :size="16"/>上传文档</button></template>
+    <button v-else-if="page==='api'" class="btn primary" @click="keyModal=true"><Plus :size="16"/>创建 API Key</button>
+    <button v-else-if="page==='usage'" class="btn secondary" @click="notify('报表导出将在正式版开放')"><Download :size="16"/>导出报表</button>
+   </div></div>
+
+   <template v-if="page==='overview'">
+    <section class="hero"><div><span><Sparkles :size="14"/>让 AI 助手开始为你工作</span><h2>你好，{{currentUser?.display_name||'用户'}} <i>✦</i></h2><p>你的智能体工作空间已准备就绪。创建人格、连接知识库，开始构建专属 AI 助手。</p><button @click="go('personas')">管理我的人格 <ArrowRight :size="15"/></button></div><div class="hero-art"><div class="orbit one"></div><div class="orbit two"></div><img src="/logo.svg" alt=""><i class="orb-a"></i><i class="orb-b"></i><i class="orb-c"></i></div></section>
+    <section class="stats">
+     <article><div><span class="ico blue"><Bot :size="18"/></span>我的人格<button @click="go('personas')"><MoreHorizontal :size="17"/></button></div><strong>{{personas.length}}<small>个</small></strong><footer><b>{{personas.filter(p=>p.enabled).length}} 个运行中</b><span>共创建</span></footer></article>
+     <article><div><span class="ico purple"><Zap :size="18"/></span>本月 Token 消耗<button @click="go('usage')"><MoreHorizontal :size="17"/></button></div><strong>—</strong><footer><span>Phase 4 接入真实计量</span></footer></article>
+     <article><div><span class="ico green"><Wallet :size="18"/></span>剩余额度<button @click="go('usage')"><MoreHorizontal :size="17"/></button></div><strong>—</strong><footer><span>计费模块尚未接入</span><a @click="go('usage')">了解进度 →</a></footer></article>
+     <article><div><span class="ico amber"><Database :size="18"/></span>知识库文档<button @click="go('knowledge')"><MoreHorizontal :size="17"/></button></div><strong>{{totalDocs}}<small>份</small></strong><footer><span>{{kbs.length}} 个知识库</span><a @click="go('knowledge')">管理知识库 →</a></footer></article>
+    </section>
+    <section class="dashboard"><article class="panel chart-panel"><div class="panel-title"><div><b>Token 使用趋势</b><small>近 7 天的模型调用消耗</small></div><a @click="go('usage')">查看详情 →</a></div><div class="chart-total"><strong>428,690</strong><span>Tokens</span><em>↗ 12.8%</em></div><div class="chart"><div class="y-axis"><span>100K</span><span>75K</span><span>50K</span><span>25K</span><span>0</span></div><svg viewBox="0 0 680 190" preserveAspectRatio="none"><defs><linearGradient id="fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#4788f5" stop-opacity=".2"/><stop offset="1" stop-color="#4788f5" stop-opacity="0"/></linearGradient></defs><path class="grid" d="M0 12H680 M0 52H680 M0 92H680 M0 132H680 M0 172H680"/><path d="M0 145 C35 140 45 118 82 125 S130 106 164 118 S210 95 245 105 S292 76 328 92 S374 61 410 80 S458 68 491 74 S540 38 573 54 S633 23 680 31 L680 180 L0 180Z" fill="url(#fill)"/><path d="M0 145 C35 140 45 118 82 125 S130 106 164 118 S210 95 245 105 S292 76 328 92 S374 61 410 80 S458 68 491 74 S540 38 573 54 S633 23 680 31" fill="none" stroke="#4788f5" stroke-width="3"/></svg></div><div class="x-axis"><span>11/06</span><span>11/07</span><span>11/08</span><span>11/09</span><span>11/10</span><span>11/11</span><span>11/12</span></div></article>
+     <article class="panel resource"><div class="panel-title"><div><b>资源概览</b><small>当前工作空间资源使用情况</small></div><Gauge :size="18"/></div><div class="resource-line"><div><span>人格运行状态</span><b>{{personas.filter(p=>p.enabled).length}}/{{personas.length}}</b></div><i><span :style="{width:personaRatio+'%'}"></span></i><small>已启用的人格</small></div><div class="resource-line"><div><span>模型供应商</span><b>{{providers.filter(p=>p.enabled).length}}/{{providers.length}}</b></div><i><span class="violet" :style="{width:(providers.length?providers.filter(p=>p.enabled).length/providers.length*100:0)+'%'}"></span></i><small>已启用的模型供应商</small></div><div class="secure-note"><ShieldCheck :size="16"/>数据按用户空间隔离，其他用户无法访问你的资源。</div></article></section>
+    <section class="panel"><div class="panel-title"><div><b>最近使用的人格</b><small>快速进入人格配置</small></div><a @click="go('personas')">查看全部 →</a></div><div class="persona-shortcuts"><button v-for="p in personas" :key="p.id" @click="editPersona(p)"><span class="persona-icon" :class="p.color"><Bot :size="18"/></span><span><b>{{p.name}}</b><small>{{p.model_name}}</small></span><i :class="{off:!p.enabled}"></i><ChevronRight :size="15"/></button></div></section>
+    <section class="panel"><div class="panel-title"><div><b>最近调用</b><small>真实调用记录将在统一 API 网关阶段接入</small></div><a @click="go('usage')">用量说明 →</a></div><div class="empty"><Activity :size="26"/><b>暂时没有真实调用记录</b><small>人格和模型配置已持久化；对话网关将在 Phase 4 开放。</small></div></section>
+   </template>
+
+   <template v-else-if="page==='personas'">
+    <section class="metric-strip"><div><small>全部人格</small><b>{{personas.length}}</b></div><div><small>运行中</small><b class="green-text">{{personas.filter(p=>p.enabled).length}}</b></div><div><small>已停用</small><b>{{personas.filter(p=>!p.enabled).length}}</b></div><div><small>调用方式</small><b class="small-metric">用户级 API Key</b></div></section>
+    <section class="panel no-pad"><div class="toolbar"><label class="search"><Search :size="16"/><input v-model="query" placeholder="搜索人格名称或调用标识..."></label><button class="btn secondary small" @click="notify('筛选功能将在正式版开放')"><Filter :size="14"/>筛选</button></div><div v-if="filteredPersonas.length"><article v-for="p in filteredPersonas" :key="p.id" class="persona-row"><span class="persona-icon large" :class="p.color"><Bot :size="21"/></span><div class="persona-detail"><div><b>{{p.name}}</b><label :class="p.enabled?'running':'paused'"><i></i>{{p.enabled?'运行中':'已停用'}}</label></div><p>{{p.description}}</p><small><code>{{p.slug}}</code><span><Cpu :size="12"/> {{p.model}}</span></small></div><div class="row-actions"><button @click="togglePersona(p)" :aria-label="p.enabled?'停用':'启用'"><Zap :size="16"/></button><button @click="editPersona(p)" aria-label="编辑"><Pencil :size="16"/></button><button @click="deletePersona(p)" aria-label="删除"><Trash2 :size="16"/></button></div></article></div><div v-else class="empty"><Search :size="28"/><b>没有找到匹配的人格</b><small>试试其他关键词，或创建一个新人格。</small></div></section>
+    <div class="info"><AlertCircle :size="17"/><div><b>关于人格调用</b><small>所有人格共用当前用户的 API Key。第三方请求时，将人格调用标识填写在 model 字段中，例如 customer-support。</small></div></div>
+   </template>
+
+   <template v-else-if="page==='providers'">
+    <section class="metric-strip"><div><small>供应商总数</small><b>{{providers.length}}</b></div><div><small>已启用</small><b class="green-text">{{providers.filter(p=>p.enabled).length}}</b></div><div><small>已保存密钥</small><b>{{providers.filter(p=>p.has_api_key).length}}</b></div><div><small>凭据安全</small><b class="small-metric">服务端加密</b></div></section>
+    <section v-if="providers.length" class="kb-grid">
+     <article v-for="provider in providers" :key="provider.id" class="kb-card">
+      <div class="kb-card-head"><span class="kb-icon blue"><Server :size="20"/></span><label :class="provider.enabled?'running':'paused'">{{provider.enabled?'已启用':'已停用'}}</label></div>
+      <h3>{{provider.name}}</h3><p>{{provider.provider_type}} · {{provider.base_url}}</p>
+      <div class="kb-meta"><span><KeyRound :size="13"/> {{provider.api_key_hint||'未配置密钥'}}</span></div>
+      <footer><small><i></i>{{provider.has_api_key?'凭据已加密保存':'未设置 API Key'}}</small><div class="row-actions"><button @click="toggleProvider(provider)" :aria-label="provider.enabled?'停用':'启用'"><Zap :size="15"/></button><button @click="editProvider(provider)" aria-label="编辑"><Pencil :size="15"/></button><button @click="deleteProvider(provider)" aria-label="删除"><Trash2 :size="15"/></button></div></footer>
+     </article>
+    </section>
+    <section v-else class="panel empty"><Server :size="30"/><b>还没有配置模型供应商</b><small>添加 DeepSeek、OpenAI、通义千问或任意 OpenAI 兼容服务。</small><button class="btn primary" @click="editProvider"><Plus :size="15"/>添加第一个供应商</button></section>
+    <div class="info"><ShieldCheck :size="17"/><div><b>凭据安全</b><small>模型供应商 API Key 使用 Fernet 对称加密后存入数据库；接口只返回密钥末四位提示，不返回密文或明文。生产环境必须配置独立的 SUPERNOVA_ENCRYPTION_KEY。</small></div></div>
+   </template>
+
+   <template v-else-if="page==='knowledge'">
+    <section class="kb-summary"><div><Database :size="18"/><small>知识库总数</small><b>{{kbs.length}} 个</b></div><div><FileText :size="18"/><small>文档总数</small><b>{{totalDocs}} 份</b></div><div><CheckCircle2 :size="18"/><small>索引状态</small><b>正常运行</b></div></section>
+    <section class="kb-grid"><article v-for="k in kbs" :key="k.id" class="kb-card"><div class="kb-card-head"><span class="kb-icon" :class="k.color"><Database :size="20"/></span><button @click="deleteKb(k)" aria-label="删除知识库"><Trash2 :size="17"/></button></div><h3>{{k.name}}</h3><p>{{k.description||'暂无描述'}}</p><div class="kb-meta"><span><FileText :size="13"/> {{k.documents_count}} 份文档</span><span>最近更新</span></div><footer><small><i></i>元数据已保存</small><a @click="openKb(k)">管理知识库 →</a></footer></article><button class="kb-create" @click="kbModal=true"><span><Plus :size="22"/></span><b>创建知识库</b><small>上传文档或导入网页链接</small></button></section>
+    <div class="info"><AlertCircle :size="17"/><div><b>当前阶段边界</b><small>知识库元数据与人格关联已接入数据库。文档上传、解析、切片和向量化检索将在后续知识库阶段实现。</small></div></div>
+   </template>
+
+   <template v-else-if="page==='knowledgeDetail'">
     <section class="panel kb-detail"><span class="kb-icon" :class="selectedKb.color"><Database :size="23"/></span><div><h2>{{selectedKb.name}}</h2><p>{{selectedKb.description}}</p><small>{{selectedKb.documents_count}} 份文档 · 文档处理待接入</small></div><button class="btn secondary" @click="deleteKb(selectedKb)"><Trash2 :size="15"/>删除知识库</button></section>
     <section class="panel"><div class="panel-title"><div><b>文档管理</b><small>文档上传、解析和向量化检索将在后续知识库阶段实现。</small></div><button class="btn secondary small" @click="upload"><Upload :size="14"/>上传文档</button></div><div class="empty"><FileText :size="28"/><b>当前知识库还没有文档</b><small>本阶段已完成知识库元数据保存；文档处理流水线将在后续阶段接入。</small></div></section>
     <section class="panel binding"><div class="panel-title"><div><b>已关联人格</b><small>一个知识库可以关联多个 AI 人格；在人格编辑窗口中管理关联。</small></div><a @click="go('personas')">管理人格 →</a></div><span v-for="persona in linkedPersonas" :key="persona.id"><Bot :size="14"/> {{persona.name}} <Check :size="13"/></span><div v-if="!linkedPersonas.length" class="empty"><b>尚未关联人格</b><small>编辑人格并选择此知识库即可建立关联。</small></div></section>
    </template>
+
 
    <template v-else-if="page==='api'">
     <section class="api-notice"><ShieldCheck :size="21"/><div><b>一个用户级密钥，未来调用多个独立人格</b><p>密钥已接入真实账户与数据库。OpenAI 兼容对话网关将在 Phase 4 开放，当前尚不能使用此地址发起模型请求。</p></div></section>
@@ -544,16 +590,18 @@ const bars = computed(() =>
     </div><aside class="api-side"><article class="panel"><div class="panel-title"><div><b>已启用的人格</b><small>可在统一网关上线后通过 model 选择</small></div></div><div v-for="persona in personas.filter(p=>p.enabled)" :key="persona.id" class="model-row"><span class="persona-icon" :class="persona.color"><Bot :size="15"/></span><div><b>{{persona.name}}</b><small>{{persona.slug}}</small></div><i></i></div><div v-if="!personas.some(p=>p.enabled)" class="empty"><small>暂无已启用的人格</small></div><a @click="go('personas')">管理人格 →</a></article><article class="panel tips"><LifeBuoy :size="18"/><b>密钥安全提示</b><ul><li>不要将 API Key 提交到代码仓库。</li><li>生产环境使用 HTTPS 和独立密钥管理。</li><li>轮换后旧密钥立即失效。</li><li>密钥明文无法再次查看，请妥善保存。</li></ul></article></aside></section>
    </template>
 
+
    <template v-else-if="page==='usage'">
     <section class="panel empty"><Activity :size="30"/><b>真实用量计量尚未接入</b><small>统一 API 网关将在 Phase 4 记录输入 Token、输出 Token、模型调用次数和响应时间。</small><button class="btn secondary" @click="go('api')">查看 API 接入规划</button></section>
    </template>
+
 
    <template v-else-if="page==='settings'">
     <section class="panel settings"><div class="panel-title"><div><b>基本资料</b><small>管理你的账户展示信息</small></div></div><div class="account"><span>{{(currentUser?.display_name||'U').slice(0,1).toUpperCase()}}</span><div><b>{{currentUser?.display_name}}</b><small>{{currentTenant?.name}} · {{currentTenant?.role}}</small></div></div><div class="settings-fields"><label>账户名称<input :value="currentUser?.display_name||''" readonly></label><label>登录邮箱<input :value="currentUser?.email||''" readonly></label><label>账户类型<input value="工作空间账户" readonly></label></div></section>
     <section class="panel settings"><div class="panel-title"><div><b>安全与隐私</b><small>保护你的账户和 API 资源</small></div></div><div class="setting-row"><ShieldCheck :size="18"/><div><b>登录密码</b><small>定期更新密码，保护账户安全</small></div><button class="btn secondary small" @click="notify('密码修改接口将在后续账户安全阶段接入')">修改密码</button></div><div class="setting-row"><KeyRound :size="18"/><div><b>API 密钥</b><small>管理第三方应用的访问凭证</small></div><a @click="go('api')">前往管理 →</a></div></section>
     <section class="panel settings"><div class="panel-title"><div><b>通知偏好</b><small>选择你希望接收的系统通知</small></div></div><div class="setting-row"><Bell :size="18"/><div><b>用量提醒</b><small>当 Token 额度即将耗尽时提醒我</small></div><span class="toggle on"></span></div><div class="setting-row"><MessageSquare :size="18"/><div><b>系统公告</b><small>接收产品更新和维护通知</small></div><span class="toggle"></span></div></section>
    </template>
-   <footer class="page-footer"><span>© 2026 SuperNova · 智能体服务平台</span><span>● 所有系统运行正常</span><span>人格、供应商、知识库元数据已连接后端 · 对话与文档处理待接入</span></footer>
+   <footer class="page-footer"><span>© 2026 SuperNova · 智能体服务平台</span><span>● 所有系统运行正常</span><span>交互原型 · 业务数据尚未连接后端</span></footer>
   </div>
  </main>
 
@@ -572,7 +620,8 @@ const bars = computed(() =>
    <div class="full"><b class="form-section-title">关联知识库</b><div v-if="kbs.length" class="checkbox-grid"><label v-for="kb in kbs" :key="kb.id"><input v-model="personaForm.knowledge_base_ids" type="checkbox" :value="kb.id"><span>{{kb.name}}</span></label></div><small v-else class="form-hint">尚无知识库，可先创建知识库后再关联。</small></div>
   </div>
   <div class="modal-actions"><button class="btn secondary" @click="personaModal=false">取消</button><button class="btn primary" @click="savePersona"><Check :size="15"/>保存人格</button></div>
- </section></div> <div v-if="kbModal" class="modal-backdrop" @click.self="kbModal=false"><section class="modal small-modal"><div class="modal-title"><div><small>KNOWLEDGE BASE</small><h2>创建知识库</h2><p>建立独立资料空间，后续可关联到不同人格。</p></div><button @click="kbModal=false"><X :size="18"/></button></div><div class="form-grid"><label class="full">知识库名称 <b>*</b><input v-model="kbForm.name" placeholder="例如：产品资料库"></label><label class="full">知识库描述<textarea v-model="kbForm.description" rows="3" placeholder="说明知识库包含哪些内容..."></textarea></label></div><div class="modal-actions"><button class="btn secondary" @click="kbModal=false">取消</button><button class="btn primary" @click="createKb"><Plus :size="15"/>创建知识库</button></div></section></div>
+ </section></div>
+ <div v-if="kbModal" class="modal-backdrop" @click.self="kbModal=false"><section class="modal small-modal"><div class="modal-title"><div><small>KNOWLEDGE BASE</small><h2>创建知识库</h2><p>建立独立资料空间，后续可关联到不同人格。</p></div><button @click="kbModal=false"><X :size="18"/></button></div><div class="form-grid"><label class="full">知识库名称 <b>*</b><input v-model="kbForm.name" placeholder="例如：产品资料库"></label><label class="full">知识库描述<textarea v-model="kbForm.description" rows="3" placeholder="说明知识库包含哪些内容..."></textarea></label></div><div class="modal-actions"><button class="btn secondary" @click="kbModal=false">取消</button><button class="btn primary" @click="createKb"><Plus :size="15"/>创建知识库</button></div></section></div>
  <div v-if="providerModal" class="modal-backdrop" @click.self="providerModal=false"><section class="modal small-modal"><div class="modal-title"><div><small>MODEL PROVIDER</small><h2>{{editingProviderId?'编辑模型供应商':'添加模型供应商'}}</h2><p>API Key 会在服务端加密保存，读取接口不会返回明文。</p></div><button @click="providerModal=false"><X :size="18"/></button></div>
   <div class="form-grid">
    <label class="full">供应商名称 <b>*</b><input v-model="providerForm.name" maxlength="80" placeholder="例如：DeepSeek 主账户"></label>
