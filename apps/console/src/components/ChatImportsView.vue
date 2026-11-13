@@ -119,6 +119,9 @@ async function startMediaExtraction() {
       'POST',
     )
     await loadMediaJobs(true)
+    if (mediaJobs.value.some(job => ['succeeded', 'partial'].includes(job.status))) {
+      await Promise.all([loadPreview(), loadMessages(true)])
+    }
     notify(
       accepted.accepted_files
         ? '已提交 ' + accepted.accepted_files + ' 个媒体提取任务'
@@ -143,7 +146,7 @@ async function downloadMediaAsset(asset: ChatMediaAsset) {
     document.body.appendChild(anchor)
     anchor.click()
     anchor.remove()
-    URL.revokeObjectURL(url)
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000)
   } catch (error) {
     notify(error instanceof Error ? error.message : '下载媒体附件失败')
   }
