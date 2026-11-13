@@ -559,7 +559,6 @@ def process_chat_media_extraction_job(job_id: UUID) -> None:
                 .where(
                     ChatMessage.tenant_id == tenant_id,
                     ChatMessage.source_id == source_id,
-                    ChatMessage.import_file_id == import_file_id,
                 )
                 .order_by(ChatMessage.timestamp, ChatMessage.id)
                 .execution_options(yield_per=500)

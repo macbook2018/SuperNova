@@ -747,7 +747,9 @@ def list_chat_messages(
         .offset(offset)
     ).all()
     message_ids = [item.id for item in messages]
-    assets_by_message: dict[UUID, list[ChatMediaAssetRead]] = {}
+    assets_by_message: dict[
+        UUID, dict[tuple[str, str], ChatMediaAssetRead]
+    ] = {}
     if message_ids:
         assets = db.scalars(
             select(ChatMediaAsset)
@@ -756,26 +758,31 @@ def list_chat_messages(
                 ChatMediaAsset.source_id == source.id,
                 ChatMediaAsset.message_id.in_(message_ids),
             )
-            .order_by(ChatMediaAsset.created_at, ChatMediaAsset.id)
+            .order_by(ChatMediaAsset.created_at.desc(), ChatMediaAsset.id.desc())
         ).all()
         for asset in assets:
-            assets_by_message.setdefault(asset.message_id, []).append(
-                ChatMediaAssetRead(
-                    id=asset.id,
-                    asset_type=asset.asset_type,
-                    role=asset.role,
-                    status=asset.status,
-                    original_name=asset.original_name,
-                    mime_type=asset.mime_type,
-                    file_size_bytes=asset.file_size_bytes,
-                    width=asset.width,
-                    height=asset.height,
-                    content_url=(
-                        f"/chat-media-assets/{asset.id}/content"
-                        if asset.status == "available" and asset.object_key
-                        else None
-                    ),
-                )
+            role_key = (asset.asset_type, asset.role)
+            selected = assets_by_message.setdefault(asset.message_id, {})
+            current = selected.get(role_key)
+            if current is not None and (
+                current.status == "available" or asset.status != "available"
+            ):
+                continue
+            selected[role_key] = ChatMediaAssetRead(
+                id=asset.id,
+                asset_type=asset.asset_type,
+                role=asset.role,
+                status=asset.status,
+                original_name=asset.original_name,
+                mime_type=asset.mime_type,
+                file_size_bytes=asset.file_size_bytes,
+                width=asset.width,
+                height=asset.height,
+                content_url=(
+                    f"/chat-media-assets/{asset.id}/content"
+                    if asset.status == "available" and asset.object_key
+                    else None
+                ),
             )
     return [
         ChatMessageRead(
@@ -790,7 +797,7 @@ def list_chat_messages(
             timestamp=item.timestamp,
             identity_role=item.identity_role,
             metadata=item.metadata_json,
-            media_assets=assets_by_message.get(item.id, []),
+            media_assets=list(assets_by_message.get(item.id, {}).values()),
         )
         for item in messages
     ]
@@ -841,7 +848,7 @@ def preview_chat_source(
                 ChatMediaAsset.asset_type == "avatar",
                 ChatMediaAsset.status == "available",
             )
-            .order_by(ChatMediaAsset.created_at, ChatMediaAsset.id)
+            .order_by(ChatMediaAsset.created_at.desc(), ChatMediaAsset.id.desc())
         ).all()
         for asset in avatar_assets:
             avatar_by_participant.setdefault(asset.participant_id, asset.id)
