@@ -119,11 +119,20 @@ def _persist_batch(
                 conversation_cache[record.conversation_external_id] = conversation
             if record.conversation_title and not conversation.title:
                 conversation.title = record.conversation_title
-            if conversation.conversation_type == "unknown" and record.conversation_type != "unknown":
+            if (
+                conversation.conversation_type == "unknown"
+                and record.conversation_type != "unknown"
+            ):
                 conversation.conversation_type = record.conversation_type
-            if conversation.first_message_at is None or record.timestamp < conversation.first_message_at:
+            if (
+                conversation.first_message_at is None
+                or record.timestamp < conversation.first_message_at
+            ):
                 conversation.first_message_at = record.timestamp
-            if conversation.last_message_at is None or record.timestamp > conversation.last_message_at:
+            if (
+                conversation.last_message_at is None
+                or record.timestamp > conversation.last_message_at
+            ):
                 conversation.last_message_at = record.timestamp
 
             participant_key = (conversation.id, record.sender_ref)
