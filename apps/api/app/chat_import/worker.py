@@ -5,7 +5,7 @@ import hashlib
 import socket
 import time
 from datetime import UTC, datetime, timedelta
-from uuid import UUID, uuid4
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 import structlog
 from sqlalchemy import and_, delete, or_, select
@@ -538,8 +538,11 @@ def process_chat_media_extraction_job(job_id: UUID) -> None:
         extracted_count = 0
         missing_count = 0
         error_count = 0
-        for item in extracted:
-            asset_id = uuid4()
+        for asset_index, item in enumerate(extracted):
+            asset_id = uuid5(
+                NAMESPACE_URL,
+                f"supernova-chat-media:{import_file_id}:{asset_index}",
+            )
             stored_key = None
             body = item.body
             file_size = len(body) if body is not None else 0
