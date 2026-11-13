@@ -316,6 +316,102 @@ def upload_chat_import(
     )
 
 
+@router.post(
+    "/chat-imports/{job_id}/retry",
+    response_model=ChatImportJobRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def retry_chat_import_job(
+    job_id: UUID,
+    principal: CurrentPrincipal,
+    db: DatabaseSession,
+) -> ChatImportJobRead:
+    job = db.scalar(
+        select(ChatImportJob).where(
+            ChatImportJob.id == job_id,
+            ChatImportJob.tenant_id == principal.tenant.id,
+        )
+    )
+    if job is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "chat_import_job_not_found", "message": "导入任务不存在"},
+        )
+    if job.status not in {"failed", "cancelled"}:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "chat_import_not_retryable", "message": "只有失败或已取消的任务可以重试"},
+        )
+    retryable = db.scalars(
+        select(ChatImportFile).where(
+            ChatImportFile.tenant_id == principal.tenant.id,
+            ChatImportFile.job_id == job.id,
+            ChatImportFile.status.in_(("failed", "processing", "uploaded")),
+        )
+    ).all()
+    if not retryable:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "chat_import_no_retryable_files", "message": "没有可重试的文件"},
+        )
+    for item in retryable:
+        item.status = "uploaded"
+        item.error_code = None
+        item.error_message = None
+    job.status = "queued"
+    job.progress = 0
+    job.total_files = len(retryable)
+    job.processed_files = 0
+    job.error_count = 0
+    job.error_summary = None
+    job.attempts = 0
+    job.worker_id = None
+    job.locked_at = None
+    job.lease_expires_at = None
+    db.commit()
+    db.refresh(job)
+    return _job_read(job)
+
+
+@router.post(
+    "/chat-imports/{job_id}/cancel",
+    response_model=ChatImportJobRead,
+)
+def cancel_chat_import_job(
+    job_id: UUID,
+    principal: CurrentPrincipal,
+    db: DatabaseSession,
+) -> ChatImportJobRead:
+    job = db.scalar(
+        select(ChatImportJob).where(
+            ChatImportJob.id == job_id,
+            ChatImportJob.tenant_id == principal.tenant.id,
+        )
+    )
+    if job is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "chat_import_job_not_found", "message": "导入任务不存在"},
+        )
+    if job.status not in {"queued", "processing"}:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "chat_import_not_cancellable", "message": "当前任务状态不允许取消"},
+        )
+    job.status = "cancelled"
+    job.worker_id = None
+    job.locked_at = None
+    job.lease_expires_at = None
+    db.query(ChatImportFile).filter(
+        ChatImportFile.tenant_id == principal.tenant.id,
+        ChatImportFile.job_id == job.id,
+        ChatImportFile.status == "processing",
+    ).update({"status": "uploaded"}, synchronize_session=False)
+    db.commit()
+    db.refresh(job)
+    return _job_read(job)
+
+
 @router.get("/chat-imports/{job_id}", response_model=ChatImportJobRead)
 def get_chat_import_job(
     job_id: UUID,
