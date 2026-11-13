@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     knowledge_worker_lease_seconds: int = 180
     embedding_timeout_seconds: float = 60.0
     chat_import_max_file_bytes: int = 50 * 1024 * 1024
+    chat_import_max_batch_bytes: int = 100 * 1024 * 1024
     chat_import_max_files: int = 20
     chat_import_worker_poll_seconds: float = 2.0
     chat_import_worker_lease_seconds: int = 180
@@ -84,6 +85,10 @@ class Settings(BaseSettings):
         if not 1024 <= self.chat_import_max_file_bytes <= 250 * 1024 * 1024:
             raise ValueError(
                 "SUPERNOVA_CHAT_IMPORT_MAX_FILE_BYTES must be between 1 KiB and 250 MiB"
+            )
+        if not 1024 <= self.chat_import_max_batch_bytes <= 500 * 1024 * 1024:
+            raise ValueError(
+                "SUPERNOVA_CHAT_IMPORT_MAX_BATCH_BYTES must be between 1 KiB and 500 MiB"
             )
         if not 1 <= self.chat_import_max_files <= 100:
             raise ValueError("SUPERNOVA_CHAT_IMPORT_MAX_FILES must be between 1 and 100")
