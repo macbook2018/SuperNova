@@ -198,6 +198,22 @@ def test_worker_normalizes_messages_and_identity_requires_user_confirmation(
         assert file_record is not None
         assert object_key
 
+    job_detail = client.get(
+        f"/chat-imports/{job_id}",
+        headers=headers(auth),
+    )
+    assert job_detail.status_code == 200
+    assert job_detail.json()["files"][0]["status"] == "parsed"
+
+    messages_response = client.get(
+        f"/chat-sources/{source['id']}/messages",
+        headers=headers(auth),
+        params={"sender_ref": "wxid-owner"},
+    )
+    assert messages_response.status_code == 200
+    assert len(messages_response.json()) == 1
+    assert messages_response.json()[0]["content"] == "你好"
+
     preview = client.get(
         f"/chat-sources/{source['id']}/preview",
         headers=headers(auth),
