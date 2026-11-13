@@ -675,7 +675,9 @@ def get_chat_media_asset_content(
         or asset.mime_type.startswith("video/")
     ))
     disposition = "inline" if inline else "attachment"
-    safe_filename = filename.replace('"', "")
+    safe_filename = "".join(
+        char for char in filename if char.isprintable() and char not in '"\r\n'
+    )[:200] or "attachment"
     return Response(
         content=body,
         media_type=asset.mime_type or "application/octet-stream",

@@ -119,7 +119,9 @@ async function startMediaExtraction() {
     notify(
       accepted.accepted_files
         ? '已提交 ' + accepted.accepted_files + ' 个媒体提取任务'
-        : '媒体提取任务已存在，正在继续处理',
+        : accepted.jobs.every(job => ['succeeded', 'partial'].includes(job.status))
+          ? '媒体资源已提取，详情见下方任务状态'
+          : '媒体提取任务已存在，正在处理',
     )
   } catch (error) {
     notify(error instanceof Error ? error.message : '提交媒体提取任务失败')
@@ -321,7 +323,10 @@ onMounted(() => {
   void loadSources(true)
   pollTimer = window.setInterval(() => { if (sourceId.value) void poll() }, 5000)
 })
-onUnmounted(() => { if (pollTimer !== undefined) window.clearInterval(pollTimer) })
+onUnmounted(() => {
+  if (pollTimer !== undefined) window.clearInterval(pollTimer)
+  clearMediaUrls()
+})
 </script>
 
 <template>

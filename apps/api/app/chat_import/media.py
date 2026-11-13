@@ -54,7 +54,10 @@ def _safe_member_path(index_path: str, raw_path: Any) -> str:
     resolved = PurePosixPath(index_path).parent / path
     if resolved.is_absolute() or ".." in resolved.parts:
         raise ValueError("wekeep_media_path_unsafe")
-    return resolved.as_posix()
+    resolved_value = resolved.as_posix()
+    if len(resolved_value) > 512:
+        raise ValueError("wekeep_media_path_unsafe")
+    return resolved_value
 
 
 def _validate_archive(archive: zipfile.ZipFile) -> dict[str, zipfile.ZipInfo]:
@@ -248,9 +251,11 @@ def extract_wekeep_media(
                 if payload is not None:
                     extracted_bytes += len(payload)
                 archive_path = path
+                raw_name = str(resource.get("name") or "").strip()
                 original_name = (
-                    str(resource.get("name") or "").strip()
-                    or (PurePosixPath(path).name if path else None)
+                    PurePosixPath(raw_name.replace("\\", "/")).name[:255]
+                    if raw_name
+                    else (PurePosixPath(path).name[:255] if path else None)
                 )
                 mime_type = (
                     mimetypes.guess_type(archive_path or original_name or "")[0]
@@ -351,7 +356,7 @@ def extract_wekeep_media(
                             role="avatar",
                             status=status,
                             archive_path=path,
-                            original_name=PurePosixPath(path or avatar_path).name,
+                            original_name=PurePosixPath(path or avatar_path).name[:255],
                             mime_type=mime_type,
                             body=payload,
                             sha256=digest,
