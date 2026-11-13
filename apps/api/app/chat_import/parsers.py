@@ -302,7 +302,41 @@ def _parse_csv(body: bytes, source_file: str) -> Iterator[NormalizedChatMessage]
         yield _normalize_row(row, source_file=source_file, source_row=row_index)
 
 
+def _validate_xlsx_container(body: bytes) -> None:
+    try:
+        with zipfile.ZipFile(io.BytesIO(body)) as archive:
+            members = [item for item in archive.infolist() if not item.is_dir()]
+            if len(members) > 10_000:
+                raise ValueError("xlsx_member_limit_exceeded")
+            names = {item.filename for item in members}
+            if "xl/workbook.xml" not in names:
+                raise ValueError("invalid_xlsx_chat_export")
+            total_size = 0
+            for item in members:
+                path = PurePosixPath(item.filename)
+                mode = item.external_attr >> 16
+                if path.is_absolute() or ".." in path.parts or "\\" in item.filename:
+                    raise ValueError("unsafe_xlsx_member_path")
+                if stat.S_ISLNK(mode):
+                    raise ValueError("xlsx_symlink_not_supported")
+                if item.file_size > MAX_ZIP_MEMBER_BYTES:
+                    raise ValueError("xlsx_member_size_limit_exceeded")
+                total_size += item.file_size
+                if total_size > MAX_ZIP_UNCOMPRESSED_BYTES:
+                    raise ValueError("xlsx_expansion_limit_exceeded")
+                if item.file_size and item.compress_size == 0:
+                    raise ValueError("invalid_xlsx_compression_ratio")
+                if (
+                    item.compress_size
+                    and item.file_size / item.compress_size > MAX_ZIP_COMPRESSION_RATIO
+                ):
+                    raise ValueError("xlsx_compression_ratio_limit_exceeded")
+    except zipfile.BadZipFile:
+        raise ValueError("invalid_xlsx_chat_export") from None
+
+
 def _parse_xlsx(body: bytes, source_file: str) -> Iterator[NormalizedChatMessage]:
+    _validate_xlsx_container(body)
     try:
         workbook = load_workbook(io.BytesIO(body), read_only=True, data_only=True)
     except Exception:
@@ -379,6 +413,8 @@ def _parse_html(body: bytes, source_file: str) -> Iterator[NormalizedChatMessage
         if not headers:
             continue
         for row_index, tr in enumerate(rows[1:], start=2):
+            if row_index > MAX_RECORDS_PER_FILE + 1:
+                raise ValueError("chat_record_limit_exceeded")
             values = [cell.get_text(" ", strip=True) for cell in tr.find_all(["td", "th"])]
             row = dict(zip(headers, values, strict=False))
             if not any(values):
