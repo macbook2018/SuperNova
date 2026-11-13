@@ -14,6 +14,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.chat_import import worker
+from app.chat_import.parsers import NormalizedChatMessage
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
@@ -275,7 +276,24 @@ def seed_parsed_wekeep_file(session_factory, auth: dict, source: dict) -> tuple:
                     conversation_id=conversation_id,
                     import_file_id=file_id,
                     external_message_id="msg-image",
-                    fingerprint="1" * 64,
+                    fingerprint=worker._message_fingerprint(
+                        NormalizedChatMessage(
+                            conversation_external_id="wxid_customer",
+                            conversation_title="客户会话",
+                            conversation_type="direct",
+                            external_message_id="msg-image",
+                            sender_ref="wxid-owner",
+                            sender_name="本人",
+                            receiver_ref=None,
+                            receiver_name=None,
+                            content="[图片]",
+                            message_type="image",
+                            timestamp=now,
+                            source_file="wekeep-export.zip",
+                            source_row=1,
+                            metadata=owner_metadata,
+                        )
+                    ),
                     sender_ref="wxid-owner",
                     sender_name="本人",
                     content="[图片]",
@@ -291,7 +309,24 @@ def seed_parsed_wekeep_file(session_factory, auth: dict, source: dict) -> tuple:
                     conversation_id=conversation_id,
                     import_file_id=file_id,
                     external_message_id="msg-voice",
-                    fingerprint="2" * 64,
+                    fingerprint=worker._message_fingerprint(
+                        NormalizedChatMessage(
+                            conversation_external_id="wxid_customer",
+                            conversation_title="客户会话",
+                            conversation_type="direct",
+                            external_message_id="msg-voice",
+                            sender_ref="wxid-customer",
+                            sender_name="客户A",
+                            receiver_ref=None,
+                            receiver_name=None,
+                            content="[语音]",
+                            message_type="voice",
+                            timestamp=now,
+                            source_file="wekeep-export.zip",
+                            source_row=2,
+                            metadata=customer_metadata,
+                        )
+                    ),
                     sender_ref="wxid-customer",
                     sender_name="客户A",
                     content="[语音]",
@@ -438,3 +473,122 @@ def test_media_extraction_endpoint_does_not_merge_other_tenants(
         headers=headers(other),
     )
     assert response.status_code == 404
+
+
+
+def test_duplicate_wekeep_import_updates_media_pointer_without_moving_message(
+    client: TestClient,
+    session_factory,
+) -> None:
+    auth = register(client, "chat-media-reimport@example.com")
+    source = create_source(client, auth)
+    _old_job_id, old_file_id, _conversation_id = seed_parsed_wekeep_file(
+        session_factory, auth, source
+    )
+    tenant_id = UUID(auth["tenant"]["id"])
+    source_id = UUID(source["id"])
+    new_job_id = uuid4()
+    new_file_id = uuid4()
+    now = datetime.now(UTC)
+
+    with session_factory() as db:
+        db.add(
+            ChatImportJob(
+                id=new_job_id,
+                tenant_id=tenant_id,
+                source_id=source_id,
+                status="processing",
+                progress=10,
+                total_files=1,
+                max_attempts=5,
+            )
+        )
+        db.flush()
+        db.add(
+            ChatImportFile(
+                id=new_file_id,
+                tenant_id=tenant_id,
+                source_id=source_id,
+                job_id=new_job_id,
+                original_filename="wekeep-export-with-media.zip",
+                extension=".zip",
+                mime_type="application/zip",
+                file_size_bytes=120,
+                sha256="b" * 64,
+                object_key="tenant/source/import/wekeep-export-with-media.zip",
+                status="processing",
+                metadata_json={"source_filename": "wekeep-export-with-media.zip"},
+            )
+        )
+        db.commit()
+
+    updated_metadata = {
+        "parser": "wekeep-export-v1",
+        "wekeep": {
+            "kind": "image",
+            "resource_status": "available",
+            "resource_notice": None,
+            "resources": [
+                {
+                    "kind": "image",
+                    "path": "resources/image/original.jpg",
+                    "status": "available",
+                    "role": "original",
+                    "quality": "original",
+                }
+            ],
+            "avatar": "avatars/owner.jpg",
+        },
+    }
+    record = NormalizedChatMessage(
+        conversation_external_id="wxid_customer",
+        conversation_title="客户会话",
+        conversation_type="direct",
+        external_message_id="msg-image",
+        sender_ref="wxid-owner",
+        sender_name="本人",
+        receiver_ref=None,
+        receiver_name=None,
+        content="[图片]",
+        message_type="image",
+        timestamp=now,
+        source_file="wekeep-export-with-media.zip",
+        source_row=1,
+        metadata=updated_metadata,
+    )
+    imported, duplicates = worker._persist_batch(
+        job_id=new_job_id,
+        tenant_id=tenant_id,
+        source_id=source_id,
+        import_file_id=new_file_id,
+        records=[record],
+    )
+    assert imported == 0
+    assert duplicates == 1
+
+    with session_factory() as db:
+        original_message = db.scalar(
+            select(ChatMessage).where(
+                ChatMessage.tenant_id == tenant_id,
+                ChatMessage.source_id == source_id,
+                ChatMessage.external_message_id == "msg-image",
+            )
+        )
+        new_file = db.get(ChatImportFile, new_file_id)
+        assert original_message.import_file_id == old_file_id
+        assert original_message.metadata_json["media_import_file_id"] == str(new_file_id)
+        assert original_message.metadata_json["wekeep"]["resources"][0]["path"] == (
+            "resources/image/original.jpg"
+        )
+        assert new_file.metadata_json["parser"] == "wekeep-export-v1"
+        new_file.status = "parsed"
+        db.commit()
+
+    accepted = client.post(
+        f"/chat-sources/{source['id']}/media-extractions",
+        headers=headers(auth),
+    )
+    assert accepted.status_code == 202, accepted.text
+    assert accepted.json()["accepted_files"] == 1
+    assert len(accepted.json()["jobs"]) == 1
+    assert accepted.json()["jobs"][0]["import_file_id"] == str(new_file_id)
