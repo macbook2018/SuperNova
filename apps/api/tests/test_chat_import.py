@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Generator
+from uuid import UUID
 
 import pytest
 from app.chat_import import worker
@@ -167,9 +168,14 @@ def test_worker_normalizes_messages_and_identity_requires_user_confirmation(
     response = upload_json(client, auth, source["id"])
     assert response.status_code == 202, response.text
     job_id = response.json()["job"]["id"]
+    job_uuid = UUID(job_id)
+    tenant_uuid = UUID(auth["tenant"]["id"])
+    source_uuid = UUID(source["id"])
 
     with session_factory() as db:
-        file_record = db.scalar(select(ChatImportFile).where(ChatImportFile.job_id == job_id))
+        file_record = db.scalar(
+            select(ChatImportFile).where(ChatImportFile.job_id == job_uuid)
+        )
         object_key = file_record.object_key
 
     body = _sample_chat_export_body()
@@ -184,8 +190,8 @@ def test_worker_normalizes_messages_and_identity_requires_user_confirmation(
         job = db.get(ChatImportJob, claimed)
         messages = db.scalars(
             select(ChatMessage).where(
-                ChatMessage.tenant_id == auth["tenant"]["id"],
-                ChatMessage.source_id == source["id"],
+                ChatMessage.tenant_id == tenant_uuid,
+                ChatMessage.source_id == source_uuid,
             )
         ).all()
         assert job.status == "awaiting_identity"
@@ -234,8 +240,8 @@ def test_worker_normalizes_messages_and_identity_requires_user_confirmation(
     with session_factory() as db:
         roles = db.scalars(
             select(ChatMessage.identity_role).where(
-                ChatMessage.tenant_id == auth["tenant"]["id"],
-                ChatMessage.source_id == source["id"],
+                ChatMessage.tenant_id == tenant_uuid,
+                ChatMessage.source_id == source_uuid,
             )
         ).all()
         assert roles.count("target") == 1
@@ -268,17 +274,15 @@ def test_source_delete_removes_rows_and_private_objects(
     assert response.json()["status"] == "deleted"
     assert len(deleted_keys) == 1
 
+    tenant_uuid = UUID(auth["tenant"]["id"])
+    source_uuid = UUID(source["id"])
     with session_factory() as db:
-        assert db.get(ChatSource, source["id"]) is None
+        assert db.get(ChatSource, source_uuid) is None
         assert db.scalar(
-            select(ChatImportJob.id).where(
-                ChatImportJob.tenant_id == auth["tenant"]["id"]
-            )
+            select(ChatImportJob.id).where(ChatImportJob.tenant_id == tenant_uuid)
         ) is None
         assert db.scalar(
-            select(ChatImportFile.id).where(
-                ChatImportFile.tenant_id == auth["tenant"]["id"]
-            )
+            select(ChatImportFile.id).where(ChatImportFile.tenant_id == tenant_uuid)
         ) is None
 
 
