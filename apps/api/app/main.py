@@ -12,6 +12,7 @@ from app.api.api_keys import router as api_keys_router
 from app.api.auth import router as auth_router
 from app.api.billing import router as billing_router
 from app.api.catalog import router as catalog_router
+from app.api.chat_import import router as chat_import_router
 from app.api.embedding_models import router as embedding_models_router
 from app.api.gateway import router as gateway_router
 from app.api.health import router as health_router
@@ -33,6 +34,7 @@ app = FastAPI(
 app.state.settings = settings
 app.include_router(health_router)
 app.include_router(knowledge_router)
+app.include_router(chat_import_router)
 app.include_router(auth_router)
 app.include_router(api_keys_router)
 app.include_router(catalog_router)
