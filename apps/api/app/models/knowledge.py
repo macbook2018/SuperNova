@@ -3,7 +3,6 @@ from uuid import UUID, uuid4
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
-    JSON,
     BigInteger,
     CheckConstraint,
     DateTime,
@@ -12,6 +11,7 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     Integer,
+    JSON,
     String,
     Text,
     UniqueConstraint,
@@ -29,12 +29,16 @@ from app.db.base import Base
 event.listen(
     Base.metadata,
     "before_create",
-    DDL("CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public").execute_if(dialect="postgresql"),
+    DDL("CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public").execute_if(
+        dialect="postgresql"
+    ),
 )
 event.listen(
     Base.metadata,
     "before_create",
-    DDL("CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA public").execute_if(dialect="postgresql"),
+    DDL("CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA public").execute_if(
+        dialect="postgresql"
+    ),
 )
 
 
