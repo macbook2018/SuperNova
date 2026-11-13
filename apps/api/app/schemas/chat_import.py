@@ -119,6 +119,19 @@ class ChatImportJobDetail(ChatImportJobRead):
     files: list[ChatImportFileRead]
 
 
+class ChatMediaAssetRead(BaseModel):
+    id: UUID
+    asset_type: str
+    role: str
+    status: str
+    original_name: str | None
+    mime_type: str | None
+    file_size_bytes: int
+    width: int | None
+    height: int | None
+    content_url: str | None
+
+
 class ChatMessageRead(BaseModel):
     id: UUID
     conversation_id: UUID
@@ -157,14 +170,3 @@ class ChatMediaExtractionAccepted(BaseModel):
     reused_jobs: int
 
 
-class ChatMediaAssetRead(BaseModel):
-    id: UUID
-    asset_type: str
-    role: str
-    status: str
-    original_name: str | None
-    mime_type: str | None
-    file_size_bytes: int
-    width: int | None
-    height: int | None
-    content_url: str | None
