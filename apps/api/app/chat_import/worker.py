@@ -5,23 +5,19 @@ import hashlib
 import socket
 import time
 from datetime import UTC, datetime, timedelta
-from pathlib import PurePosixPath
-from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
+from uuid import UUID, uuid4
 
 import structlog
-from sqlalchemy import and_, delete, or_, select
+from sqlalchemy import and_, or_, select
 
-from app.chat_import.media import extract_wekeep_media
 from app.chat_import.parsers import NormalizedChatMessage, parse_chat_export
 from app.core.config import get_settings
 from app.db.session import SessionLocal, engine
-from app.knowledge.storage import delete_object, get_object, put_object
+from app.knowledge.storage import get_object
 from app.models.chat_import import (
     ChatConversation,
     ChatImportFile,
     ChatImportJob,
-    ChatMediaAsset,
-    ChatMediaExtractionJob,
     ChatMessage,
     ChatParticipant,
     ChatSource,
@@ -97,31 +93,15 @@ def _persist_batch(
             raise ValueError("chat_source_not_available")
 
         fingerprints = {_message_fingerprint(record) for record in records}
-        existing_messages = db.scalars(
-            select(ChatMessage).where(
-                ChatMessage.tenant_id == tenant_id,
-                ChatMessage.source_id == source_id,
-                ChatMessage.fingerprint.in_(fingerprints),
-            )
-        ).all()
-        existing_by_fingerprint = {
-            item.fingerprint: item for item in existing_messages
-        }
-        existing = set(existing_by_fingerprint)
-        file_record = db.get(ChatImportFile, import_file_id)
-        if file_record is not None and any(
-            record.metadata.get("parser") == "wekeep-export-v1"
-            for record in records
-        ):
-            file_metadata = (
-                file_record.metadata_json
-                if isinstance(file_record.metadata_json, dict)
-                else {}
-            )
-            file_record.metadata_json = {
-                **file_metadata,
-                "parser": "wekeep-export-v1",
-            }
+        existing = set(
+            db.scalars(
+                select(ChatMessage.fingerprint).where(
+                    ChatMessage.tenant_id == tenant_id,
+                    ChatMessage.source_id == source_id,
+                    ChatMessage.fingerprint.in_(fingerprints),
+                )
+            ).all()
+        )
         conversation_cache: dict[str, ChatConversation] = {}
         participant_cache: dict[tuple[UUID, str], ChatParticipant] = {}
 
@@ -129,25 +109,6 @@ def _persist_batch(
             fingerprint = _message_fingerprint(record)
             if fingerprint in existing:
                 duplicates += 1
-                existing_message = existing_by_fingerprint.get(fingerprint)
-                if (
-                    existing_message is not None
-                    and record.metadata.get("parser") == "wekeep-export-v1"
-                ):
-                    existing_metadata = (
-                        existing_message.metadata_json
-                        if isinstance(existing_message.metadata_json, dict)
-                        else {}
-                    )
-                    existing_message.metadata_json = {
-                        **existing_metadata,
-                        **record.metadata,
-                        "source_file": existing_metadata.get(
-                            "source_file", record.source_file
-                        ),
-                        "media_source_file": record.source_file,
-                        "media_import_file_id": str(import_file_id),
-                    }
                 continue
             existing.add(fingerprint)
 
@@ -236,32 +197,29 @@ def _persist_batch(
                     else "other"
                 )
             )
-            message_metadata = {
-                **record.metadata,
-                "source_file": record.source_file,
-            }
-            if record.metadata.get("parser") == "wekeep-export-v1":
-                message_metadata["media_import_file_id"] = str(import_file_id)
-            message = ChatMessage(
-                id=uuid4(),
-                tenant_id=tenant_id,
-                source_id=source_id,
-                conversation_id=conversation.id,
-                import_file_id=import_file_id,
-                external_message_id=record.external_message_id,
-                fingerprint=fingerprint,
-                sender_ref=record.sender_ref,
-                sender_name=record.sender_name,
-                receiver_ref=record.receiver_ref,
-                receiver_name=record.receiver_name,
-                content=record.content,
-                message_type=record.message_type,
-                timestamp=record.timestamp,
-                identity_role=identity_role,
-                metadata_json=message_metadata,
+            db.add(
+                ChatMessage(
+                    id=uuid4(),
+                    tenant_id=tenant_id,
+                    source_id=source_id,
+                    conversation_id=conversation.id,
+                    import_file_id=import_file_id,
+                    external_message_id=record.external_message_id,
+                    fingerprint=fingerprint,
+                    sender_ref=record.sender_ref,
+                    sender_name=record.sender_name,
+                    receiver_ref=record.receiver_ref,
+                    receiver_name=record.receiver_name,
+                    content=record.content,
+                    message_type=record.message_type,
+                    timestamp=record.timestamp,
+                    identity_role=identity_role,
+                    metadata_json={
+                        **record.metadata,
+                        "source_file": record.source_file,
+                    },
+                )
             )
-            db.add(message)
-            existing_by_fingerprint[fingerprint] = message
             imported += 1
         job.parsed_messages += len(records)
         job.imported_messages += imported
@@ -484,234 +442,6 @@ def process_chat_import_job(job_id: UUID) -> None:
         db.commit()
 
 
-
-
-def process_chat_media_extraction_job(job_id: UUID) -> None:
-    with SessionLocal() as db:
-        job = db.get(ChatMediaExtractionJob, job_id)
-        if job is None or job.status != "processing":
-            return
-        source = db.scalar(
-            select(ChatSource).where(
-                ChatSource.id == job.source_id,
-                ChatSource.tenant_id == job.tenant_id,
-                ChatSource.status == "active",
-            )
-        )
-        file_record = db.scalar(
-            select(ChatImportFile).where(
-                ChatImportFile.id == job.import_file_id,
-                ChatImportFile.tenant_id == job.tenant_id,
-                ChatImportFile.source_id == job.source_id,
-                ChatImportFile.status == "parsed",
-            )
-        )
-        if source is None or file_record is None or file_record.extension != ".zip":
-            job.status = "failed"
-            job.progress = 100
-            job.error_summary = "找不到已解析的 ZIP 文件或聊天数据源已删除"
-            job.worker_id = None
-            job.locked_at = None
-            job.lease_expires_at = None
-            db.commit()
-            return
-
-        tenant_id = job.tenant_id
-        source_id = job.source_id
-        import_file_id = job.import_file_id
-        object_key = file_record.object_key
-        participants = db.scalars(
-            select(ChatParticipant).where(
-                ChatParticipant.tenant_id == tenant_id,
-                ChatParticipant.source_id == source_id,
-            )
-        ).all()
-        old_assets = db.scalars(
-            select(ChatMediaAsset).where(
-                ChatMediaAsset.tenant_id == tenant_id,
-                ChatMediaAsset.source_id == source_id,
-                ChatMediaAsset.import_file_id == import_file_id,
-            )
-        ).all()
-        old_object_keys = [item.object_key for item in old_assets if item.object_key]
-
-    settings = get_settings()
-    uploaded_keys: list[str] = []
-    try:
-        for old_key in old_object_keys:
-            delete_object(old_key)
-
-        if old_assets:
-            with SessionLocal() as db:
-                db.execute(
-                    delete(ChatMediaAsset).where(
-                        ChatMediaAsset.tenant_id == tenant_id,
-                        ChatMediaAsset.source_id == source_id,
-                        ChatMediaAsset.import_file_id == import_file_id,
-                    )
-                )
-                db.commit()
-
-        archive_body = get_object(
-            object_key,
-            max_bytes=settings.chat_import_max_file_bytes,
-        )
-        with SessionLocal() as db:
-            messages = db.scalars(
-                select(ChatMessage)
-                .where(
-                    ChatMessage.tenant_id == tenant_id,
-                    ChatMessage.source_id == source_id,
-                )
-                .order_by(ChatMessage.timestamp, ChatMessage.id)
-                .execution_options(yield_per=500)
-            )
-            extracted = extract_wekeep_media(
-                archive_body,
-                messages,
-                participants,
-                import_file_id=import_file_id,
-                max_asset_bytes=settings.chat_media_max_asset_bytes,
-                max_total_bytes=settings.chat_media_max_total_bytes,
-            )
-
-        assets: list[ChatMediaAsset] = []
-        extracted_count = 0
-        missing_count = 0
-        error_count = 0
-        for asset_index, item in enumerate(extracted):
-            asset_id = uuid5(
-                NAMESPACE_URL,
-                f"supernova-chat-media:{import_file_id}:{asset_index}",
-            )
-            stored_key = None
-            body = item.body
-            file_size = len(body) if body is not None else 0
-            if item.status == "available" and body is not None:
-                suffix = PurePosixPath(item.archive_path or item.original_name or "").suffix
-                if not suffix or len(suffix) > 12 or not suffix[1:].isalnum():
-                    suffix = ".bin"
-                stored_key = (
-                    f"tenant/{tenant_id}/chat-media/{source_id}/"
-                    f"{import_file_id.hex}/{asset_id.hex}{suffix.casefold()}"
-                )
-                put_object(
-                    stored_key,
-                    body,
-                    item.mime_type or "application/octet-stream",
-                )
-                uploaded_keys.append(stored_key)
-                extracted_count += 1
-            elif item.status == "missing":
-                missing_count += 1
-            else:
-                error_count += 1
-
-            assets.append(
-                ChatMediaAsset(
-                    id=asset_id,
-                    tenant_id=tenant_id,
-                    source_id=source_id,
-                    conversation_id=item.conversation_id,
-                    import_file_id=import_file_id,
-                    message_id=item.message_id,
-                    participant_id=item.participant_id,
-                    asset_type=item.asset_type,
-                    role=item.role,
-                    status=item.status,
-                    archive_path=item.archive_path,
-                    original_name=item.original_name,
-                    mime_type=item.mime_type,
-                    file_size_bytes=file_size,
-                    sha256=item.sha256,
-                    object_key=stored_key,
-                    metadata_json=item.metadata,
-                )
-            )
-
-        with SessionLocal() as db:
-            current_job = db.get(ChatMediaExtractionJob, job_id)
-            if current_job is None or current_job.status != "processing":
-                raise ValueError("chat_media_extraction_job_not_processing")
-            db.add_all(assets)
-            current_job.total_assets = len(assets)
-            current_job.extracted_assets = extracted_count
-            current_job.missing_assets = missing_count
-            current_job.error_count = error_count
-            current_job.progress = 100
-            current_job.status = "partial" if missing_count or error_count else "succeeded"
-            current_job.error_summary = (
-                f"已提取 {extracted_count} 个资源，"
-                f"{missing_count} 个附件缺失，{error_count} 个资源无法提取"
-                if missing_count or error_count
-                else None
-            )
-            current_job.worker_id = None
-            current_job.locked_at = None
-            current_job.lease_expires_at = None
-            db.commit()
-
-        logger.info(
-            "chat_media_extraction_completed",
-            job_id=str(job_id),
-            source_id=str(source_id),
-            import_file_id=str(import_file_id),
-            total_assets=len(assets),
-            extracted_assets=extracted_count,
-            missing_assets=missing_count,
-            error_count=error_count,
-        )
-    except Exception:
-        for stored_key in uploaded_keys:
-            try:
-                delete_object(stored_key)
-            except Exception:
-                logger.exception(
-                    "chat_media_object_rollback_failed",
-                    job_id=str(job_id),
-                    object_key=stored_key,
-                )
-        raise
-
-
-def claim_next_chat_media_job(worker_id: str) -> UUID | None:
-    now = datetime.now(UTC)
-    with SessionLocal() as db:
-        job = db.scalar(
-            select(ChatMediaExtractionJob)
-            .where(
-                or_(
-                    ChatMediaExtractionJob.status == "queued",
-                    and_(
-                        ChatMediaExtractionJob.status == "processing",
-                        ChatMediaExtractionJob.lease_expires_at < now,
-                    ),
-                )
-            )
-            .order_by(ChatMediaExtractionJob.created_at)
-            .with_for_update(skip_locked=True)
-            .limit(1)
-        )
-        if job is None:
-            return None
-        if job.attempts >= job.max_attempts:
-            job.status = "failed"
-            job.error_summary = "媒体提取任务超过最大重试次数"
-            job.progress = 100
-            db.commit()
-            return None
-        job.status = "processing"
-        job.worker_id = worker_id
-        job.locked_at = now
-        job.lease_expires_at = now + timedelta(
-            seconds=get_settings().chat_import_worker_lease_seconds
-        )
-        job.attempts += 1
-        db.commit()
-        return job.id
-
-
-
 def claim_next_chat_import_job(worker_id: str) -> UUID | None:
     now = datetime.now(UTC)
     with SessionLocal() as db:
@@ -754,51 +484,23 @@ def run_forever() -> None:
     poll_seconds = get_settings().chat_import_worker_poll_seconds
     logger.info("chat_import_worker_started", worker_id=worker_id)
     while True:
-        import_job_id = claim_next_chat_import_job(worker_id)
-        if import_job_id is not None:
-            try:
-                process_chat_import_job(import_job_id)
-            except Exception:
-                logger.exception(
-                    "chat_import_job_unhandled_failure",
-                    job_id=str(import_job_id),
-                )
-                with SessionLocal() as db:
-                    job = db.get(ChatImportJob, import_job_id)
-                    if job is not None:
-                        job.status = (
-                            "failed" if job.attempts >= job.max_attempts else "queued"
-                        )
-                        job.error_summary = "任务执行异常，请查看服务端日志"
-                        job.worker_id = None
-                        job.locked_at = None
-                        job.lease_expires_at = None
-                        db.commit()
+        job_id = claim_next_chat_import_job(worker_id)
+        if job_id is None:
+            time.sleep(poll_seconds)
             continue
-
-        media_job_id = claim_next_chat_media_job(worker_id)
-        if media_job_id is not None:
-            try:
-                process_chat_media_extraction_job(media_job_id)
-            except Exception:
-                logger.exception(
-                    "chat_media_extraction_unhandled_failure",
-                    job_id=str(media_job_id),
-                )
-                with SessionLocal() as db:
-                    job = db.get(ChatMediaExtractionJob, media_job_id)
-                    if job is not None:
-                        job.status = (
-                            "failed" if job.attempts >= job.max_attempts else "queued"
-                        )
-                        job.error_summary = "媒体资源提取异常，请查看服务端日志后重试"
-                        job.worker_id = None
-                        job.locked_at = None
-                        job.lease_expires_at = None
-                        db.commit()
-            continue
-
-        time.sleep(poll_seconds)
+        try:
+            process_chat_import_job(job_id)
+        except Exception:
+            logger.exception("chat_import_job_unhandled_failure", job_id=str(job_id))
+            with SessionLocal() as db:
+                job = db.get(ChatImportJob, job_id)
+                if job is not None:
+                    job.status = "failed" if job.attempts >= job.max_attempts else "queued"
+                    job.error_summary = "任务执行异常，请查看服务端日志"
+                    job.worker_id = None
+                    job.locked_at = None
+                    job.lease_expires_at = None
+                    db.commit()
 
 
 def main() -> None:

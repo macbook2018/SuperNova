@@ -63,7 +63,6 @@ class ChatImportParticipantPreview(BaseModel):
     message_count: int
     conversation_count: int
     identity_role: str
-    avatar_asset_id: UUID | None = None
 
 
 class ChatConversationPreview(BaseModel):
@@ -99,6 +98,7 @@ class ChatIdentityConfirm(BaseModel):
         return cleaned
 
 
+
 class ChatImportFileRead(BaseModel):
     id: UUID
     original_filename: str
@@ -118,19 +118,6 @@ class ChatImportJobDetail(ChatImportJobRead):
     files: list[ChatImportFileRead]
 
 
-class ChatMediaAssetRead(BaseModel):
-    id: UUID
-    asset_type: str
-    role: str
-    status: str
-    original_name: str | None
-    mime_type: str | None
-    file_size_bytes: int
-    width: int | None
-    height: int | None
-    content_url: str | None
-
-
 class ChatMessageRead(BaseModel):
     id: UUID
     conversation_id: UUID
@@ -143,28 +130,3 @@ class ChatMessageRead(BaseModel):
     timestamp: datetime
     identity_role: str
     metadata: dict
-    media_assets: list[ChatMediaAssetRead] = Field(default_factory=list)
-
-
-class ChatMediaExtractionJobRead(BaseModel):
-    id: UUID
-    source_id: UUID
-    import_file_id: UUID
-    status: str
-    progress: int
-    total_assets: int
-    extracted_assets: int
-    missing_assets: int
-    error_count: int
-    error_summary: str | None
-    attempts: int
-    created_at: datetime
-    updated_at: datetime
-
-
-class ChatMediaExtractionAccepted(BaseModel):
-    jobs: list[ChatMediaExtractionJobRead]
-    accepted_files: int
-    reused_jobs: int
-
-

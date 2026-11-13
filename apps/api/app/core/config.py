@@ -45,8 +45,6 @@ class Settings(BaseSettings):
     chat_import_worker_poll_seconds: float = 2.0
     chat_import_worker_lease_seconds: int = 180
     chat_import_batch_size: int = 500
-    chat_media_max_asset_bytes: int = 25 * 1024 * 1024
-    chat_media_max_total_bytes: int = 100 * 1024 * 1024
 
     @property
     def platform_admin_email_set(self) -> frozenset[str]:
@@ -102,14 +100,6 @@ class Settings(BaseSettings):
             )
         if not 1 <= self.chat_import_batch_size <= 5000:
             raise ValueError("SUPERNOVA_CHAT_IMPORT_BATCH_SIZE must be between 1 and 5000")
-        if not 1024 <= self.chat_media_max_asset_bytes <= 100 * 1024 * 1024:
-            raise ValueError(
-                "SUPERNOVA_CHAT_MEDIA_MAX_ASSET_BYTES must be between 1 KiB and 100 MiB"
-            )
-        if not 1024 <= self.chat_media_max_total_bytes <= 500 * 1024 * 1024:
-            raise ValueError(
-                "SUPERNOVA_CHAT_MEDIA_MAX_TOTAL_BYTES must be between 1 KiB and 500 MiB"
-            )
         if self.refresh_token_ttl_days < 1 or self.refresh_token_ttl_days > 90:
             raise ValueError("SUPERNOVA_REFRESH_TOKEN_TTL_DAYS must be between 1 and 90")
         return self
