@@ -200,7 +200,6 @@ def test_worker_persists_sender_counts_only_and_ignores_media(
     assert response.status_code == 202, response.text
 
     job_id = response.json()["job"]["id"]
-    job_uuid = UUID(job_id)
     tenant_uuid = UUID(auth["tenant"]["id"])
     source_uuid = UUID(source["source_account_id"])
 

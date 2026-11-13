@@ -147,7 +147,6 @@ def process_chat_import_job(job_id: UUID) -> None:
 
         tenant_id = job.tenant_id
         source_id = job.source_id
-        identity_confirmed = source.identity_confirmed_at is not None
         job.total_files = len(files)
         job.status = "processing"
         db.commit()

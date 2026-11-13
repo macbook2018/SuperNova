@@ -1,45 +1,9 @@
 from alembic import context
+from sqlalchemy import create_engine, pool
+
+from app import models as _models  # noqa: F401
 from app.core.config import get_settings
 from app.db.base import Base
-from app.models import (  # noqa: F401
-    ApiKey,
-    BillingAuditEvent,
-    BillingLedgerAccount,
-    BillingLedgerPosting,
-    BillingLedgerTransaction,
-    BillingPlan,
-    BillingPlanEntitlement,
-    BillingRatedItem,
-    BillingReconciliationRun,
-    BillingReservation,
-    BillingReservationItem,
-    BillingUsageEvent,
-    ChatConversation,
-    ChatImportFile,
-    ChatImportJob,
-    ChatMessage,
-    ChatParticipant,
-    ChatSource,
-    KnowledgeBase,
-    KnowledgeChunk,
-    KnowledgeDocument,
-    KnowledgeIngestionJob,
-    KnowledgeUsageRecord,
-    ModelProvider,
-    Persona,
-    PersonaKnowledgeBase,
-    PlatformEmbeddingModel,
-    PlatformModel,
-    PlatformModelPrice,
-    RefreshSession,
-    Tenant,
-    TenantBillingPolicy,
-    TenantMembership,
-    TenantSubscription,
-    UsageRecord,
-    User,
-)
-from sqlalchemy import create_engine, pool
 
 target_metadata = Base.metadata
 
