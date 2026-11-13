@@ -10,14 +10,17 @@ from uuid import UUID, uuid4
 import structlog
 from sqlalchemy import and_, or_, select
 
+from app.chat_import.media import extract_wekeep_media
 from app.chat_import.parsers import NormalizedChatMessage, parse_chat_export
 from app.core.config import get_settings
 from app.db.session import SessionLocal, engine
-from app.knowledge.storage import get_object
+from app.knowledge.storage import delete_object, get_object, put_object
 from app.models.chat_import import (
     ChatConversation,
     ChatImportFile,
     ChatImportJob,
+    ChatMediaAsset,
+    ChatMediaExtractionJob,
     ChatMessage,
     ChatParticipant,
     ChatSource,
@@ -442,6 +445,229 @@ def process_chat_import_job(job_id: UUID) -> None:
         db.commit()
 
 
+
+
+def process_chat_media_extraction_job(job_id: UUID) -> None:
+    with SessionLocal() as db:
+        job = db.get(ChatMediaExtractionJob, job_id)
+        if job is None or job.status != "processing":
+            return
+        source = db.scalar(
+            select(ChatSource).where(
+                ChatSource.id == job.source_id,
+                ChatSource.tenant_id == job.tenant_id,
+                ChatSource.status == "active",
+            )
+        )
+        file_record = db.scalar(
+            select(ChatImportFile).where(
+                ChatImportFile.id == job.import_file_id,
+                ChatImportFile.tenant_id == job.tenant_id,
+                ChatImportFile.source_id == job.source_id,
+                ChatImportFile.status == "parsed",
+            )
+        )
+        if source is None or file_record is None or file_record.extension != ".zip":
+            job.status = "failed"
+            job.progress = 100
+            job.error_summary = "找不到已解析的 ZIP 文件或聊天数据源已删除"
+            job.worker_id = None
+            job.locked_at = None
+            job.lease_expires_at = None
+            db.commit()
+            return
+
+        tenant_id = job.tenant_id
+        source_id = job.source_id
+        import_file_id = job.import_file_id
+        object_key = file_record.object_key
+        messages = db.scalars(
+            select(ChatMessage)
+            .where(
+                ChatMessage.tenant_id == tenant_id,
+                ChatMessage.source_id == source_id,
+                ChatMessage.import_file_id == import_file_id,
+            )
+            .order_by(ChatMessage.timestamp, ChatMessage.id)
+        ).all()
+        participants = db.scalars(
+            select(ChatParticipant).where(
+                ChatParticipant.tenant_id == tenant_id,
+                ChatParticipant.source_id == source_id,
+            )
+        ).all()
+        old_assets = db.scalars(
+            select(ChatMediaAsset).where(
+                ChatMediaAsset.tenant_id == tenant_id,
+                ChatMediaAsset.source_id == source_id,
+                ChatMediaAsset.import_file_id == import_file_id,
+            )
+        ).all()
+        old_object_keys = [item.object_key for item in old_assets if item.object_key]
+
+    settings = get_settings()
+    uploaded_keys: list[str] = []
+    try:
+        for old_key in old_object_keys:
+            delete_object(old_key)
+
+        if old_assets:
+            with SessionLocal() as db:
+                db.execute(
+                    delete(ChatMediaAsset).where(
+                        ChatMediaAsset.tenant_id == tenant_id,
+                        ChatMediaAsset.source_id == source_id,
+                        ChatMediaAsset.import_file_id == import_file_id,
+                    )
+                )
+                db.commit()
+
+        archive_body = get_object(
+            object_key,
+            max_bytes=settings.chat_import_max_file_bytes,
+        )
+        extracted = extract_wekeep_media(
+            archive_body,
+            messages,
+            participants,
+            max_asset_bytes=settings.chat_media_max_asset_bytes,
+            max_total_bytes=settings.chat_media_max_total_bytes,
+        )
+
+        assets: list[ChatMediaAsset] = []
+        extracted_count = 0
+        missing_count = 0
+        error_count = 0
+        for item in extracted:
+            asset_id = uuid4()
+            stored_key = None
+            body = item.body
+            file_size = len(body) if body is not None else 0
+            if item.status == "available" and body is not None:
+                suffix = PurePosixPath(item.archive_path or item.original_name or "").suffix
+                if not suffix or len(suffix) > 12 or not suffix[1:].isalnum():
+                    suffix = ".bin"
+                stored_key = (
+                    f"tenant/{tenant_id}/chat-media/{source_id}/"
+                    f"{import_file_id.hex}/{asset_id.hex}{suffix.casefold()}"
+                )
+                put_object(
+                    stored_key,
+                    body,
+                    item.mime_type or "application/octet-stream",
+                )
+                uploaded_keys.append(stored_key)
+                extracted_count += 1
+            elif item.status == "missing":
+                missing_count += 1
+            else:
+                error_count += 1
+
+            assets.append(
+                ChatMediaAsset(
+                    id=asset_id,
+                    tenant_id=tenant_id,
+                    source_id=source_id,
+                    conversation_id=item.conversation_id,
+                    import_file_id=import_file_id,
+                    message_id=item.message_id,
+                    participant_id=item.participant_id,
+                    asset_type=item.asset_type,
+                    role=item.role,
+                    status=item.status,
+                    archive_path=item.archive_path,
+                    original_name=item.original_name,
+                    mime_type=item.mime_type,
+                    file_size_bytes=file_size,
+                    sha256=item.sha256,
+                    object_key=stored_key,
+                    metadata_json=item.metadata,
+                )
+            )
+
+        with SessionLocal() as db:
+            current_job = db.get(ChatMediaExtractionJob, job_id)
+            if current_job is None or current_job.status != "processing":
+                raise ValueError("chat_media_extraction_job_not_processing")
+            db.add_all(assets)
+            current_job.total_assets = len(assets)
+            current_job.extracted_assets = extracted_count
+            current_job.missing_assets = missing_count
+            current_job.error_count = error_count
+            current_job.progress = 100
+            current_job.status = "partial" if missing_count or error_count else "succeeded"
+            current_job.error_summary = (
+                f"已提取 {extracted_count} 个资源，"
+                f"{missing_count} 个附件缺失，{error_count} 个资源无法提取"
+                if missing_count or error_count
+                else None
+            )
+            current_job.worker_id = None
+            current_job.locked_at = None
+            current_job.lease_expires_at = None
+            db.commit()
+
+        logger.info(
+            "chat_media_extraction_completed",
+            job_id=str(job_id),
+            source_id=str(source_id),
+            import_file_id=str(import_file_id),
+            total_assets=len(assets),
+            extracted_assets=extracted_count,
+            missing_assets=missing_count,
+            error_count=error_count,
+        )
+    except Exception:
+        for stored_key in uploaded_keys:
+            try:
+                delete_object(stored_key)
+            except Exception:
+                logger.exception(
+                    "chat_media_object_rollback_failed",
+                    job_id=str(job_id),
+                    object_key=stored_key,
+                )
+        raise
+
+
+def claim_next_chat_media_job(worker_id: str) -> UUID | None:
+    now = datetime.now(UTC)
+    with SessionLocal() as db:
+        job = db.scalar(
+            select(ChatMediaExtractionJob)
+            .where(
+                or_(
+                    ChatMediaExtractionJob.status == "queued",
+                    and_(
+                        ChatMediaExtractionJob.status == "processing",
+                        ChatMediaExtractionJob.lease_expires_at < now,
+                    ),
+                )
+            )
+            .order_by(ChatMediaExtractionJob.created_at)
+            .with_for_update(skip_locked=True)
+            .limit(1)
+        )
+        if job is None:
+            return None
+        if job.attempts >= job.max_attempts:
+            job.status = "failed"
+            job.error_summary = "媒体提取任务超过最大重试次数"
+            job.progress = 100
+            db.commit()
+            return None
+        job.status = "processing"
+        job.worker_id = worker_id
+        job.locked_at = now
+        job.lease_expires_at = now + timedelta(
+            seconds=get_settings().chat_import_worker_lease_seconds
+        )
+        job.attempts += 1
+        db.commit()
+        return job.id
+
+
+
 def claim_next_chat_import_job(worker_id: str) -> UUID | None:
     now = datetime.now(UTC)
     with SessionLocal() as db:
@@ -484,23 +710,51 @@ def run_forever() -> None:
     poll_seconds = get_settings().chat_import_worker_poll_seconds
     logger.info("chat_import_worker_started", worker_id=worker_id)
     while True:
-        job_id = claim_next_chat_import_job(worker_id)
-        if job_id is None:
-            time.sleep(poll_seconds)
+        import_job_id = claim_next_chat_import_job(worker_id)
+        if import_job_id is not None:
+            try:
+                process_chat_import_job(import_job_id)
+            except Exception:
+                logger.exception(
+                    "chat_import_job_unhandled_failure",
+                    job_id=str(import_job_id),
+                )
+                with SessionLocal() as db:
+                    job = db.get(ChatImportJob, import_job_id)
+                    if job is not None:
+                        job.status = (
+                            "failed" if job.attempts >= job.max_attempts else "queued"
+                        )
+                        job.error_summary = "任务执行异常，请查看服务端日志"
+                        job.worker_id = None
+                        job.locked_at = None
+                        job.lease_expires_at = None
+                        db.commit()
             continue
-        try:
-            process_chat_import_job(job_id)
-        except Exception:
-            logger.exception("chat_import_job_unhandled_failure", job_id=str(job_id))
-            with SessionLocal() as db:
-                job = db.get(ChatImportJob, job_id)
-                if job is not None:
-                    job.status = "failed" if job.attempts >= job.max_attempts else "queued"
-                    job.error_summary = "任务执行异常，请查看服务端日志"
-                    job.worker_id = None
-                    job.locked_at = None
-                    job.lease_expires_at = None
-                    db.commit()
+
+        media_job_id = claim_next_chat_media_job(worker_id)
+        if media_job_id is not None:
+            try:
+                process_chat_media_extraction_job(media_job_id)
+            except Exception:
+                logger.exception(
+                    "chat_media_extraction_unhandled_failure",
+                    job_id=str(media_job_id),
+                )
+                with SessionLocal() as db:
+                    job = db.get(ChatMediaExtractionJob, media_job_id)
+                    if job is not None:
+                        job.status = (
+                            "failed" if job.attempts >= job.max_attempts else "queued"
+                        )
+                        job.error_summary = "媒体资源提取异常，请查看服务端日志后重试"
+                        job.worker_id = None
+                        job.locked_at = None
+                        job.lease_expires_at = None
+                        db.commit()
+            continue
+
+        time.sleep(poll_seconds)
 
 
 def main() -> None:
