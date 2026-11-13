@@ -133,7 +133,10 @@ def upload_chat_import(
         if not idempotency_key or len(idempotency_key) > 128:
             raise HTTPException(
                 status_code=422,
-                detail={"code": "invalid_idempotency_key", "message": "Idempotency-Key 长度必须为 1 到 128"},
+                detail={
+                    "code": "invalid_idempotency_key",
+                    "message": "Idempotency-Key 长度必须为 1 到 128",
+                },
             )
         existing_job = db.scalar(
             select(ChatImportJob).where(
