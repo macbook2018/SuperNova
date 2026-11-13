@@ -482,15 +482,6 @@ def process_chat_media_extraction_job(job_id: UUID) -> None:
         source_id = job.source_id
         import_file_id = job.import_file_id
         object_key = file_record.object_key
-        messages = db.scalars(
-            select(ChatMessage)
-            .where(
-                ChatMessage.tenant_id == tenant_id,
-                ChatMessage.source_id == source_id,
-                ChatMessage.import_file_id == import_file_id,
-            )
-            .order_by(ChatMessage.timestamp, ChatMessage.id)
-        ).all()
         participants = db.scalars(
             select(ChatParticipant).where(
                 ChatParticipant.tenant_id == tenant_id,
@@ -527,13 +518,24 @@ def process_chat_media_extraction_job(job_id: UUID) -> None:
             object_key,
             max_bytes=settings.chat_import_max_file_bytes,
         )
-        extracted = extract_wekeep_media(
-            archive_body,
-            messages,
-            participants,
-            max_asset_bytes=settings.chat_media_max_asset_bytes,
-            max_total_bytes=settings.chat_media_max_total_bytes,
-        )
+        with SessionLocal() as db:
+            messages = db.scalars(
+                select(ChatMessage)
+                .where(
+                    ChatMessage.tenant_id == tenant_id,
+                    ChatMessage.source_id == source_id,
+                    ChatMessage.import_file_id == import_file_id,
+                )
+                .order_by(ChatMessage.timestamp, ChatMessage.id)
+                .execution_options(yield_per=500)
+            )
+            extracted = extract_wekeep_media(
+                archive_body,
+                messages,
+                participants,
+                max_asset_bytes=settings.chat_media_max_asset_bytes,
+                max_total_bytes=settings.chat_media_max_total_bytes,
+            )
 
         assets: list[ChatMediaAsset] = []
         extracted_count = 0

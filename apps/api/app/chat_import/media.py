@@ -6,6 +6,7 @@ import json
 import mimetypes
 import stat
 import zipfile
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any
@@ -178,15 +179,13 @@ def _read_resource(
 
 def extract_wekeep_media(
     archive_body: bytes,
-    messages: list[ChatMessage],
+    messages: Iterable[ChatMessage],
     participants: list[ChatParticipant],
     *,
     max_asset_bytes: int,
     max_total_bytes: int,
 ) -> list[ExtractedChatMedia]:
     """Extract only declared WeKeep media members; never execute archive scripts."""
-    if not messages:
-        return []
     participant_map = {
         (item.conversation_id, item.sender_ref): item
         for item in participants
