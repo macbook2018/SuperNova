@@ -150,7 +150,10 @@ def upload_chat_import(
     if len(files) > settings.chat_import_max_files:
         raise HTTPException(
             status_code=413,
-            detail={"code": "chat_import_file_count_exceeded", "message": "单次上传文件数量超过限制"},
+            detail={
+                "code": "chat_import_file_count_exceeded",
+                "message": "单次上传文件数量超过限制",
+            },
         )
     if idempotency_key is not None:
         idempotency_key = idempotency_key.strip()
@@ -224,7 +227,10 @@ def upload_chat_import(
         if suffix in {".zip", ".xlsx"} and not body.startswith(b"PK"):
             raise HTTPException(
                 status_code=415,
-                detail={"code": "chat_export_signature_mismatch", "message": "文件内容与扩展名不匹配"},
+                detail={
+                    "code": "chat_export_signature_mismatch",
+                    "message": "文件内容与扩展名不匹配",
+                },
             )
         if suffix == ".json":
             try:
@@ -232,7 +238,10 @@ def upload_chat_import(
             except UnicodeDecodeError:
                 raise HTTPException(
                     status_code=415,
-                    detail={"code": "chat_text_must_be_utf8", "message": "JSON 文件必须使用 UTF-8 编码"},
+                    detail={
+                        "code": "chat_text_must_be_utf8",
+                        "message": "JSON 文件必须使用 UTF-8 编码",
+                    },
                 ) from None
         digest = hashlib.sha256(body).hexdigest()
         if digest in seen_digests:
@@ -330,7 +339,10 @@ def upload_chat_import(
                 pass
         raise HTTPException(
             status_code=503,
-            detail={"code": "chat_import_storage_unavailable", "message": "聊天记录文件存储暂时不可用"},
+            detail={
+                "code": "chat_import_storage_unavailable",
+                "message": "聊天记录文件存储暂时不可用",
+            },
         ) from None
     db.refresh(job)
     return ChatImportAccepted(
@@ -364,7 +376,10 @@ def retry_chat_import_job(
     if job.status not in {"failed", "cancelled"}:
         raise HTTPException(
             status_code=409,
-            detail={"code": "chat_import_not_retryable", "message": "只有失败或已取消的任务可以重试"},
+            detail={
+                "code": "chat_import_not_retryable",
+                "message": "只有失败或已取消的任务可以重试",
+            },
         )
     all_files = db.scalars(
         select(ChatImportFile).where(
@@ -615,7 +630,10 @@ def confirm_chat_identity(
     if participant is None:
         raise HTTPException(
             status_code=404,
-            detail={"code": "chat_sender_not_found", "message": "未在已导入的聊天记录中找到该发送者"},
+            detail={
+                "code": "chat_sender_not_found",
+                "message": "未在已导入的聊天记录中找到该发送者",
+            },
         )
     source.target_sender_ref = payload.target_sender_ref
     source.target_sender_name = payload.target_sender_name or participant.sender_name

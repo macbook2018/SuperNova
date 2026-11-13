@@ -15,7 +15,6 @@ from typing import Any
 from bs4 import BeautifulSoup
 from openpyxl import load_workbook
 
-
 SUPPORTED_CHAT_EXTENSIONS = {".json", ".csv", ".txt", ".html", ".htm", ".xlsx", ".zip"}
 MAX_ZIP_MEMBERS = 100
 MAX_ZIP_UNCOMPRESSED_BYTES = 100 * 1024 * 1024

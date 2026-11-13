@@ -3,15 +3,15 @@ from uuid import UUID, uuid4
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
+    DDL,
+    JSON,
     BigInteger,
     CheckConstraint,
     DateTime,
-    DDL,
     ForeignKey,
     ForeignKeyConstraint,
     Index,
     Integer,
-    JSON,
     String,
     Text,
     UniqueConstraint,
@@ -23,7 +23,6 @@ from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
-
 
 # Test and metadata-driven schema creation may bypass Alembic migrations.
 event.listen(

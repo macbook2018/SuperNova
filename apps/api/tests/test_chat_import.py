@@ -69,6 +69,16 @@ def headers(tokens: dict) -> dict[str, str]:
     return {"Authorization": f"Bearer {tokens['access_token']}"}
 
 
+def _sample_chat_export_body() -> bytes:
+    return (
+        '{"messages":['
+        '{"conversation_id":"chat-1","sender_id":"wxid-owner",'
+        '"sender_name":"本人","content":"你好","timestamp":"2026-11-12T10:00:00Z"},'
+        '{"conversation_id":"chat-1","sender_id":"wxid-customer",'
+        '"sender_name":"客户A","content":"请问价格","timestamp":"2026-11-12T10:01:00Z"}'
+        ']}'
+    ).encode("utf-8")
+
 def create_source(client: TestClient, auth: dict) -> dict:
     response = client.post(
         "/chat-sources",
@@ -88,14 +98,7 @@ def upload_json(
     idempotency_key: str | None = None,
 ):
     if body is None:
-        body = (
-            b'{"messages":['
-            b'{"conversation_id":"chat-1","sender_id":"wxid-owner",'
-            b'"sender_name":"本人","content":"你好","timestamp":"2026-11-12T10:00:00Z"},'
-            b'{"conversation_id":"chat-1","sender_id":"wxid-customer",'
-            b'"sender_name":"客户A","content":"请问价格","timestamp":"2026-11-12T10:01:00Z"}'
-            b"]}"
-        )
+        body = _sample_chat_export_body()
     request_headers = headers(auth)
     if idempotency_key:
         request_headers["Idempotency-Key"] = idempotency_key
@@ -168,14 +171,7 @@ def test_worker_normalizes_messages_and_identity_requires_user_confirmation(
         file_record = db.scalar(select(ChatImportFile).where(ChatImportFile.job_id == job_id))
         object_key = file_record.object_key
 
-    body = (
-        b'{"messages":['
-        b'{"conversation_id":"chat-1","sender_id":"wxid-owner",'
-        b'"sender_name":"本人","content":"你好","timestamp":"2026-11-12T10:00:00Z"},'
-        b'{"conversation_id":"chat-1","sender_id":"wxid-customer",'
-        b'"sender_name":"客户A","content":"请问价格","timestamp":"2026-11-12T10:01:00Z"}'
-        b"]}"
-    )
+    body = _sample_chat_export_body()
     monkeypatch.setattr(worker, "SessionLocal", session_factory)
     monkeypatch.setattr(worker, "get_object", lambda *_args, **_kwargs: body)
 

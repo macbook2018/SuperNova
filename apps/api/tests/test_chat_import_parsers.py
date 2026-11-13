@@ -6,9 +6,8 @@ import zipfile
 from datetime import UTC, datetime
 
 import pytest
-from openpyxl import Workbook
-
 from app.chat_import.parsers import parse_chat_export
+from openpyxl import Workbook
 
 
 def test_json_export_normalizes_messages_and_does_not_infer_target_identity() -> None:
