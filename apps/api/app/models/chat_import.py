@@ -63,7 +63,8 @@ class ChatImportJob(Base):
             ondelete="CASCADE",
         ),
         CheckConstraint(
-            "status IN ('queued', 'processing', 'awaiting_identity', 'succeeded', 'failed', 'cancelled')",
+            "status IN ('queued', 'processing', 'awaiting_identity', "
+            "'succeeded', 'failed', 'cancelled')",
             name="ck_chat_import_jobs_status",
         ),
         CheckConstraint("progress BETWEEN 0 AND 100", name="ck_chat_import_jobs_progress"),
@@ -204,7 +205,11 @@ class ChatParticipant(Base):
         ),
         ForeignKeyConstraint(
             ["tenant_id", "source_id", "conversation_id"],
-            ["chat_conversations.tenant_id", "chat_conversations.source_id", "chat_conversations.id"],
+            [
+                "chat_conversations.tenant_id",
+                "chat_conversations.source_id",
+                "chat_conversations.id",
+            ],
             name="fk_chat_participants_conversation_same_tenant",
             ondelete="CASCADE",
         ),
@@ -258,7 +263,13 @@ class ChatMessage(Base):
             "identity_role IN ('unknown', 'target', 'other')",
             name="ck_chat_messages_identity_role",
         ),
-        Index("ix_chat_messages_conversation_time", "tenant_id", "source_id", "conversation_id", "timestamp"),
+        Index(
+            "ix_chat_messages_conversation_time",
+            "tenant_id",
+            "source_id",
+            "conversation_id",
+            "timestamp",
+        ),
         Index("ix_chat_messages_sender_time", "tenant_id", "source_id", "sender_ref", "timestamp"),
     )
 
