@@ -20,9 +20,9 @@ from app.models.chat_import import (
     ChatConversation,
     ChatImportFile,
     ChatImportJob,
-    ChatMessage,
     ChatMediaAsset,
     ChatMediaExtractionJob,
+    ChatMessage,
     ChatParticipant,
     ChatSource,
 )

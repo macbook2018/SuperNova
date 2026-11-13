@@ -35,10 +35,10 @@ from app.schemas.chat_import import (
     ChatImportJobRead,
     ChatImportParticipantPreview,
     ChatImportPreview,
-    ChatMessageRead,
     ChatMediaAssetRead,
     ChatMediaExtractionAccepted,
     ChatMediaExtractionJobRead,
+    ChatMessageRead,
     ChatSourceCreate,
     ChatSourceRead,
 )
