@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import socket
 import time
 from datetime import UTC, datetime, timedelta
@@ -8,7 +9,6 @@ from uuid import UUID, uuid4
 
 import structlog
 from sqlalchemy import and_, or_, select
-from sqlalchemy.orm import Session
 
 from app.chat_import.parsers import NormalizedChatMessage, parse_chat_export
 from app.core.config import get_settings
@@ -45,8 +45,6 @@ def _message_fingerprint(record: NormalizedChatMessage) -> str:
                 record.content,
             )
         )
-    import hashlib
-
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
@@ -282,7 +280,6 @@ def process_chat_import_job(job_id: UUID) -> None:
         file_id = file_record.id
         object_key = file_record.object_key
         filename = file_record.original_filename
-        file_size = file_record.file_size_bytes
         with SessionLocal() as db:
             current_file = db.get(ChatImportFile, file_id)
             if current_file is None:
