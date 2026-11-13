@@ -192,9 +192,8 @@ def process_chat_import_job(job_id: UUID) -> None:
                     continue
 
                 file_text_count += 1
-                if not identity_confirmed:
-                    sender_counts[record.sender_ref] += 1
-                    sender_names[record.sender_ref] = record.sender_name
+                sender_counts[record.sender_ref] += 1
+                sender_names[record.sender_ref] = record.sender_name
                 # record.content is intentionally consumed only in worker memory.
                 # It is never added to a database model, API response, or log field.
         except ValueError as exc:

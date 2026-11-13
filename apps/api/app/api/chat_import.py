@@ -69,14 +69,21 @@ def _job_read(job: ChatImportJob) -> ChatImportJobRead:
     )
 
 
-def _get_source(db, tenant_id: UUID, source_account_id: UUID) -> ChatSource:
+def _get_source(
+    db,
+    tenant_id: UUID,
+    source_account_id: UUID,
+    *,
+    allow_deleting: bool = False,
+) -> ChatSource:
     source = db.scalar(
         select(ChatSource).where(
             ChatSource.id == source_account_id,
             ChatSource.tenant_id == tenant_id,
         )
     )
-    if source is None or source.status != "active":
+    allowed_statuses = {"active", "deleting"} if allow_deleting else {"active"}
+    if source is None or source.status not in allowed_statuses:
         raise HTTPException(
             status_code=404,
             detail={"code": "source_account_not_found", "message": "来源账号不存在"},
@@ -591,7 +598,9 @@ def delete_chat_source(
     principal: CurrentPrincipal,
     db: DatabaseSession,
 ) -> dict:
-    source = _get_source(db, principal.tenant.id, source_account_id)
+    source = _get_source(
+        db, principal.tenant.id, source_account_id, allow_deleting=True
+    )
     source.status = "deleting"
     db.commit()
 
