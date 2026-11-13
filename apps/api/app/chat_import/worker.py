@@ -142,7 +142,10 @@ def _persist_batch(
                     existing_message.metadata_json = {
                         **existing_metadata,
                         **record.metadata,
-                        "source_file": record.source_file,
+                        "source_file": existing_metadata.get(
+                            "source_file", record.source_file
+                        ),
+                        "media_source_file": record.source_file,
                         "media_import_file_id": str(import_file_id),
                     }
                 continue

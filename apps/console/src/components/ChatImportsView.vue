@@ -93,6 +93,23 @@ async function loadMediaUrls(assetIds: string[]) {
     }
   }))
 }
+
+function visibleMessageAssets(message: ChatMessage): ChatMediaAsset[] {
+  const assets = message.media_assets ?? []
+  const hasOriginalImage = assets.some(
+    asset => asset.asset_type === 'image'
+      && asset.role === 'original'
+      && asset.status === 'available',
+  )
+  return assets.filter(
+    asset => !(
+      hasOriginalImage
+      && asset.asset_type === 'image'
+      && asset.role === 'thumbnail'
+    ),
+  )
+}
+
 function mediaJobLabel(status: string): string {
   const labels: Record<string, string> = {
     queued: '排队中', processing: '提取中', succeeded: '已完成',
@@ -443,7 +460,7 @@ onUnmounted(() => {
         <section class="panel">
           <div class="panel-title"><div><b>聊天消息</b><small>按消息时间排序，展示当前数据源已入库的内容。</small></div><button class="btn secondary small" @click="loadMessages(true, true)" :disabled="messagesLoading"><RefreshCw :size="14" />刷新</button></div>
           <div v-if="messages.length" class="chat-message-list">
-            <article v-for="message in messages" :key="message.id" class="chat-message-row"><div class="chat-message-head"><b>{{ message.sender_name || message.sender_ref }}</b><label :class="roleClass(message.identity_role)">{{ roleLabel(message.identity_role) }}</label><time>{{ dateText(message.timestamp) }}</time></div><p>{{ message.content }}</p><div v-if="message.media_assets?.length" class="chat-message-assets"><template v-for="asset in message.media_assets" :key="asset.id"><img v-if="asset.asset_type === 'image' && asset.status === 'available' && mediaUrls[asset.id]" class="chat-message-image" :src="mediaUrls[asset.id]" alt="聊天图片缩略图"><audio v-else-if="asset.asset_type === 'voice' && asset.status === 'available' && mediaUrls[asset.id]" controls :src="mediaUrls[asset.id]"></audio><video v-else-if="asset.asset_type === 'video' && asset.status === 'available' && mediaUrls[asset.id]" controls class="chat-message-video" :src="mediaUrls[asset.id]"></video><button v-else-if="asset.status === 'available' && asset.content_url" class="btn secondary small" @click="downloadMediaAsset(asset)"><FileText :size="13" />{{ asset.original_name || '下载附件' }}</button><small v-else-if="asset.status !== 'available'" class="chat-media-missing">{{ asset.asset_type === 'voice' ? '语音原文件未包含在导出包中' : asset.role === 'original' ? '原始附件未缓存' : '媒体资源不可用' }}</small></template></div><small>{{ message.message_type }} · {{ message.sender_ref }}</small></article>
+            <article v-for="message in messages" :key="message.id" class="chat-message-row"><div class="chat-message-head"><b>{{ message.sender_name || message.sender_ref }}</b><label :class="roleClass(message.identity_role)">{{ roleLabel(message.identity_role) }}</label><time>{{ dateText(message.timestamp) }}</time></div><p>{{ message.content }}</p><div v-if="message.media_assets?.length" class="chat-message-assets"><template v-for="asset in visibleMessageAssets(message)" :key="asset.id"><img v-if="asset.asset_type === 'image' && asset.status === 'available' && mediaUrls[asset.id]" class="chat-message-image" :src="mediaUrls[asset.id]" alt="聊天图片缩略图"><audio v-else-if="asset.asset_type === 'voice' && asset.status === 'available' && mediaUrls[asset.id]" controls :src="mediaUrls[asset.id]"></audio><video v-else-if="asset.asset_type === 'video' && asset.status === 'available' && mediaUrls[asset.id]" controls class="chat-message-video" :src="mediaUrls[asset.id]"></video><button v-else-if="asset.status === 'available' && asset.content_url" class="btn secondary small" @click="downloadMediaAsset(asset)"><FileText :size="13" />{{ asset.original_name || '下载附件' }}</button><small v-else-if="asset.status !== 'available'" class="chat-media-missing">{{ asset.asset_type === 'voice' ? '语音原文件未包含在导出包中' : asset.role === 'original' ? '原始附件未缓存' : '媒体资源不可用' }}</small></template></div><small>{{ message.message_type }} · {{ message.sender_ref }}</small></article>
             <button v-if="hasMore" class="btn secondary small chat-load-more" @click="loadMessages(false, true)" :disabled="messagesLoading">加载更多消息</button>
           </div>
           <div v-else class="empty chat-compact-empty"><MessageSquare :size="25" /><b>暂无已入库消息</b><small>文件解析并写入数据库后，消息会显示在这里。</small></div>
