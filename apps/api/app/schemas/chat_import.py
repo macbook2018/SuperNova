@@ -14,8 +14,11 @@ class ChatSourceCreate(BaseModel):
         if value is None:
             return None
         cleaned = value.strip()
-        if not cleaned and value == "":
-            return None
+        if not cleaned:
+            if value is not None and value == "":
+                return None
+            if value is not None:
+                raise ValueError("该字段不能只包含空白字符")
         return cleaned
 
 
@@ -90,4 +93,6 @@ class ChatIdentityConfirm(BaseModel):
         if value is None:
             return None
         cleaned = value.strip()
-        return cleaned or None
+        if not cleaned and value is not None:
+            raise ValueError("目标发送者标识不能为空")
+        return cleaned
