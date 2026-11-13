@@ -23,7 +23,8 @@ from app.models.chat_import import (
     ChatMessage,
     ChatParticipant,
     ChatSource,
-)\nfrom app.models.identity import ApiKey, RefreshSession, Tenant, TenantMembership, User
+)
+from app.models.identity import ApiKey, RefreshSession, Tenant, TenantMembership, User
 from app.models.knowledge import (
     KnowledgeChunk,
     KnowledgeDocument,
