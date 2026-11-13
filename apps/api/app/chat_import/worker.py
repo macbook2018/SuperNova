@@ -5,6 +5,7 @@ import hashlib
 import socket
 import time
 from datetime import UTC, datetime, timedelta
+from pathlib import PurePosixPath
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 import structlog

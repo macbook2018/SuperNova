@@ -99,7 +99,6 @@ class ChatIdentityConfirm(BaseModel):
         return cleaned
 
 
-
 class ChatImportFileRead(BaseModel):
     id: UUID
     original_filename: str
@@ -145,7 +144,6 @@ class ChatMessageRead(BaseModel):
     identity_role: str
     metadata: dict
     media_assets: list[ChatMediaAssetRead] = Field(default_factory=list)
-
 
 
 class ChatMediaExtractionJobRead(BaseModel):
