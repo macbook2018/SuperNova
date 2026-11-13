@@ -111,7 +111,6 @@ export interface KnowledgeSearchHit {
   lexical_rank: number | null
   snippet: string
   metadata: Record<string, unknown>
-  media_assets: ChatMediaAsset[]
 }
 
 export interface KnowledgeSearchResponse {
@@ -594,4 +593,5 @@ export interface ChatMessage {
   timestamp: string
   identity_role: string
   metadata: Record<string, unknown>
+  media_assets: ChatMediaAsset[]
 }

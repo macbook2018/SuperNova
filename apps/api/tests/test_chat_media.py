@@ -7,8 +7,8 @@ from datetime import UTC, datetime
 from typing import Generator
 from uuid import UUID, uuid4
 
-from fastapi.testclient import TestClient
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, event, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
