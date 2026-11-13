@@ -547,9 +547,15 @@ def enqueue_chat_media_extraction(
                 )
                 .limit(1)
             )
+            parser_media_file = (
+                parser_marker.get("media_import_file_id")
+                if isinstance(parser_marker, dict)
+                else None
+            )
             is_wekeep = (
                 isinstance(parser_marker, dict)
                 and parser_marker.get("parser") == "wekeep-export-v1"
+                and (parser_media_file or str(file_record.id)) == str(file_record.id)
             )
         if not is_wekeep:
             continue
