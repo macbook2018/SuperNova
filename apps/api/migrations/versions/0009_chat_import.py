@@ -86,6 +86,10 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("tenant_id", "id", name="uq_chat_import_jobs_tenant_id"),
         sa.UniqueConstraint(
+            "tenant_id", "source_id", "id",
+            name="uq_chat_import_jobs_tenant_source_id",
+        ),
+        sa.UniqueConstraint(
             "tenant_id", "idempotency_key", name="uq_chat_import_jobs_idempotency"
         ),
     )
@@ -133,9 +137,13 @@ def upgrade() -> None:
             ondelete="CASCADE",
         ),
         sa.ForeignKeyConstraint(
-            ["tenant_id", "job_id"],
-            ["chat_import_jobs.tenant_id", "chat_import_jobs.id"],
-            name="fk_chat_import_files_job_same_tenant",
+            ["tenant_id", "source_id", "job_id"],
+            [
+                "chat_import_jobs.tenant_id",
+                "chat_import_jobs.source_id",
+                "chat_import_jobs.id",
+            ],
+            name="fk_chat_import_files_job_same_source",
             ondelete="CASCADE",
         ),
         sa.PrimaryKeyConstraint("id"),
