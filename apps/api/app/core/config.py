@@ -39,6 +39,11 @@ class Settings(BaseSettings):
     knowledge_worker_poll_seconds: float = 2.0
     knowledge_worker_lease_seconds: int = 180
     embedding_timeout_seconds: float = 60.0
+    chat_import_max_file_bytes: int = 50 * 1024 * 1024
+    chat_import_max_files: int = 20
+    chat_import_worker_poll_seconds: float = 2.0
+    chat_import_worker_lease_seconds: int = 180
+    chat_import_batch_size: int = 500
 
     @property
     def platform_admin_email_set(self) -> frozenset[str]:
@@ -76,6 +81,16 @@ class Settings(BaseSettings):
             raise ValueError("SUPERNOVA_KNOWLEDGE_WORKER_POLL_SECONDS must be between 0.2 and 60")
         if not 30 <= self.knowledge_worker_lease_seconds <= 3600:
             raise ValueError("SUPERNOVA_KNOWLEDGE_WORKER_LEASE_SECONDS must be between 30 and 3600")
+        if not 1024 <= self.chat_import_max_file_bytes <= 250 * 1024 * 1024:
+            raise ValueError("SUPERNOVA_CHAT_IMPORT_MAX_FILE_BYTES must be between 1 KiB and 250 MiB")
+        if not 1 <= self.chat_import_max_files <= 100:
+            raise ValueError("SUPERNOVA_CHAT_IMPORT_MAX_FILES must be between 1 and 100")
+        if not 0.2 <= self.chat_import_worker_poll_seconds <= 60:
+            raise ValueError("SUPERNOVA_CHAT_IMPORT_WORKER_POLL_SECONDS must be between 0.2 and 60")
+        if not 30 <= self.chat_import_worker_lease_seconds <= 3600:
+            raise ValueError("SUPERNOVA_CHAT_IMPORT_WORKER_LEASE_SECONDS must be between 30 and 3600")
+        if not 1 <= self.chat_import_batch_size <= 5000:
+            raise ValueError("SUPERNOVA_CHAT_IMPORT_BATCH_SIZE must be between 1 and 5000")
         if self.refresh_token_ttl_days < 1 or self.refresh_token_ttl_days > 90:
             raise ValueError("SUPERNOVA_REFRESH_TOKEN_TTL_DAYS must be between 1 and 90")
         return self
