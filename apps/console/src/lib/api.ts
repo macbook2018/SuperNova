@@ -111,6 +111,7 @@ export interface KnowledgeSearchHit {
   lexical_rank: number | null
   snippet: string
   metadata: Record<string, unknown>
+  media_assets: ChatMediaAsset[]
 }
 
 export interface KnowledgeSearchResponse {
@@ -409,6 +410,46 @@ export interface UsageRecord {
 }
 
 
+
+
+async function rawBlobRequest(path: string, token?: string): Promise<Blob> {
+  const headers = new Headers()
+  if (token) headers.set('Authorization', \`Bearer \${token}\`)
+  const response = await fetch(\`\${API_BASE_URL}\${path}\`, { method: 'GET', headers })
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null)
+    throw new Error(errorMessage(payload, \`请求失败（HTTP \${response.status}）\`))
+  }
+  return response.blob()
+}
+
+export async function apiBlobRequest(path: string): Promise<Blob> {
+  const session = getStoredSession()
+  try {
+    return await rawBlobRequest(path, session?.access_token)
+  } catch (error) {
+    if (
+      !(error instanceof Error)
+      || error.message !== '请登录后再执行此操作'
+      || !session?.refresh_token
+      || path === '/auth/refresh'
+    ) {
+      throw error
+    }
+    try {
+      const refreshed = await rawRequest<AuthResponse>(
+        '/auth/refresh',
+        { method: 'POST', body: JSON.stringify({ refresh_token: session.refresh_token }) },
+      )
+      const nextSession = storeSession(refreshed)
+      return await rawBlobRequest(path, nextSession.access_token)
+    } catch (refreshError) {
+      clearStoredSession()
+      throw refreshError
+    }
+  }
+}
+
 export async function downloadApiFile(path: string, filename: string): Promise<void> {
   const session = getStoredSession()
   const headers = new Headers()
@@ -491,6 +532,39 @@ export interface ChatImportParticipantPreview {
   message_count: number
   conversation_count: number
   identity_role: string
+  avatar_asset_id: string | null
+}
+export interface ChatMediaAsset {
+  id: string
+  asset_type: string
+  role: string
+  status: string
+  original_name: string | null
+  mime_type: string | null
+  file_size_bytes: number
+  width: number | null
+  height: number | null
+  content_url: string | null
+}
+export interface ChatMediaExtractionJob {
+  id: string
+  source_id: string
+  import_file_id: string
+  status: string
+  progress: number
+  total_assets: number
+  extracted_assets: number
+  missing_assets: number
+  error_count: number
+  error_summary: string | null
+  attempts: number
+  created_at: string
+  updated_at: string
+}
+export interface ChatMediaExtractionAccepted {
+  jobs: ChatMediaExtractionJob[]
+  accepted_files: number
+  reused_jobs: number
 }
 export interface ChatConversationPreview {
   id: string

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { Activity, AlertCircle, Check, CheckCircle2, Database, FileText, MessageSquare, Plus, RefreshCw, RotateCcw, Trash2, Upload, UserRound, Users, X } from 'lucide-vue-next'
-import { apiRequest, type ChatImportAccepted, type ChatImportJob, type ChatImportJobDetail, type ChatImportPreview, type ChatMessage, type ChatSource } from '../lib/api'
+import { apiBlobRequest, apiRequest, type ChatImportAccepted, type ChatImportJob, type ChatImportJobDetail, type ChatImportPreview, type ChatMediaExtractionAccepted, type ChatMediaExtractionJob, type ChatMessage, type ChatMediaAsset, type ChatSource } from '../lib/api'
 
 const emit = defineEmits<{ notify: [message: string] }>()
 const notify = (message: string) => emit('notify', message)
@@ -14,6 +14,7 @@ const sources = ref<ChatSource[]>([])
 const sourceId = ref('')
 const source = computed(() => sources.value.find(item => item.id === sourceId.value) ?? null)
 const jobs = ref<ChatImportJob[]>([])
+const mediaJobs = ref<ChatMediaExtractionJob[]>([])
 const preview = ref<ChatImportPreview | null>(null)
 const messages = ref<ChatMessage[]>([])
 const selectedJob = ref<ChatImportJobDetail | null>(null)
@@ -23,6 +24,8 @@ const sourceModal = ref(false)
 const sourceForm = ref({ name: '', export_tool: 'WeChat' })
 const sourceBusy = ref(false)
 const uploadBusy = ref(false)
+const mediaExtractionBusy = ref(false)
+const mediaUrls = ref<Record<string, string>>({})
 const identityBusy = ref(false)
 const deleteBusy = ref(false)
 const loading = ref(false)
@@ -32,6 +35,7 @@ const messageOffset = ref(0)
 const hasMore = ref(false)
 let pollTimer: number | undefined
 let pollBusy = false
+let mediaGeneration = 0
 
 const activeJobs = computed(() => jobs.value.filter(job => ['queued', 'processing'].includes(job.status)).length)
 const importedCount = computed(() => jobs.value.reduce((sum, job) => sum + job.imported_messages, 0))
@@ -62,6 +66,84 @@ function roleClass(role: string): string {
   return role === 'target' ? 'running' : role === 'other' ? 'chat-status-neutral' : 'chat-status-pending'
 }
 
+
+
+function clearMediaUrls() {
+  mediaGeneration += 1
+  Object.values(mediaUrls.value).forEach(url => URL.revokeObjectURL(url))
+  mediaUrls.value = {}
+}
+async function loadMediaUrls(assetIds: string[]) {
+  const generation = mediaGeneration
+  const pending = [...new Set(assetIds)].filter(id => id && !mediaUrls.value[id])
+  await Promise.all(pending.map(async id => {
+    try {
+      const blob = await apiBlobRequest('/chat-media-assets/' + id + '/content')
+      const url = URL.createObjectURL(blob)
+      if (generation !== mediaGeneration) {
+        URL.revokeObjectURL(url)
+        return
+      }
+      mediaUrls.value = { ...mediaUrls.value, [id]: url }
+    } catch {
+      // Missing or expired assets remain represented by their status label.
+    }
+  }))
+}
+function mediaJobLabel(status: string): string {
+  const labels: Record<string, string> = {
+    queued: '排队中', processing: '提取中', succeeded: '已完成',
+    partial: '部分完成', failed: '失败', cancelled: '已取消',
+  }
+  return labels[status] ?? status
+}
+async function loadMediaJobs(showError = false) {
+  if (!sourceId.value) { mediaJobs.value = []; return }
+  try {
+    mediaJobs.value = await request<ChatMediaExtractionJob[]>(
+      '/chat-sources/' + sourceId.value + '/media-extractions',
+    )
+  } catch (error) {
+    if (showError) notify(error instanceof Error ? error.message : '读取媒体提取任务失败')
+  }
+}
+async function startMediaExtraction() {
+  if (!sourceId.value || mediaExtractionBusy.value) return
+  mediaExtractionBusy.value = true
+  try {
+    const accepted = await request<ChatMediaExtractionAccepted>(
+      '/chat-sources/' + sourceId.value + '/media-extractions',
+      'POST',
+    )
+    await loadMediaJobs(true)
+    notify(
+      accepted.accepted_files
+        ? '已提交 ' + accepted.accepted_files + ' 个媒体提取任务'
+        : '媒体提取任务已存在，正在继续处理',
+    )
+  } catch (error) {
+    notify(error instanceof Error ? error.message : '提交媒体提取任务失败')
+  } finally {
+    mediaExtractionBusy.value = false
+  }
+}
+async function downloadMediaAsset(asset: ChatMediaAsset) {
+  if (!asset.content_url) return
+  try {
+    const blob = await apiBlobRequest(asset.content_url)
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = asset.original_name || 'chat-attachment'
+    document.body.appendChild(anchor)
+    anchor.click()
+    anchor.remove()
+    URL.revokeObjectURL(url)
+  } catch (error) {
+    notify(error instanceof Error ? error.message : '下载媒体附件失败')
+  }
+}
+
 async function loadJobs(showError = false) {
   if (!sourceId.value || jobsLoading.value) return
   jobsLoading.value = true
@@ -73,6 +155,7 @@ async function loadPreview(showError = false) {
   if (!sourceId.value) { preview.value = null; return }
   try {
     preview.value = await request<ChatImportPreview>('/chat-sources/' + sourceId.value + '/preview')
+    await loadMediaUrls(preview.value.participants.map(item => item.avatar_asset_id ?? '').filter(Boolean))
     targetRef.value = preview.value.target_sender_ref ?? targetRef.value
     if (preview.value.target_sender_ref) {
       const found = preview.value.participants.find(item => item.sender_ref === preview.value?.target_sender_ref)
@@ -87,6 +170,11 @@ async function loadMessages(reset = true, showError = false) {
   const offset = reset ? 0 : messageOffset.value
   try {
     const rows = await request<ChatMessage[]>('/chat-sources/' + sourceId.value + '/messages?limit=50&offset=' + offset)
+    await loadMediaUrls(rows.flatMap(message =>
+      (message.media_assets ?? [])
+        .filter(asset => asset.status === 'available' && asset.content_url)
+        .map(asset => asset.id),
+    ))
     messages.value = reset ? rows : messages.value.concat(rows)
     messageOffset.value = offset + rows.length
     hasMore.value = rows.length === 50
@@ -95,8 +183,9 @@ async function loadMessages(reset = true, showError = false) {
 }
 async function loadSelected() {
   selectedJob.value = null; preview.value = null; messages.value = []; messageOffset.value = 0
+  clearMediaUrls()
   targetRef.value = ''; targetName.value = ''
-  await Promise.all([loadJobs(), loadPreview(), loadMessages(true)])
+  await Promise.all([loadJobs(), loadMediaJobs(), loadPreview(), loadMessages(true)])
 }
 async function loadSources(showError = false) {
   if (loading.value) return
@@ -105,7 +194,7 @@ async function loadSources(showError = false) {
     sources.value = await request<ChatSource[]>('/chat-sources')
     if (!sources.value.some(item => item.id === sourceId.value)) sourceId.value = sources.value[0]?.id ?? ''
     if (sourceId.value) await loadSelected()
-    else { jobs.value = []; preview.value = null; messages.value = [] }
+    else { jobs.value = []; mediaJobs.value = []; preview.value = null; messages.value = []; clearMediaUrls() }
   } catch (error) { if (showError) notify(error instanceof Error ? error.message : '读取聊天数据源失败') }
   finally { loading.value = false }
 }
@@ -187,7 +276,7 @@ async function removeSource() {
     sources.value = sources.value.filter(item => item.id !== sourceId.value)
     sourceId.value = sources.value[0]?.id ?? ''
     if (sourceId.value) await loadSelected()
-    else { jobs.value = []; preview.value = null; selectedJob.value = null; messages.value = [] }
+    else { jobs.value = []; mediaJobs.value = []; preview.value = null; selectedJob.value = null; messages.value = []; clearMediaUrls() }
     notify('聊天数据源及其数据已删除')
   } catch (error) { notify(error instanceof Error ? error.message : '删除数据源失败') }
   finally { deleteBusy.value = false }
@@ -209,11 +298,19 @@ async function poll() {
   if (pollBusy || jobsLoading.value || !sourceId.value) return
   pollBusy = true
   const old = new Map(jobs.value.map(job => [job.id, job.status]))
+  const oldMedia = new Map(mediaJobs.value.map(job => [job.id, job.status]))
   try {
-    const next = await request<ChatImportJob[]>('/chat-sources/' + sourceId.value + '/imports')
+    const [next, nextMedia] = await Promise.all([
+      request<ChatImportJob[]>('/chat-sources/' + sourceId.value + '/imports'),
+      request<ChatMediaExtractionJob[]>('/chat-sources/' + sourceId.value + '/media-extractions'),
+    ])
     jobs.value = next
+    mediaJobs.value = nextMedia
     const changed = next.some(job => old.has(job.id) && old.get(job.id) !== job.status)
-    if (changed) {
+    const mediaChanged = nextMedia.some(
+      job => oldMedia.has(job.id) && oldMedia.get(job.id) !== job.status,
+    )
+    if (changed || mediaChanged) {
       await Promise.all([loadPreview(), loadMessages(true)])
       if (selectedJob.value) await showJob(selectedJob.value.id)
     }
@@ -256,6 +353,7 @@ onUnmounted(() => { if (pollTimer !== undefined) window.clearInterval(pollTimer)
             <div class="chat-toolbar-actions">
               <button class="btn secondary small" @click="refreshAll" :disabled="loading || jobsLoading"><RefreshCw :size="14" />刷新</button>
               <button class="btn primary small" @click="pickFiles" :disabled="uploadBusy || source.status !== 'active'"><Upload :size="14" />{{ uploadBusy ? '上传中…' : '导入聊天文件' }}</button>
+              <button class="btn secondary small" @click="startMediaExtraction" :disabled="mediaExtractionBusy || source.status !== 'active'"><Activity :size="14" />{{ mediaExtractionBusy ? '提交中…' : '提取媒体资源' }}</button>
               <button class="btn secondary small danger-outline" @click="removeSource" :disabled="deleteBusy"><Trash2 :size="14" />删除数据源</button>
             </div>
           </div>
@@ -287,13 +385,30 @@ onUnmounted(() => { if (pollTimer !== undefined) window.clearInterval(pollTimer)
           <div class="chat-file-list"><div v-for="file in selectedJob.files" :key="file.id" class="chat-file-row"><FileText :size="17" /><div><b>{{ file.original_filename }}</b><small>{{ bytesText(file.file_size_bytes) }} · {{ file.extension.toUpperCase() }} · {{ file.parsed_message_count.toLocaleString() }} 条解析</small><small v-if="file.error_message" class="chat-job-error">{{ file.error_message }}</small></div><label :class="stateClass(file.status)">{{ file.status === 'parsed' ? '已解析' : file.status === 'failed' ? '失败' : file.status === 'processing' ? '处理中' : '已上传' }}</label></div></div>
         </section>
 
+
+        <section v-if="mediaJobs.length" class="panel">
+          <div class="panel-title"><div><b>媒体资源提取</b><small>图片、语音、视频、文件和联系人头像独立存储，缺失附件会保留状态。</small></div><span class="chat-counter">{{ mediaJobs.length }} 个任务</span></div>
+          <div class="chat-media-job-list">
+            <article v-for="job in mediaJobs" :key="job.id" class="chat-media-job-row">
+              <div><b>媒体提取 · {{ job.id.slice(0, 8) }}</b><small>{{ dateText(job.updated_at) }} · {{ job.attempts }} 次尝试</small></div>
+              <div class="chat-media-job-stats">
+                <span class="running">{{ job.extracted_assets }} 个已提取</span>
+                <span :class="job.missing_assets ? 'chat-status-pending' : 'chat-status-neutral'">{{ job.missing_assets }} 个缺失</span>
+                <span :class="job.error_count ? 'paused' : 'chat-status-neutral'">{{ job.error_count }} 个异常</span>
+                <label :class="stateClass(job.status)">{{ mediaJobLabel(job.status) }}</label>
+              </div>
+              <small v-if="job.error_summary" class="chat-job-error">{{ job.error_summary }}</small>
+            </article>
+          </div>
+        </section>
+
         <div class="chat-data-grid">
           <section class="panel">
             <div class="panel-title"><div><b>本人身份确认</b><small>选择聊天记录中代表当前微信账号的发送者。</small></div><label v-if="preview?.identity_confirmed" class="running">已确认</label><label v-else class="chat-status-pending">待确认</label></div>
             <div v-if="preview?.participants.length">
               <div class="chat-participant-list">
                 <button v-for="person in preview.participants" :key="person.sender_ref" class="chat-participant-row" :class="{ selected: targetRef === person.sender_ref }" @click="targetRef = person.sender_ref; targetName = person.sender_name">
-                  <span class="chat-participant-avatar"><UserRound :size="16" /></span><span class="chat-participant-copy"><b>{{ person.sender_name }}</b><small>{{ person.sender_ref }}</small></span><span class="chat-participant-count">{{ person.message_count.toLocaleString() }} 条 · {{ person.conversation_count }} 个会话</span><label :class="roleClass(person.identity_role)">{{ roleLabel(person.identity_role) }}</label>
+                  <span class="chat-participant-avatar"><img v-if="person.avatar_asset_id && mediaUrls[person.avatar_asset_id]" :src="mediaUrls[person.avatar_asset_id]" :alt="person.sender_name"><UserRound v-else :size="16" /></span><span class="chat-participant-copy"><b>{{ person.sender_name }}</b><small>{{ person.sender_ref }}</small></span><span class="chat-participant-count">{{ person.message_count.toLocaleString() }} 条 · {{ person.conversation_count }} 个会话</span><label :class="roleClass(person.identity_role)">{{ roleLabel(person.identity_role) }}</label>
                 </button>
               </div>
               <form class="chat-identity-form" @submit.prevent="confirmIdentity">
@@ -317,7 +432,7 @@ onUnmounted(() => { if (pollTimer !== undefined) window.clearInterval(pollTimer)
         <section class="panel">
           <div class="panel-title"><div><b>聊天消息</b><small>按消息时间排序，展示当前数据源已入库的内容。</small></div><button class="btn secondary small" @click="loadMessages(true, true)" :disabled="messagesLoading"><RefreshCw :size="14" />刷新</button></div>
           <div v-if="messages.length" class="chat-message-list">
-            <article v-for="message in messages" :key="message.id" class="chat-message-row"><div class="chat-message-head"><b>{{ message.sender_name || message.sender_ref }}</b><label :class="roleClass(message.identity_role)">{{ roleLabel(message.identity_role) }}</label><time>{{ dateText(message.timestamp) }}</time></div><p>{{ message.content }}</p><small>{{ message.message_type }} · {{ message.sender_ref }}</small></article>
+            <article v-for="message in messages" :key="message.id" class="chat-message-row"><div class="chat-message-head"><b>{{ message.sender_name || message.sender_ref }}</b><label :class="roleClass(message.identity_role)">{{ roleLabel(message.identity_role) }}</label><time>{{ dateText(message.timestamp) }}</time></div><p>{{ message.content }}</p><div v-if="message.media_assets?.length" class="chat-message-assets"><template v-for="asset in message.media_assets" :key="asset.id"><img v-if="asset.asset_type === 'image' && asset.role === 'thumbnail' && asset.status === 'available' && mediaUrls[asset.id]" class="chat-message-image" :src="mediaUrls[asset.id]" alt="聊天图片缩略图"><audio v-else-if="asset.asset_type === 'voice' && asset.status === 'available' && mediaUrls[asset.id]" controls :src="mediaUrls[asset.id]"></audio><video v-else-if="asset.asset_type === 'video' && asset.status === 'available' && mediaUrls[asset.id]" controls class="chat-message-video" :src="mediaUrls[asset.id]"></video><button v-else-if="asset.status === 'available' && asset.content_url" class="btn secondary small" @click="downloadMediaAsset(asset)"><FileText :size="13" />{{ asset.original_name || '下载附件' }}</button><small v-else-if="asset.status !== 'available'" class="chat-media-missing">{{ asset.asset_type === 'voice' ? '语音原文件未包含在导出包中' : asset.role === 'original' ? '原始附件未缓存' : '媒体资源不可用' }}</small></template></div><small>{{ message.message_type }} · {{ message.sender_ref }}</small></article>
             <button v-if="hasMore" class="btn secondary small chat-load-more" @click="loadMessages(false, true)" :disabled="messagesLoading">加载更多消息</button>
           </div>
           <div v-else class="empty chat-compact-empty"><MessageSquare :size="25" /><b>暂无已入库消息</b><small>文件解析并写入数据库后，消息会显示在这里。</small></div>
@@ -338,3 +453,21 @@ onUnmounted(() => { if (pollTimer !== undefined) window.clearInterval(pollTimer)
     </div>
   </div>
 </template>
+
+
+<style scoped>
+.chat-media-job-list { display: grid; gap: 10px; }
+.chat-media-job-row { display: grid; gap: 8px; padding: 12px 14px; border: 1px solid #edf0f5; border-radius: 9px; }
+.chat-media-job-row > div:first-child { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.chat-media-job-row b { color: #3b4b64; font-size: 11px; }
+.chat-media-job-row small { color: #9aa4b3; font-size: 9px; }
+.chat-media-job-stats { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
+.chat-media-job-stats > span { border-radius: 20px; padding: 4px 8px; font-size: 9px; }
+.chat-status-neutral { color: #7d8a9c; background: #f1f3f6; border-radius: 20px; padding: 4px 8px; font-size: 9px; }
+.chat-message-assets { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 9px; margin: 10px 0; }
+.chat-message-image { display: block; max-width: min(260px, 100%); max-height: 260px; object-fit: contain; border: 1px solid #edf0f5; border-radius: 9px; background: #f7f8fa; }
+.chat-message-video { display: block; max-width: min(320px, 100%); max-height: 240px; border-radius: 9px; }
+.chat-message-assets audio { max-width: 100%; }
+.chat-media-missing { align-self: center; color: #a17b46; background: #fff7ea; border-radius: 7px; padding: 7px 10px; font-size: 9px; }
+.chat-participant-avatar img { width: 100%; height: 100%; object-fit: cover; border-radius: inherit; }
+</style>
