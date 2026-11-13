@@ -158,6 +158,72 @@ def wekeep_archive() -> bytes:
     return buffer.getvalue()
 
 
+
+
+def wekeep_archive_with_original() -> bytes:
+    manifest = {
+        "application": "WeKeep",
+        "version": "1.0.1",
+        "session": "wxid_customer",
+        "name": "客户会话",
+        "exported_at": "2026-11-14T10:00:00",
+        "time_zone": "Asia/Shanghai",
+        "count": 2,
+        "chunks": [{"file": "c000001.js", "count": 2}],
+        "resource_summary": {
+            "available": 1,
+            "missing": 1,
+            "encrypted": 0,
+            "unsupported": 0,
+            "corrupt": 0,
+            "skipped": 0,
+        },
+    }
+    html = (
+        "<!doctype html><html><body><script>const manifest="
+        + json.dumps(manifest, ensure_ascii=False)
+        + ";let page=0;</script></body></html>"
+    )
+    report = [
+        {
+            "message_id": "msg-image",
+            "kind": "image",
+            "status": "available",
+            "notice": None,
+            "resources": [
+                {
+                    "kind": "image",
+                    "path": "resources/image/original.jpg",
+                    "status": "available",
+                    "role": "original",
+                    "quality": "original",
+                }
+            ],
+            "image_diagnostics": {"format": "v2", "aes_verified": True},
+        },
+        {
+            "message_id": "msg-voice",
+            "kind": "voice",
+            "status": "missing",
+            "notice": "语音原文件尚未导出。",
+            "resources": [],
+            "audio_diagnostics": {},
+        },
+    ]
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("客户会话/index.html", html)
+        archive.writestr("客户会话/c000001.js", "window.__wxChunk=[];")
+        archive.writestr(
+            "客户会话/resource-report.jsonl",
+            "\\n".join(json.dumps(row, ensure_ascii=False) for row in report),
+        )
+        archive.writestr("客户会话/resources/image/original.jpg", b"original-image")
+        archive.writestr("客户会话/avatars/owner.jpg", b"owner-avatar-v2")
+        archive.writestr("客户会话/avatars/customer.jpg", b"customer-avatar-v2")
+    return buffer.getvalue()
+
+
 def seed_parsed_wekeep_file(session_factory, auth: dict, source: dict) -> tuple:
     tenant_id = UUID(auth["tenant"]["id"])
     source_id = UUID(source["id"])
@@ -479,6 +545,7 @@ def test_media_extraction_endpoint_does_not_merge_other_tenants(
 def test_duplicate_wekeep_import_updates_media_pointer_without_moving_message(
     client: TestClient,
     session_factory,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     auth = register(client, "chat-media-reimport@example.com")
     source = create_source(client, auth)
@@ -617,3 +684,41 @@ def test_duplicate_wekeep_import_updates_media_pointer_without_moving_message(
     assert accepted.json()["accepted_files"] == 1
     assert len(accepted.json()["jobs"]) == 1
     assert accepted.json()["jobs"][0]["import_file_id"] == str(new_file_id)
+
+    stored: dict[str, tuple[bytes, str]] = {}
+    monkeypatch.setattr(worker, "SessionLocal", session_factory)
+    monkeypatch.setattr(
+        worker,
+        "get_object",
+        lambda *_args, **_kwargs: wekeep_archive_with_original(),
+    )
+    monkeypatch.setattr(
+        worker,
+        "put_object",
+        lambda key, body, mime: stored.__setitem__(key, (body, mime)),
+    )
+    monkeypatch.setattr(worker, "delete_object", lambda _key: None)
+    claimed = worker.claim_next_chat_media_job("reimport-media-worker")
+    assert str(claimed) == accepted.json()["jobs"][0]["id"]
+    worker.process_chat_media_extraction_job(claimed)
+
+    with session_factory() as db:
+        media_job = db.get(ChatMediaExtractionJob, claimed)
+        assert media_job.status == "partial"
+        assert media_job.extracted_assets == 3
+        assert media_job.missing_assets == 1
+        assert len(stored) == 3
+
+    messages = client.get(
+        f"/chat-sources/{source['id']}/messages",
+        headers=headers(auth),
+    )
+    image_message = next(
+        item for item in messages.json() if item["message_type"] == "image"
+    )
+    original = next(
+        item for item in image_message["media_assets"] if item["role"] == "original"
+    )
+    assert original["status"] == "available"
+    assert original["file_size_bytes"] == len(b"original-image")
+
