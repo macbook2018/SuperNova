@@ -342,13 +342,16 @@ def retry_chat_import_job(
             status_code=409,
             detail={"code": "chat_import_not_retryable", "message": "只有失败或已取消的任务可以重试"},
         )
-    retryable = db.scalars(
+    all_files = db.scalars(
         select(ChatImportFile).where(
             ChatImportFile.tenant_id == principal.tenant.id,
             ChatImportFile.job_id == job.id,
-            ChatImportFile.status.in_(("failed", "processing", "uploaded")),
         )
     ).all()
+    retryable = [
+        item for item in all_files
+        if item.status in {"failed", "processing", "uploaded"}
+    ]
     if not retryable:
         raise HTTPException(
             status_code=409,
@@ -360,8 +363,8 @@ def retry_chat_import_job(
         item.error_message = None
     job.status = "queued"
     job.progress = 0
-    job.total_files = len(retryable)
-    job.processed_files = 0
+    job.total_files = len(all_files)
+    job.processed_files = sum(item.status == "parsed" for item in all_files)
     job.error_count = 0
     job.error_summary = None
     job.attempts = 0
