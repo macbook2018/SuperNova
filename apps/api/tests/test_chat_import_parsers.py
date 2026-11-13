@@ -5,8 +5,8 @@ import json
 import zipfile
 from datetime import UTC, datetime
 
-import pytest
 from openpyxl import Workbook
+import pytest
 
 from app.chat_import.parsers import parse_chat_export
 
