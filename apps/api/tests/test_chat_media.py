@@ -556,15 +556,40 @@ def test_duplicate_wekeep_import_updates_media_pointer_without_moving_message(
         source_row=1,
         metadata=updated_metadata,
     )
+    voice_record = NormalizedChatMessage(
+        conversation_external_id="wxid_customer",
+        conversation_title="客户会话",
+        conversation_type="direct",
+        external_message_id="msg-voice",
+        sender_ref="wxid-customer",
+        sender_name="客户A",
+        receiver_ref=None,
+        receiver_name=None,
+        content="[语音]",
+        message_type="voice",
+        timestamp=now,
+        source_file="wekeep-export-with-media.zip",
+        source_row=2,
+        metadata={
+            "parser": "wekeep-export-v1",
+            "wekeep": {
+                "kind": "voice",
+                "resource_status": "missing",
+                "resource_notice": "语音原文件尚未导出。",
+                "resources": [],
+                "avatar": "avatars/customer.jpg",
+            },
+        },
+    )
     imported, duplicates = worker._persist_batch(
         job_id=new_job_id,
         tenant_id=tenant_id,
         source_id=source_id,
         import_file_id=new_file_id,
-        records=[record],
+        records=[record, voice_record],
     )
     assert imported == 0
-    assert duplicates == 1
+    assert duplicates == 2
 
     with session_factory() as db:
         original_message = db.scalar(
