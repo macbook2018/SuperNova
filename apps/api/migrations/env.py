@@ -18,6 +18,8 @@ from app.models import (  # noqa: F401
     ChatImportFile,
     ChatImportJob,
     ChatMessage,
+    ChatMediaAsset,
+    ChatMediaExtractionJob,
     ChatParticipant,
     ChatSource,
     KnowledgeBase,

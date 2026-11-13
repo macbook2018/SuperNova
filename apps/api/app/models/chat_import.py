@@ -206,6 +206,10 @@ class ChatParticipant(Base):
             "tenant_id", "source_id", "conversation_id", "sender_ref",
             name="uq_chat_participants_sender",
         ),
+        UniqueConstraint(
+            "tenant_id", "source_id", "conversation_id", "id",
+            name="uq_chat_participants_tenant_source_conversation_id",
+        ),
         ForeignKeyConstraint(
             ["tenant_id", "source_id", "conversation_id"],
             [
@@ -249,6 +253,10 @@ class ChatMessage(Base):
         UniqueConstraint(
             "tenant_id", "source_id", "conversation_id", "external_message_id",
             name="uq_chat_messages_external_id",
+        ),
+        UniqueConstraint(
+            "tenant_id", "source_id", "conversation_id", "id",
+            name="uq_chat_messages_tenant_source_conversation_id",
         ),
         ForeignKeyConstraint(
             ["tenant_id", "source_id", "conversation_id"],
@@ -295,6 +303,194 @@ class ChatMessage(Base):
     message_type: Mapped[str] = mapped_column(String(32), nullable=False, default="text")
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     identity_role: Mapped[str] = mapped_column(String(16), nullable=False, default="unknown")
+    metadata_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+
+class ChatMediaExtractionJob(Base):
+    __tablename__ = "chat_media_extraction_jobs"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "source_id", "id",
+            name="uq_chat_media_extraction_jobs_tenant_source_id",
+        ),
+        UniqueConstraint(
+            "tenant_id", "source_id", "import_file_id",
+            name="uq_chat_media_extraction_jobs_source_file",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "source_id"],
+            ["chat_sources.tenant_id", "chat_sources.id"],
+            name="fk_chat_media_extraction_jobs_source_same_tenant",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "source_id", "import_file_id"],
+            [
+                "chat_import_files.tenant_id",
+                "chat_import_files.source_id",
+                "chat_import_files.id",
+            ],
+            name="fk_chat_media_extraction_jobs_file_same_source",
+            ondelete="CASCADE",
+        ),
+        CheckConstraint(
+            "status IN ('queued', 'processing', 'succeeded', 'partial', 'failed', 'cancelled')",
+            name="ck_chat_media_extraction_jobs_status",
+        ),
+        CheckConstraint(
+            "progress BETWEEN 0 AND 100",
+            name="ck_chat_media_extraction_jobs_progress",
+        ),
+        Index(
+            "ix_chat_media_extraction_jobs_claim",
+            "status",
+            "created_at",
+        ),
+        Index(
+            "ix_chat_media_extraction_jobs_tenant_created",
+            "tenant_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    source_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    import_file_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="queued")
+    progress: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_assets: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    extracted_assets: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    missing_assets: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error_summary: Mapped[str | None] = mapped_column(String(1000))
+    locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    worker_id: Mapped[str | None] = mapped_column(String(120))
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class ChatMediaAsset(Base):
+    __tablename__ = "chat_media_assets"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "source_id", "conversation_id"],
+            [
+                "chat_conversations.tenant_id",
+                "chat_conversations.source_id",
+                "chat_conversations.id",
+            ],
+            name="fk_chat_media_assets_conversation_same_source",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "source_id", "import_file_id"],
+            [
+                "chat_import_files.tenant_id",
+                "chat_import_files.source_id",
+                "chat_import_files.id",
+            ],
+            name="fk_chat_media_assets_file_same_source",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "source_id", "conversation_id", "message_id"],
+            [
+                "chat_messages.tenant_id",
+                "chat_messages.source_id",
+                "chat_messages.conversation_id",
+                "chat_messages.id",
+            ],
+            name="fk_chat_media_assets_message_same_conversation",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "source_id", "conversation_id", "participant_id"],
+            [
+                "chat_participants.tenant_id",
+                "chat_participants.source_id",
+                "chat_participants.conversation_id",
+                "chat_participants.id",
+            ],
+            name="fk_chat_media_assets_participant_same_conversation",
+            ondelete="CASCADE",
+        ),
+        CheckConstraint(
+            "asset_type IN ('image', 'voice', 'video', 'file', 'avatar', 'emoji', 'other')",
+            name="ck_chat_media_assets_type",
+        ),
+        CheckConstraint(
+            "role IN ('original', 'thumbnail', 'preview', 'avatar', 'attachment')",
+            name="ck_chat_media_assets_role",
+        ),
+        CheckConstraint(
+            "status IN ('available', 'missing', 'encrypted', 'unsupported', 'corrupt', 'skipped')",
+            name="ck_chat_media_assets_status",
+        ),
+        CheckConstraint(
+            "(message_id IS NOT NULL AND participant_id IS NULL) OR "
+            "(message_id IS NULL AND participant_id IS NOT NULL)",
+            name="ck_chat_media_assets_owner",
+        ),
+        CheckConstraint(
+            "file_size_bytes >= 0",
+            name="ck_chat_media_assets_file_size",
+        ),
+        CheckConstraint(
+            "(status = 'available' AND object_key IS NOT NULL AND sha256 IS NOT NULL) OR "
+            "(status <> 'available' AND object_key IS NULL)",
+            name="ck_chat_media_assets_storage_state",
+        ),
+        Index(
+            "ix_chat_media_assets_message",
+            "tenant_id",
+            "source_id",
+            "message_id",
+        ),
+        Index(
+            "ix_chat_media_assets_participant",
+            "tenant_id",
+            "source_id",
+            "participant_id",
+        ),
+        Index(
+            "ix_chat_media_assets_file",
+            "tenant_id",
+            "source_id",
+            "import_file_id",
+        ),
+        UniqueConstraint("object_key", name="uq_chat_media_assets_object_key"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    source_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    conversation_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    import_file_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    message_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    participant_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    asset_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    role: Mapped[str] = mapped_column(String(24), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    archive_path: Mapped[str | None] = mapped_column(String(512))
+    original_name: Mapped[str | None] = mapped_column(String(255))
+    mime_type: Mapped[str | None] = mapped_column(String(160))
+    file_size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    sha256: Mapped[str | None] = mapped_column(String(64))
+    object_key: Mapped[str | None] = mapped_column(String(512))
+    width: Mapped[int | None] = mapped_column(Integer)
+    height: Mapped[int | None] = mapped_column(Integer)
     metadata_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

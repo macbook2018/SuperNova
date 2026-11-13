@@ -21,6 +21,8 @@ from app.models.chat_import import (
     ChatImportFile,
     ChatImportJob,
     ChatMessage,
+    ChatMediaAsset,
+    ChatMediaExtractionJob,
     ChatParticipant,
     ChatSource,
 )
@@ -51,6 +53,8 @@ __all__ = [
     "ChatImportFile",
     "ChatImportJob",
     "ChatMessage",
+    "ChatMediaAsset",
+    "ChatMediaExtractionJob",
     "ChatParticipant",
     "ChatSource",
     "KnowledgeBase",
