@@ -440,7 +440,7 @@ def parse_chat_export(
                     if (
                         item.compress_size
                         and item.file_size / item.compress_size > MAX_ZIP_COMPRESSION_RATIO
-                    )
+                    ):
                         raise ValueError("zip_compression_ratio_limit_exceeded")
                 found = False
                 for item in members:
