@@ -227,7 +227,10 @@ def _wekeep_zip(
                 '<script>location.replace("客户A/index.html");</script></html>',
             )
         archive.writestr("客户A/index.html", manifest_html)
-        archive.writestr("客户A/" + chunk_file, chunk_script)
+        archive_chunk_file = (
+            "c000001.js" if ".." in chunk_file or "\\" in chunk_file else chunk_file
+        )
+        archive.writestr("客户A/" + archive_chunk_file, chunk_script)
         archive.writestr("客户A/avatars/owner.jpg", b"avatar")
         archive.writestr("客户A/resources/image/thumbnail.jpg", b"thumbnail")
     return buffer.getvalue()
@@ -270,7 +273,12 @@ def test_wekeep_zip_resolves_chunks_relative_to_manifest_directory() -> None:
 
 def test_wekeep_manifest_rejects_chunk_path_traversal() -> None:
     with pytest.raises(ValueError, match="unsafe_wekeep_chunk_path"):
-        list(parse_chat_export("wekeep-export.zip", _wekeep_zip(chunk_file="../escape.js")))
+        list(
+            parse_chat_export(
+                "wekeep-export.zip",
+                _wekeep_zip(chunk_file="../escape.js"),
+            )
+        )
 
 
 def test_wekeep_html_requires_complete_zip_archive() -> None:
