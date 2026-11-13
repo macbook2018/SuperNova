@@ -77,7 +77,7 @@ def _sample_chat_export_body() -> bytes:
         '{"conversation_id":"chat-1","sender_id":"wxid-customer",'
         '"sender_name":"客户A","content":"请问价格","timestamp":"2026-11-12T10:01:00Z"}'
         ']}'
-    ).encode("utf-8")
+    ).encode()
 
 
 def create_source(client: TestClient, auth: dict) -> dict:
