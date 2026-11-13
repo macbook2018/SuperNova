@@ -50,6 +50,7 @@ def _message_fingerprint(record: NormalizedChatMessage) -> str:
 
 def _persist_batch(
     *,
+    job_id: UUID,
     tenant_id: UUID,
     source_id: UUID,
     import_file_id: UUID,
@@ -60,6 +61,13 @@ def _persist_batch(
     imported = 0
     duplicates = 0
     with SessionLocal() as db:
+        job = db.scalar(
+            select(ChatImportJob)
+            .where(ChatImportJob.id == job_id)
+            .with_for_update()
+        )
+        if job is None or job.status != "processing":
+            raise ValueError("chat_import_job_not_processing")
         source = db.scalar(
             select(ChatSource)
             .where(
@@ -205,6 +213,9 @@ def _persist_batch(
                 )
             )
             imported += 1
+        job.parsed_messages += len(records)
+        job.imported_messages += imported
+        job.duplicate_messages += duplicates
         db.commit()
     return imported, duplicates
 
@@ -212,9 +223,6 @@ def _persist_batch(
 def _update_job(
     job_id: UUID,
     *,
-    parsed_delta: int = 0,
-    imported_delta: int = 0,
-    duplicate_delta: int = 0,
     processed_files_delta: int = 0,
     error_delta: int = 0,
     progress: int | None = None,
@@ -225,9 +233,6 @@ def _update_job(
         job = db.get(ChatImportJob, job_id)
         if job is None:
             return
-        job.parsed_messages += parsed_delta
-        job.imported_messages += imported_delta
-        job.duplicate_messages += duplicate_delta
         job.processed_files += processed_files_delta
         job.error_count += error_delta
         if progress is not None:
@@ -272,23 +277,27 @@ def process_chat_import_job(job_id: UUID) -> None:
             job.progress = 100
             db.commit()
             return
-        files = db.scalars(
+        all_files = db.scalars(
             select(ChatImportFile)
             .where(
                 ChatImportFile.tenant_id == job.tenant_id,
                 ChatImportFile.source_id == job.source_id,
                 ChatImportFile.job_id == job.id,
-                ChatImportFile.status.in_(("uploaded", "failed")),
             )
             .order_by(ChatImportFile.created_at)
         ).all()
-        job.total_files = len(files)
+        files = [
+            item for item in all_files
+            if item.status in {"uploaded", "failed", "processing"}
+        ]
+        job.total_files = len(all_files)
+        job.processed_files = sum(item.status == "parsed" for item in all_files)
         job.status = "processing"
         db.commit()
         tenant_id = job.tenant_id
         source_id = job.source_id
 
-    if not files:
+    if not all_files:
         with SessionLocal() as db:
             job = db.get(ChatImportJob, job_id)
             if job is not None:
@@ -296,6 +305,23 @@ def process_chat_import_job(job_id: UUID) -> None:
                 job.error_summary = "没有可处理的导入文件"
                 job.progress = 100
                 db.commit()
+        return
+
+    if not files:
+        with SessionLocal() as db:
+            job = db.get(ChatImportJob, job_id)
+            source = db.get(ChatSource, source_id)
+            if job is None or job.status == "cancelled":
+                return
+            if source is not None and source.identity_confirmed_at is None:
+                job.status = "awaiting_identity"
+            else:
+                job.status = "succeeded"
+            job.progress = 100
+            job.worker_id = None
+            job.locked_at = None
+            job.lease_expires_at = None
+            db.commit()
         return
 
     settings = get_settings()
@@ -329,6 +355,7 @@ def process_chat_import_job(job_id: UUID) -> None:
                 batch.append(record)
                 if len(batch) >= settings.chat_import_batch_size:
                     imported, duplicates = _persist_batch(
+                        job_id=job_id,
                         tenant_id=tenant_id,
                         source_id=source_id,
                         import_file_id=file_id,
@@ -337,14 +364,12 @@ def process_chat_import_job(job_id: UUID) -> None:
                     file_parsed += len(batch)
                     _update_job(
                         job_id,
-                        parsed_delta=len(batch),
-                        imported_delta=imported,
-                        duplicate_delta=duplicates,
                         progress=5 + int(80 * completed / max(1, len(files))),
                     )
                     batch = []
             if batch:
                 imported, duplicates = _persist_batch(
+                    job_id=job_id,
                     tenant_id=tenant_id,
                     source_id=source_id,
                     import_file_id=file_id,
@@ -353,9 +378,6 @@ def process_chat_import_job(job_id: UUID) -> None:
                 file_parsed += len(batch)
                 _update_job(
                     job_id,
-                    parsed_delta=len(batch),
-                    imported_delta=imported,
-                    duplicate_delta=duplicates,
                     progress=5 + int(80 * completed / max(1, len(files))),
                 )
         except ValueError as exc:
