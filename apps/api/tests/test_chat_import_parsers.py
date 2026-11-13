@@ -288,3 +288,34 @@ def test_wekeep_html_requires_complete_zip_archive() -> None:
     )
     with pytest.raises(ValueError, match="wekeep_archive_requires_zip"):
         list(parse_chat_export("index.html", body))
+
+
+def test_text_only_adapter_filters_media_and_keeps_plain_text() -> None:
+    from app.chat_import.parsers import parse_text_chat_export
+
+    body = (
+        '{"messages":['
+        '{"conversation_id":"chat-1","sender_id":"owner","sender_name":"本人",'
+        '"content":"正常文本","message_type":"text","timestamp":"2026-11-12T10:00:00Z"},'
+        '{"conversation_id":"chat-1","sender_id":"owner","sender_name":"本人",'
+        '"content":"[图片]","message_type":"image","timestamp":"2026-11-12T10:01:00Z"},'
+        '{"conversation_id":"chat-1","sender_id":"owner","sender_name":"本人",'
+        '"content":"[语音]","message_type":"voice","timestamp":"2026-11-12T10:02:00Z"}'
+        ']}'
+    ).encode()
+
+    messages = list(parse_text_chat_export("chat.json", body))
+
+    assert len(messages) == 1
+    assert messages[0].content == "正常文本"
+    assert messages[0].message_type == "text"
+
+
+def test_wekeep_text_only_adapter_discards_media_records() -> None:
+    from app.chat_import.parsers import parse_text_chat_export
+
+    messages = list(parse_text_chat_export("wekeep-export.zip", _wekeep_zip()))
+
+    assert len(messages) == 1
+    assert messages[0].content == "你好"
+    assert messages[0].message_type == "text"

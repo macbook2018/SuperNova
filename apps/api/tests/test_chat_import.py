@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Generator
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import pytest
@@ -8,7 +9,12 @@ from app.chat_import import worker
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
-from app.models.chat_import import ChatImportFile, ChatImportJob, ChatMessage, ChatSource
+from app.models.chat_import import (
+    ChatImportFile,
+    ChatImportJob,
+    ChatImportSenderSummary,
+    ChatSource,
+)
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, event, select
 from sqlalchemy.orm import sessionmaker
@@ -74,18 +80,26 @@ def _sample_chat_export_body() -> bytes:
     return (
         '{"messages":['
         '{"conversation_id":"chat-1","sender_id":"wxid-owner",'
-        '"sender_name":"本人","content":"你好","timestamp":"2026-11-12T10:00:00Z"},'
+        '"sender_name":"本人","content":"你好","message_type":"text",'
+        '"timestamp":"2026-11-12T10:00:00Z"},'
         '{"conversation_id":"chat-1","sender_id":"wxid-customer",'
-        '"sender_name":"客户A","content":"请问价格","timestamp":"2026-11-12T10:01:00Z"}'
+        '"sender_name":"客户A","content":"请问价格","message_type":"text",'
+        '"timestamp":"2026-11-12T10:01:00Z"},'
+        '{"conversation_id":"chat-1","sender_id":"wxid-customer",'
+        '"sender_name":"客户A","content":"[图片]","message_type":"image",'
+        '"timestamp":"2026-11-12T10:02:00Z"},'
+        '{"conversation_id":"chat-1","sender_id":"wxid-owner",'
+        '"sender_name":"本人","content":"[语音]","message_type":"voice",'
+        '"timestamp":"2026-11-12T10:03:00Z"}'
         ']}'
     ).encode()
 
 
-def create_source(client: TestClient, auth: dict) -> dict:
+def create_source(client: TestClient, auth: dict, name: str = "微信账号 A") -> dict:
     response = client.post(
         "/chat-sources",
         headers=headers(auth),
-        json={"name": "微信导出记录", "export_tool": "generic-export"},
+        json={"name": name, "platform": "wechat", "export_tool": "generic-export"},
     )
     assert response.status_code == 201, response.text
     return response.json()
@@ -94,7 +108,7 @@ def create_source(client: TestClient, auth: dict) -> dict:
 def upload_json(
     client: TestClient,
     auth: dict,
-    source_id: str,
+    source_account_id: str,
     *,
     body: bytes | None = None,
     idempotency_key: str | None = None,
@@ -105,13 +119,25 @@ def upload_json(
     if idempotency_key:
         request_headers["Idempotency-Key"] = idempotency_key
     return client.post(
-        f"/chat-sources/{source_id}/imports",
+        f"/chat-sources/{source_account_id}/imports",
         headers=request_headers,
         files=[("files", ("chat.json", body, "application/json"))],
     )
 
 
-def test_upload_creates_tenant_scoped_job_and_is_idempotent(
+def test_source_account_id_is_server_generated_and_accounts_are_independent(
+    client: TestClient,
+) -> None:
+    auth = register(client, "source-account-owner@example.com")
+    first = create_source(client, auth, "微信账号 A")
+    second = create_source(client, auth, "微信账号 B")
+
+    assert first["source_account_id"] == first["id"]
+    assert second["source_account_id"] == second["id"]
+    assert first["source_account_id"] != second["source_account_id"]
+
+
+def test_upload_is_tenant_scoped_and_idempotent(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -120,15 +146,16 @@ def test_upload_creates_tenant_scoped_job_and_is_idempotent(
     source = create_source(client, auth)
 
     first = upload_json(
-        client, auth, source["id"], idempotency_key="import-request-001"
+        client, auth, source["source_account_id"], idempotency_key="import-request-001"
     )
     assert first.status_code == 202, first.text
     first_job = first.json()["job"]
     assert first_job["status"] == "queued"
+    assert first_job["source_account_id"] == source["source_account_id"]
     assert first.json()["accepted_files"] == 1
 
     replay = upload_json(
-        client, auth, source["id"], idempotency_key="import-request-001"
+        client, auth, source["source_account_id"], idempotency_key="import-request-001"
     )
     assert replay.status_code == 202
     assert replay.json()["job"]["id"] == first_job["id"]
@@ -149,38 +176,41 @@ def test_duplicate_file_is_not_queued_twice(
     auth = register(client, "chat-import-dedupe@example.com")
     source = create_source(client, auth)
 
-    first = upload_json(client, auth, source["id"])
+    first = upload_json(client, auth, source["source_account_id"])
     assert first.status_code == 202
 
-    duplicate = upload_json(client, auth, source["id"])
+    duplicate = upload_json(client, auth, source["source_account_id"])
     assert duplicate.status_code == 409
     assert duplicate.json()["detail"]["code"] == "chat_import_files_already_seen"
 
 
-def test_worker_normalizes_messages_and_identity_requires_user_confirmation(
+def test_worker_persists_sender_counts_only_and_ignores_media(
     client: TestClient,
     session_factory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("app.api.chat_import.put_object", lambda *_args, **_kwargs: None)
+    stored_objects: dict[str, bytes] = {}
+    monkeypatch.setattr(
+        "app.api.chat_import.put_object",
+        lambda key, body, _mime: stored_objects.__setitem__(key, body),
+    )
     auth = register(client, "chat-import-worker@example.com")
     source = create_source(client, auth)
-    response = upload_json(client, auth, source["id"])
+    response = upload_json(client, auth, source["source_account_id"])
     assert response.status_code == 202, response.text
+
     job_id = response.json()["job"]["id"]
     job_uuid = UUID(job_id)
     tenant_uuid = UUID(auth["tenant"]["id"])
-    source_uuid = UUID(source["id"])
+    source_uuid = UUID(source["source_account_id"])
 
-    with session_factory() as db:
-        file_record = db.scalar(
-            select(ChatImportFile).where(ChatImportFile.job_id == job_uuid)
-        )
-        object_key = file_record.object_key
-
-    body = _sample_chat_export_body()
     monkeypatch.setattr(worker, "SessionLocal", session_factory)
-    monkeypatch.setattr(worker, "get_object", lambda *_args, **_kwargs: body)
+    monkeypatch.setattr(
+        worker,
+        "get_object",
+        lambda key, **_kwargs: stored_objects[key],
+    )
+    monkeypatch.setattr(worker, "delete_object", lambda _key: None)
 
     claimed = worker.claim_next_chat_import_job("test-worker")
     assert str(claimed) == job_id
@@ -188,49 +218,77 @@ def test_worker_normalizes_messages_and_identity_requires_user_confirmation(
 
     with session_factory() as db:
         job = db.get(ChatImportJob, claimed)
-        messages = db.scalars(
-            select(ChatMessage).where(
-                ChatMessage.tenant_id == tenant_uuid,
-                ChatMessage.source_id == source_uuid,
+        summaries = db.scalars(
+            select(ChatImportSenderSummary).where(
+                ChatImportSenderSummary.tenant_id == tenant_uuid,
+                ChatImportSenderSummary.source_id == source_uuid,
             )
         ).all()
         assert job.status == "awaiting_identity"
-        assert job.parsed_messages == 2
-        assert job.imported_messages == 2
-        assert len(messages) == 2
-        assert {item.identity_role for item in messages} == {"unknown"}
-        assert file_record is not None
-        assert object_key
+        assert job.parsed_text_messages == 2
+        assert job.ignored_non_text_messages == 2
+        assert job.unique_senders == 2
+        assert {item.sender_ref for item in summaries} == {"wxid-owner", "wxid-customer"}
+        assert sum(item.message_count for item in summaries) == 2
+        assert "chat_messages" not in Base.metadata.tables
+        assert "chat_conversations" not in Base.metadata.tables
+        assert "chat_participants" not in Base.metadata.tables
+        assert all("content" not in table.columns for table in Base.metadata.tables.values())
 
-    job_detail = client.get(
-        f"/chat-imports/{job_id}",
-        headers=headers(auth),
-    )
+    job_detail = client.get(f"/chat-imports/{job_id}", headers=headers(auth))
     assert job_detail.status_code == 200
-    assert job_detail.json()["files"][0]["status"] == "parsed"
+    assert "files" not in job_detail.json()
+    assert job_detail.json()["parsed_text_messages"] == 2
 
     messages_response = client.get(
-        f"/chat-sources/{source['id']}/messages",
+        f"/chat-sources/{source['source_account_id']}/messages",
         headers=headers(auth),
-        params={"sender_ref": "wxid-owner"},
     )
-    assert messages_response.status_code == 200
-    assert len(messages_response.json()) == 1
-    assert messages_response.json()[0]["content"] == "你好"
+    assert messages_response.status_code == 404
 
     preview = client.get(
-        f"/chat-sources/{source['id']}/preview",
+        f"/chat-sources/{source['source_account_id']}/preview",
         headers=headers(auth),
     )
     assert preview.status_code == 200
     assert preview.json()["identity_confirmed"] is False
-    assert {item["sender_ref"] for item in preview.json()["participants"]} == {
+    assert "conversations" not in preview.json()
+    assert {item["sender_ref"] for item in preview.json()["senders"]} == {
         "wxid-owner",
         "wxid-customer",
     }
 
+
+def test_owner_confirmation_is_scoped_to_one_source_account(
+    client: TestClient,
+    session_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stored_objects: dict[str, bytes] = {}
+    monkeypatch.setattr(
+        "app.api.chat_import.put_object",
+        lambda key, body, _mime: stored_objects.__setitem__(key, body),
+    )
+    auth = register(client, "chat-import-account-isolation@example.com")
+    first = create_source(client, auth, "账号一")
+    second = create_source(client, auth, "账号二")
+
+    monkeypatch.setattr(worker, "SessionLocal", session_factory)
+    monkeypatch.setattr(
+        worker,
+        "get_object",
+        lambda key, **_kwargs: stored_objects[key],
+    )
+    monkeypatch.setattr(worker, "delete_object", lambda _key: None)
+
+    first_upload = upload_json(client, auth, first["source_account_id"])
+    first_job_id = first_upload.json()["job"]["id"]
+    claimed = worker.claim_next_chat_import_job("test-worker")
+    worker.process_chat_import_job(claimed)
+    assert str(claimed) == first_job_id
+
     confirmed = client.post(
-        f"/chat-sources/{source['id']}/confirm-identity",
+        f"/chat-sources/{first['source_account_id']}/confirm-identity",
         headers=headers(auth),
         json={"target_sender_ref": "wxid-owner"},
     )
@@ -238,36 +296,112 @@ def test_worker_normalizes_messages_and_identity_requires_user_confirmation(
     assert confirmed.json()["target_sender_ref"] == "wxid-owner"
 
     with session_factory() as db:
-        roles = db.scalars(
-            select(ChatMessage.identity_role).where(
-                ChatMessage.tenant_id == tenant_uuid,
-                ChatMessage.source_id == source_uuid,
+        first_source = db.get(ChatSource, UUID(first["source_account_id"]))
+        second_source = db.get(ChatSource, UUID(second["source_account_id"]))
+        first_job = db.get(ChatImportJob, UUID(first_job_id))
+        assert first_source.identity_confirmed_at is not None
+        assert second_source.identity_confirmed_at is None
+        assert first_job.status == "ready_for_analysis"
+        assert db.scalar(
+            select(ChatImportSenderSummary.id).where(
+                ChatImportSenderSummary.source_id == UUID(first["source_account_id"])
             )
-        ).all()
-        assert roles.count("target") == 1
-        assert roles.count("other") == 1
-        job = db.get(ChatImportJob, claimed)
-        assert job.status == "succeeded"
+        ) is None
 
 
-def test_source_delete_removes_rows_and_private_objects(
+def test_cancel_deletes_temporary_upload_and_sender_summary(
     client: TestClient,
     session_factory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("app.api.chat_import.put_object", lambda *_args, **_kwargs: None)
+    stored_objects: dict[str, bytes] = {}
     deleted_keys: list[str] = []
+    monkeypatch.setattr(
+        "app.api.chat_import.put_object",
+        lambda key, body, _mime: stored_objects.__setitem__(key, body),
+    )
+    monkeypatch.setattr(
+        "app.api.chat_import.delete_object",
+        lambda key: deleted_keys.append(key),
+    )
+    auth = register(client, "chat-import-cancel@example.com")
+    source = create_source(client, auth)
+    uploaded = upload_json(client, auth, source["source_account_id"])
+    job_id = uploaded.json()["job"]["id"]
+
+    response = client.post(
+        f"/chat-imports/{job_id}/cancel",
+        headers=headers(auth),
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "cancelled"
+    assert len(deleted_keys) == 1
+
+    with session_factory() as db:
+        assert db.scalar(
+            select(ChatImportFile.id).where(ChatImportFile.job_id == UUID(job_id))
+        ) is None
+
+
+def test_expired_temporary_upload_is_deleted_and_job_fails(
+    client: TestClient,
+    session_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stored_objects: dict[str, bytes] = {}
+    deleted_keys: list[str] = []
+    monkeypatch.setattr(
+        "app.api.chat_import.put_object",
+        lambda key, body, _mime: stored_objects.__setitem__(key, body),
+    )
+    monkeypatch.setattr(
+        worker,
+        "delete_object",
+        lambda key: deleted_keys.append(key),
+    )
+    monkeypatch.setattr(worker, "SessionLocal", session_factory)
+
+    auth = register(client, "chat-import-expiry@example.com")
+    source = create_source(client, auth)
+    uploaded = upload_json(client, auth, source["source_account_id"])
+    job_id = UUID(uploaded.json()["job"]["id"])
+
+    with session_factory() as db:
+        file_record = db.scalar(
+            select(ChatImportFile).where(ChatImportFile.job_id == job_id)
+        )
+        file_record.expires_at = datetime.now(UTC) - timedelta(minutes=1)
+        db.commit()
+
+    assert worker.cleanup_expired_chat_import_uploads() == 1
+    with session_factory() as db:
+        job = db.get(ChatImportJob, job_id)
+        assert job.status == "failed"
+        assert "过期" in job.error_summary
+        assert db.scalar(
+            select(ChatImportFile.id).where(ChatImportFile.job_id == job_id)
+        ) is None
+    assert len(deleted_keys) == 1
+
+
+def test_source_delete_removes_jobs_and_private_objects(
+    client: TestClient,
+    session_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deleted_keys: list[str] = []
+    monkeypatch.setattr("app.api.chat_import.put_object", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         "app.api.chat_import.delete_object",
         lambda key: deleted_keys.append(key),
     )
     auth = register(client, "chat-import-delete@example.com")
     source = create_source(client, auth)
-    uploaded = upload_json(client, auth, source["id"])
+    uploaded = upload_json(client, auth, source["source_account_id"])
     assert uploaded.status_code == 202
 
     response = client.delete(
-        f"/chat-sources/{source['id']}",
+        f"/chat-sources/{source['source_account_id']}",
         headers=headers(auth),
     )
     assert response.status_code == 202
@@ -275,7 +409,7 @@ def test_source_delete_removes_rows_and_private_objects(
     assert len(deleted_keys) == 1
 
     tenant_uuid = UUID(auth["tenant"]["id"])
-    source_uuid = UUID(source["id"])
+    source_uuid = UUID(source["source_account_id"])
     with session_factory() as db:
         assert db.get(ChatSource, source_uuid) is None
         assert db.scalar(
@@ -284,34 +418,3 @@ def test_source_delete_removes_rows_and_private_objects(
         assert db.scalar(
             select(ChatImportFile.id).where(ChatImportFile.tenant_id == tenant_uuid)
         ) is None
-
-
-def test_retry_only_reopens_failed_or_cancelled_jobs(
-    client: TestClient,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr("app.api.chat_import.put_object", lambda *_args, **_kwargs: None)
-    auth = register(client, "chat-import-retry@example.com")
-    source = create_source(client, auth)
-    response = upload_json(client, auth, source["id"])
-    job_id = response.json()["job"]["id"]
-
-    invalid = client.post(
-        f"/chat-imports/{job_id}/retry",
-        headers=headers(auth),
-    )
-    assert invalid.status_code == 409
-
-    cancelled = client.post(
-        f"/chat-imports/{job_id}/cancel",
-        headers=headers(auth),
-    )
-    assert cancelled.status_code == 200
-    assert cancelled.json()["status"] == "cancelled"
-
-    retry = client.post(
-        f"/chat-imports/{job_id}/retry",
-        headers=headers(auth),
-    )
-    assert retry.status_code == 202
-    assert retry.json()["status"] == "queued"
