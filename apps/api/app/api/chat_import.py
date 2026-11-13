@@ -7,7 +7,7 @@ from pathlib import PurePosixPath
 from typing import Annotated
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, File, Header, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, Header, HTTPException, Query, UploadFile, status
 from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 
@@ -27,9 +27,12 @@ from app.schemas.chat_import import (
     ChatConversationPreview,
     ChatIdentityConfirm,
     ChatImportAccepted,
+    ChatImportFileRead,
+    ChatImportJobDetail,
     ChatImportJobRead,
     ChatImportParticipantPreview,
     ChatImportPreview,
+    ChatMessageRead,
     ChatSourceCreate,
     ChatSourceRead,
 )
@@ -415,12 +418,12 @@ def cancel_chat_import_job(
     return _job_read(job)
 
 
-@router.get("/chat-imports/{job_id}", response_model=ChatImportJobRead)
+@router.get("/chat-imports/{job_id}", response_model=ChatImportJobDetail)
 def get_chat_import_job(
     job_id: UUID,
     principal: CurrentPrincipal,
     db: DatabaseSession,
-) -> ChatImportJobRead:
+) -> ChatImportJobDetail:
     job = db.scalar(
         select(ChatImportJob).where(
             ChatImportJob.id == job_id,
@@ -432,7 +435,77 @@ def get_chat_import_job(
             status_code=404,
             detail={"code": "chat_import_job_not_found", "message": "导入任务不存在"},
         )
-    return _job_read(job)
+    files = db.scalars(
+        select(ChatImportFile)
+        .where(
+            ChatImportFile.tenant_id == principal.tenant.id,
+            ChatImportFile.job_id == job.id,
+        )
+        .order_by(ChatImportFile.created_at)
+    ).all()
+    return ChatImportJobDetail(
+        **_job_read(job).model_dump(),
+        files=[
+            ChatImportFileRead.model_validate(item, from_attributes=True)
+            for item in files
+        ],
+    )
+
+
+@router.get(
+    "/chat-sources/{source_id}/messages",
+    response_model=list[ChatMessageRead],
+)
+def list_chat_messages(
+    source_id: UUID,
+    principal: CurrentPrincipal,
+    db: DatabaseSession,
+    conversation_id: UUID | None = None,
+    sender_ref: str | None = None,
+    start_at: datetime | None = None,
+    end_at: datetime | None = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 100,
+    offset: Annotated[int, Query(ge=0, le=10000)] = 0,
+) -> list[ChatMessageRead]:
+    source = _get_source(db, principal.tenant.id, source_id)
+    if start_at is not None and end_at is not None and start_at > end_at:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "invalid_time_range", "message": "开始时间不能晚于结束时间"},
+        )
+    statement = select(ChatMessage).where(
+        ChatMessage.tenant_id == principal.tenant.id,
+        ChatMessage.source_id == source.id,
+    )
+    if conversation_id is not None:
+        statement = statement.where(ChatMessage.conversation_id == conversation_id)
+    if sender_ref is not None:
+        statement = statement.where(ChatMessage.sender_ref == sender_ref)
+    if start_at is not None:
+        statement = statement.where(ChatMessage.timestamp >= start_at)
+    if end_at is not None:
+        statement = statement.where(ChatMessage.timestamp <= end_at)
+    messages = db.scalars(
+        statement.order_by(ChatMessage.timestamp, ChatMessage.id)
+        .limit(limit)
+        .offset(offset)
+    ).all()
+    return [
+        ChatMessageRead(
+            id=item.id,
+            conversation_id=item.conversation_id,
+            sender_ref=item.sender_ref,
+            sender_name=item.sender_name,
+            receiver_ref=item.receiver_ref,
+            receiver_name=item.receiver_name,
+            content=item.content,
+            message_type=item.message_type,
+            timestamp=item.timestamp,
+            identity_role=item.identity_role,
+            metadata=item.metadata_json,
+        )
+        for item in messages
+    ]
 
 
 @router.get(
