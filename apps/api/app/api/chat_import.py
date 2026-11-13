@@ -145,6 +145,14 @@ def upload_chat_import(
             )
         )
         if existing_job is not None:
+            if existing_job.source_id != source.id:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "idempotency_key_reused",
+                        "message": "该幂等键已用于另一个聊天记录数据集",
+                    },
+                )
             return ChatImportAccepted(
                 job=_job_read(existing_job),
                 accepted_files=existing_job.total_files,
@@ -154,6 +162,7 @@ def upload_chat_import(
     pending: list[dict] = []
     seen_digests: set[str] = set()
     skipped_duplicates = 0
+    total_upload_bytes = 0
     for upload in files:
         filename = PurePosixPath((upload.filename or "").replace("\\", "/")).name.strip()
         suffix = PurePosixPath(filename).suffix.casefold()
@@ -174,7 +183,19 @@ def upload_chat_import(
         if len(body) > settings.chat_import_max_file_bytes:
             raise HTTPException(
                 status_code=413,
-                detail={"code": "chat_import_file_too_large", "message": "单个聊天记录文件超过大小限制"},
+                detail={
+                    "code": "chat_import_file_too_large",
+                    "message": "单个聊天记录文件超过大小限制",
+                },
+            )
+        total_upload_bytes += len(body)
+        if total_upload_bytes > settings.chat_import_max_batch_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail={
+                    "code": "chat_import_batch_too_large",
+                    "message": "本次批量上传的文件总大小超过限制",
+                },
             )
         if suffix in {".zip", ".xlsx"} and not body.startswith(b"PK"):
             raise HTTPException(
