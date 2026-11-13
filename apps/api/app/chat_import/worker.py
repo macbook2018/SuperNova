@@ -26,6 +26,14 @@ from app.models.chat_import import (
 logger = structlog.get_logger()
 
 
+def _as_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
 def _message_fingerprint(record: NormalizedChatMessage) -> str:
     if record.external_message_id:
         material = "\x1f".join(
@@ -132,15 +140,11 @@ def _persist_batch(
                 and record.conversation_type != "unknown"
             ):
                 conversation.conversation_type = record.conversation_type
-            if (
-                conversation.first_message_at is None
-                or record.timestamp < conversation.first_message_at
-            ):
+            first_message_at = _as_utc(conversation.first_message_at)
+            last_message_at = _as_utc(conversation.last_message_at)
+            if first_message_at is None or record.timestamp < first_message_at:
                 conversation.first_message_at = record.timestamp
-            if (
-                conversation.last_message_at is None
-                or record.timestamp > conversation.last_message_at
-            ):
+            if last_message_at is None or record.timestamp > last_message_at:
                 conversation.last_message_at = record.timestamp
 
             participant_key = (conversation.id, record.sender_ref)
@@ -354,7 +358,7 @@ def process_chat_import_job(job_id: UUID) -> None:
                     return
                 batch.append(record)
                 if len(batch) >= settings.chat_import_batch_size:
-                    imported, duplicates = _persist_batch(
+                    _persist_batch(
                         job_id=job_id,
                         tenant_id=tenant_id,
                         source_id=source_id,
@@ -368,7 +372,7 @@ def process_chat_import_job(job_id: UUID) -> None:
                     )
                     batch = []
             if batch:
-                imported, duplicates = _persist_batch(
+                _persist_batch(
                     job_id=job_id,
                     tenant_id=tenant_id,
                     source_id=source_id,
