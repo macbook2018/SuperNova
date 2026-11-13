@@ -54,6 +54,10 @@ class ChatImportJob(Base):
     __tablename__ = "chat_import_jobs"
     __table_args__ = (
         UniqueConstraint("tenant_id", "id", name="uq_chat_import_jobs_tenant_id"),
+        UniqueConstraint(
+            "tenant_id", "source_id", "id",
+            name="uq_chat_import_jobs_tenant_source_id",
+        ),
         UniqueConstraint("tenant_id", "idempotency_key", name="uq_chat_import_jobs_idempotency"),
         ForeignKeyConstraint(
             ["tenant_id", "source_id"],
@@ -116,9 +120,9 @@ class ChatImportFile(Base):
             ondelete="CASCADE",
         ),
         ForeignKeyConstraint(
-            ["tenant_id", "job_id"],
-            ["chat_import_jobs.tenant_id", "chat_import_jobs.id"],
-            name="fk_chat_import_files_job_same_tenant",
+            ["tenant_id", "source_id", "job_id"],
+            ["chat_import_jobs.tenant_id", "chat_import_jobs.source_id", "chat_import_jobs.id"],
+            name="fk_chat_import_files_job_same_source",
             ondelete="CASCADE",
         ),
         CheckConstraint(
