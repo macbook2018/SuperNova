@@ -96,3 +96,37 @@ class ChatIdentityConfirm(BaseModel):
         if not cleaned and value is not None:
             raise ValueError("目标发送者标识不能为空")
         return cleaned
+
+
+
+class ChatImportFileRead(BaseModel):
+    id: UUID
+    original_filename: str
+    extension: str
+    mime_type: str
+    file_size_bytes: int
+    sha256: str
+    status: str
+    parsed_message_count: int
+    error_code: str | None
+    error_message: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ChatImportJobDetail(ChatImportJobRead):
+    files: list[ChatImportFileRead]
+
+
+class ChatMessageRead(BaseModel):
+    id: UUID
+    conversation_id: UUID
+    sender_ref: str
+    sender_name: str
+    receiver_ref: str | None
+    receiver_name: str | None
+    content: str
+    message_type: str
+    timestamp: datetime
+    identity_role: str
+    metadata: dict
