@@ -531,17 +531,18 @@ def enqueue_chat_media_extraction(
     accepted = 0
     reused = 0
     for file_record in files:
-        parser_markers = db.scalars(
-            select(ChatMessage.metadata_json).where(
+        parser_marker = db.scalar(
+            select(ChatMessage.metadata_json)
+            .where(
                 ChatMessage.tenant_id == principal.tenant.id,
                 ChatMessage.source_id == source.id,
                 ChatMessage.import_file_id == file_record.id,
             )
-        ).all()
-        if not any(
-            isinstance(metadata, dict)
-            and metadata.get("parser") == "wekeep-export-v1"
-            for metadata in parser_markers
+            .limit(1)
+        )
+        if (
+            not isinstance(parser_marker, dict)
+            or parser_marker.get("parser") != "wekeep-export-v1"
         ):
             continue
 
@@ -669,11 +670,21 @@ def get_chat_media_asset_content(
         ) from None
 
     filename = PurePosixPath(asset.original_name or "attachment").name
-    inline = bool(asset.mime_type and (
-        asset.mime_type.startswith("image/")
-        or asset.mime_type.startswith("audio/")
-        or asset.mime_type.startswith("video/")
-    ))
+    inline_types = {
+        "image/jpeg",
+        "image/png",
+        "image/gif",
+        "image/webp",
+        "image/avif",
+        "audio/mpeg",
+        "audio/mp4",
+        "audio/aac",
+        "audio/ogg",
+        "audio/wav",
+        "video/mp4",
+        "video/webm",
+    }
+    inline = asset.mime_type in inline_types
     disposition = "inline" if inline else "attachment"
     safe_filename = "".join(
         char for char in filename if char.isprintable() and char not in '"\r\n'

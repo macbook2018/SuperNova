@@ -142,12 +142,14 @@ def _read_resource(
     remaining_bytes: int,
 ) -> tuple[str, str | None, bytes | None, str | None]:
     status = _normal_status(declared_status)
-    if status != "available":
-        return status, None, None, None
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        return ("missing" if status == "available" else status), None, None, None
     try:
         path = _safe_member_path(index_path, raw_path)
     except ValueError:
         return "unsupported", None, None, None
+    if status != "available":
+        return status, path, None, None
 
     item = members.get(path)
     if item is None or item.is_dir():
