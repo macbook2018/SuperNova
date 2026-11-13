@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import PurePosixPath
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from bs4 import BeautifulSoup
 from openpyxl import load_workbook
@@ -402,6 +403,10 @@ def _parse_text(body: bytes, source_file: str) -> Iterator[NormalizedChatMessage
 
 
 def _parse_html(body: bytes, source_file: str) -> Iterator[NormalizedChatMessage]:
+    if b"WeKeep" in body and (
+        b"location.replace" in body or b"const manifest" in body
+    ):
+        raise ValueError("wekeep_archive_requires_zip")
     soup = BeautifulSoup(body, "html.parser")
     tables = soup.find_all("table")
     for table_index, table in enumerate(tables, start=1):
@@ -430,6 +435,250 @@ def _parse_html(body: bytes, source_file: str) -> Iterator[NormalizedChatMessage
     lines = [line.strip() for line in soup.get_text("\n").splitlines() if line.strip()]
     text_body = "\n".join(lines).encode("utf-8")
     yield from _parse_text(text_body, source_file)
+
+
+def _find_wekeep_manifest(
+    archive: zipfile.ZipFile,
+    members: list[zipfile.ZipInfo],
+) -> tuple[zipfile.ZipInfo, Mapping[str, Any]] | None:
+    for item in members:
+        if PurePosixPath(item.filename).suffix.casefold() not in {".html", ".htm"}:
+            continue
+        if item.file_size > MAX_ZIP_MEMBER_BYTES:
+            raise ValueError("zip_member_size_limit_exceeded")
+        with archive.open(item) as stream:
+            body = stream.read(MAX_ZIP_MEMBER_BYTES + 1)
+        if len(body) > MAX_ZIP_MEMBER_BYTES:
+            raise ValueError("zip_member_size_limit_exceeded")
+        if b"WeKeep" not in body or b"manifest" not in body:
+            continue
+
+        soup = BeautifulSoup(body, "html.parser")
+        for script in soup.find_all("script"):
+            script_text = str(script.string or script.get_text())
+            marker = re.search(r"\bconst\s+manifest\s*=\s*", script_text)
+            if marker is None:
+                continue
+            try:
+                manifest, _ = json.JSONDecoder().raw_decode(
+                    script_text, marker.end()
+                )
+            except json.JSONDecodeError:
+                if "WeKeep" in script_text:
+                    raise ValueError("invalid_wekeep_manifest") from None
+                continue
+            if isinstance(manifest, Mapping) and manifest.get("application") == "WeKeep":
+                return item, manifest
+    return None
+
+
+def _wekeep_chunk_path(index_path: str, value: Any) -> str:
+    raw_path = _string(value)
+    if not raw_path or "\\" in raw_path or "\x00" in raw_path:
+        raise ValueError("unsafe_wekeep_chunk_path")
+    path = PurePosixPath(raw_path)
+    if path.is_absolute() or ".." in path.parts or path.suffix.casefold() != ".js":
+        raise ValueError("unsafe_wekeep_chunk_path")
+    resolved = PurePosixPath(index_path).parent / path
+    if resolved.is_absolute() or ".." in resolved.parts:
+        raise ValueError("unsafe_wekeep_chunk_path")
+    return resolved.as_posix()
+
+
+def _parse_wekeep_chunk(body: bytes) -> list[Mapping[str, Any]]:
+    try:
+        script = body.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise ValueError("invalid_wekeep_chunk_encoding") from None
+    marker = re.match(r"\s*window\.__wxChunk\s*=\s*", script)
+    if marker is None:
+        raise ValueError("invalid_wekeep_chunk")
+    try:
+        rows, end = json.JSONDecoder().raw_decode(script, marker.end())
+    except json.JSONDecodeError:
+        raise ValueError("invalid_wekeep_chunk_json") from None
+    if script[end:].strip() not in {"", ";"}:
+        raise ValueError("invalid_wekeep_chunk_payload")
+    if not isinstance(rows, list) or any(not isinstance(row, Mapping) for row in rows):
+        raise ValueError("invalid_wekeep_chunk_shape")
+    return rows
+
+
+def _wekeep_timestamp(row: Mapping[str, Any], time_zone: str) -> Any:
+    value = row.get("create_time")
+    if value not in (None, ""):
+        return value
+    raw = _string(row.get("time_str"))
+    if raw is None:
+        raise ValueError("missing_message_timestamp")
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        raise ValueError("invalid_message_timestamp") from None
+    if parsed.tzinfo is None:
+        try:
+            parsed = parsed.replace(tzinfo=ZoneInfo(time_zone))
+        except ZoneInfoNotFoundError:
+            raise ValueError("invalid_wekeep_time_zone") from None
+    return parsed.isoformat()
+
+
+def _parse_wekeep_archive(
+    archive: zipfile.ZipFile,
+    members: list[zipfile.ZipInfo],
+    filename: str,
+    index_item: zipfile.ZipInfo,
+    manifest: Mapping[str, Any],
+) -> Iterator[NormalizedChatMessage]:
+    chunk_specs = manifest.get("chunks")
+    if not isinstance(chunk_specs, list) or not chunk_specs:
+        raise ValueError("wekeep_manifest_has_no_chunks")
+
+    members_by_name = {item.filename: item for item in members}
+    specs: list[tuple[zipfile.ZipInfo, int | None]] = []
+    seen_paths: set[str] = set()
+    declared_total = 0
+    all_counts_declared = True
+    for chunk in chunk_specs:
+        if not isinstance(chunk, Mapping):
+            raise ValueError("invalid_wekeep_chunk_manifest")
+        chunk_path = _wekeep_chunk_path(index_item.filename, chunk.get("file"))
+        if chunk_path in seen_paths:
+            raise ValueError("duplicate_wekeep_chunk_path")
+        seen_paths.add(chunk_path)
+        chunk_item = members_by_name.get(chunk_path)
+        if chunk_item is None:
+            raise ValueError("wekeep_chunk_missing")
+        if chunk_item.file_size > MAX_ZIP_MEMBER_BYTES:
+            raise ValueError("zip_member_size_limit_exceeded")
+
+        expected_count = chunk.get("count")
+        if expected_count is not None:
+            if (
+                not isinstance(expected_count, int)
+                or isinstance(expected_count, bool)
+                or expected_count < 0
+            ):
+                raise ValueError("invalid_wekeep_chunk_count")
+            declared_total += expected_count
+        else:
+            all_counts_declared = False
+        specs.append((chunk_item, expected_count))
+
+    manifest_count = manifest.get("count")
+    if manifest_count is not None:
+        if (
+            not isinstance(manifest_count, int)
+            or isinstance(manifest_count, bool)
+            or manifest_count < 0
+        ):
+            raise ValueError("invalid_wekeep_message_count")
+        if all_counts_declared and declared_total != manifest_count:
+            raise ValueError("wekeep_manifest_count_mismatch")
+
+    manifest_session = _string(manifest.get("session"))
+    conversation_title = _string(manifest.get("name")) or manifest_session
+    time_zone = _string(manifest.get("time_zone")) or "UTC"
+    version = _string(manifest.get("version"))
+    exported_at = _string(manifest.get("exported_at"))
+    total = 0
+
+    for chunk_item, expected_count in specs:
+        with archive.open(chunk_item) as stream:
+            chunk_body = stream.read(MAX_ZIP_MEMBER_BYTES + 1)
+        if len(chunk_body) > MAX_ZIP_MEMBER_BYTES:
+            raise ValueError("zip_member_size_limit_exceeded")
+        rows = _parse_wekeep_chunk(chunk_body)
+        if expected_count is not None and len(rows) != expected_count:
+            raise ValueError("wekeep_chunk_count_mismatch")
+        if total + len(rows) > MAX_RECORDS_PER_FILE:
+            raise ValueError("chat_record_limit_exceeded")
+
+        source_file = f"{filename}:{chunk_item.filename}"
+        for row in rows:
+            total += 1
+            session_id = _string(row.get("session")) or manifest_session
+            if not session_id:
+                raise ValueError("missing_wekeep_session")
+            sender_id = _string(row.get("sender_wxid")) or _string(row.get("sender"))
+            sender_name = _string(row.get("sender")) or sender_id
+            if not sender_id or not sender_name:
+                raise ValueError("missing_sender_identity")
+
+            kind = _string(row.get("kind"))
+            type_name = _string(row.get("type_name"))
+            message_type = kind or type_name or "text"
+            content = _string(row.get("text"))
+            if content is None:
+                placeholders = {
+                    "image": "[图片]",
+                    "voice": "[语音]",
+                    "video": "[视频]",
+                    "file": "[文件]",
+                    "emoji": "[表情]",
+                    "system": "[系统消息]",
+                }
+                content = placeholders.get(
+                    (kind or "").casefold(),
+                    f"[{type_name or '非文本消息'}]",
+                )
+
+            local_id = _string(row.get("local_id"))
+            shard = _string(row.get("shard"))
+            external_message_id = _string(row.get("server_id"))
+            if external_message_id is None and local_id is not None:
+                external_message_id = f"{shard or '0'}:{local_id}"
+
+            mapped = {
+                "conversation_id": session_id,
+                "conversation_title": conversation_title,
+                "conversation_type": (
+                    "group" if session_id.casefold().endswith("@chatroom") else "direct"
+                ),
+                "message_id": external_message_id,
+                "sender_id": sender_id,
+                "sender_name": sender_name,
+                "content": content,
+                "message_type": message_type,
+                "timestamp": _wekeep_timestamp(row, time_zone),
+            }
+            record = _normalize_row(
+                mapped,
+                source_file=source_file,
+                source_row=total,
+            )
+            wekeep_metadata = {
+                "application": "WeKeep",
+                "version": version,
+                "exported_at": exported_at,
+                "time_zone": time_zone,
+                "session": session_id,
+                "local_id": row.get("local_id"),
+                "shard": row.get("shard"),
+                "kind": kind,
+                "type": row.get("type"),
+                "raw_type": row.get("raw_type"),
+                "type_name": type_name,
+                "is_sender": row.get("is_sender"),
+                "avatar": row.get("avatar"),
+                "resources": row.get("resources", []),
+                "resource_status": row.get("resource_status"),
+                "resource_notice": row.get("resource_notice"),
+                "extra": row.get("extra", {}),
+            }
+            yield NormalizedChatMessage(
+                **{
+                    **record.__dict__,
+                    "metadata": {
+                        **record.metadata,
+                        "parser": "wekeep-export-v1",
+                        "wekeep": wekeep_metadata,
+                    },
+                }
+            )
+
+    if manifest_count is not None and total != manifest_count:
+        raise ValueError("wekeep_manifest_count_mismatch")
 
 
 def parse_chat_export(
@@ -477,6 +726,18 @@ def parse_chat_export(
                         and item.file_size / item.compress_size > MAX_ZIP_COMPRESSION_RATIO
                     ):
                         raise ValueError("zip_compression_ratio_limit_exceeded")
+                wekeep_manifest = _find_wekeep_manifest(archive, members)
+                if wekeep_manifest is not None:
+                    index_item, manifest = wekeep_manifest
+                    yield from _parse_wekeep_archive(
+                        archive,
+                        members,
+                        filename,
+                        index_item,
+                        manifest,
+                    )
+                    return
+
                 found = False
                 for item in members:
                     member_name = PurePosixPath(item.filename).name

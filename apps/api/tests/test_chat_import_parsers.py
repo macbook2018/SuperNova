@@ -151,3 +151,132 @@ def test_parser_rejects_unknown_schema_and_missing_identity() -> None:
     body = b"conversation_id,content,timestamp\nchat-1,Hello,1794456000\n"
     with pytest.raises(ValueError, match="missing_sender_identity"):
         list(parse_chat_export("missing-sender.csv", body))
+
+
+def _wekeep_zip(
+    *,
+    chunk_file: str = "c000001.js",
+    include_redirect_index: bool = True,
+) -> bytes:
+    manifest = {
+        "application": "WeKeep",
+        "version": "1.0.1",
+        "session": "wxid_customer",
+        "name": "客户A",
+        "exported_at": "2026-11-13T14:07:48",
+        "time_zone": "Asia/Shanghai",
+        "count": 2,
+        "chunks": [{"file": chunk_file, "count": 2}],
+    }
+    rows = [
+        {
+            "local_id": 1,
+            "server_id": "server-1",
+            "shard": 1,
+            "type": 1,
+            "raw_type": 1,
+            "type_name": "文本",
+            "create_time": 1794362835,
+            "sender_wxid": "wxid_owner",
+            "sender": "本人",
+            "is_sender": True,
+            "session": "wxid_customer",
+            "text": "你好",
+            "kind": "text",
+            "avatar": "avatars/owner.jpg",
+            "resources": [],
+        },
+        {
+            "local_id": 2,
+            "server_id": "server-2",
+            "shard": 1,
+            "type": 3,
+            "raw_type": 3,
+            "type_name": "图片",
+            "create_time": 1794366362,
+            "sender_wxid": "wxid_customer",
+            "sender": "客户A",
+            "is_sender": False,
+            "session": "wxid_customer",
+            "text": "[图片]",
+            "kind": "image",
+            "resources": [
+                {
+                    "kind": "image",
+                    "path": "resources/image/thumbnail.jpg",
+                    "status": "available",
+                    "role": "thumbnail",
+                }
+            ],
+            "resource_status": "missing",
+        },
+    ]
+    manifest_html = (
+        "<!doctype html><html><body><script>const manifest="
+        + json.dumps(manifest, ensure_ascii=False)
+        + ";let page=0;</script></body></html>"
+    )
+    chunk_script = "window.__wxChunk=" + json.dumps(rows, ensure_ascii=False) + ";"
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        if include_redirect_index:
+            archive.writestr(
+                "index.html",
+                '<html><title>客户A · WeKeep</title>'
+                '<meta http-equiv="refresh" content="0;url=客户A/index.html">'
+                '<script>location.replace("客户A/index.html");</script></html>',
+            )
+        archive.writestr("客户A/index.html", manifest_html)
+        archive.writestr("客户A/" + chunk_file, chunk_script)
+        archive.writestr("客户A/avatars/owner.jpg", b"avatar")
+        archive.writestr("客户A/resources/image/thumbnail.jpg", b"thumbnail")
+    return buffer.getvalue()
+
+
+def test_wekeep_zip_parses_manifest_and_message_chunks() -> None:
+    messages = list(parse_chat_export("wekeep-export.zip", _wekeep_zip()))
+
+    assert len(messages) == 2
+    assert messages[0].conversation_external_id == "wxid_customer"
+    assert messages[0].conversation_title == "客户A"
+    assert messages[0].conversation_type == "direct"
+    assert messages[0].external_message_id == "server-1"
+    assert messages[0].sender_ref == "wxid_owner"
+    assert messages[0].sender_name == "本人"
+    assert messages[0].content == "你好"
+    assert messages[0].message_type == "text"
+    assert messages[0].metadata["parser"] == "wekeep-export-v1"
+    assert messages[0].metadata["wekeep"]["is_sender"] is True
+    assert "is_target_person" not in messages[0].metadata
+
+    assert messages[1].message_type == "image"
+    assert messages[1].content == "[图片]"
+    assert messages[1].metadata["wekeep"]["resources"][0]["path"] == (
+        "resources/image/thumbnail.jpg"
+    )
+
+
+def test_wekeep_zip_resolves_chunks_relative_to_manifest_directory() -> None:
+    messages = list(
+        parse_chat_export(
+            "wekeep-export.zip",
+            _wekeep_zip(include_redirect_index=False),
+        )
+    )
+
+    assert len(messages) == 2
+    assert messages[0].source_file.endswith("客户A/c000001.js")
+
+
+def test_wekeep_manifest_rejects_chunk_path_traversal() -> None:
+    with pytest.raises(ValueError, match="unsafe_wekeep_chunk_path"):
+        list(parse_chat_export("wekeep-export.zip", _wekeep_zip(chunk_file="../escape.js")))
+
+
+def test_wekeep_html_requires_complete_zip_archive() -> None:
+    body = (
+        b'<html><title>Chat - WeKeep</title>'
+        b'<script>location.replace("chat/index.html");</script></html>'
+    )
+    with pytest.raises(ValueError, match="wekeep_archive_requires_zip"):
+        list(parse_chat_export("index.html", body))
