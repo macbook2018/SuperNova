@@ -249,7 +249,11 @@ class ChatMessage(Base):
         ),
         ForeignKeyConstraint(
             ["tenant_id", "source_id", "conversation_id"],
-            ["chat_conversations.tenant_id", "chat_conversations.source_id", "chat_conversations.id"],
+            [
+                "chat_conversations.tenant_id",
+                "chat_conversations.source_id",
+                "chat_conversations.id",
+            ],
             name="fk_chat_messages_conversation_same_tenant",
             ondelete="CASCADE",
         ),
