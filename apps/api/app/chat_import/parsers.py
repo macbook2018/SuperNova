@@ -768,3 +768,47 @@ def parse_chat_export(
         yield from _parse_html(body, filename)
     else:
         yield from _parse_text(body, filename)
+
+
+_TEXT_MESSAGE_TYPES = {
+    "text",
+    "plain",
+    "plain_text",
+    "text_message",
+    "message",
+    "1",
+    "0",
+    "文本",
+    "文字",
+    "文本消息",
+}
+_NON_TEXT_PLACEHOLDERS = {
+    "[图片]",
+    "[语音]",
+    "[视频]",
+    "[文件]",
+    "[表情]",
+    "[系统消息]",
+    "[非文本消息]",
+}
+
+
+def is_text_message(record: NormalizedChatMessage) -> bool:
+    """Return True only for explicitly recognizable text-message records."""
+    message_type = record.message_type.strip().casefold()
+    if message_type not in _TEXT_MESSAGE_TYPES:
+        return False
+    content = record.content.strip()
+    if not content or content in _NON_TEXT_PLACEHOLDERS:
+        return False
+    return True
+
+
+def parse_text_chat_export(
+    filename: str,
+    body: bytes,
+) -> Iterator[NormalizedChatMessage]:
+    """Yield text messages only; media placeholders and media metadata are discarded."""
+    for record in parse_chat_export(filename, body):
+        if is_text_message(record):
+            yield record
