@@ -126,7 +126,7 @@ def list_chat_sources(
         select(ChatSource)
         .where(
             ChatSource.tenant_id == principal.tenant.id,
-            ChatSource.status == "active",
+            ChatSource.status.in_(("active", "deleting")),
         )
         .order_by(ChatSource.created_at.desc())
     ).all()

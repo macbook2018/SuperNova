@@ -76,6 +76,12 @@ function statusClass(status: string): string {
   return 'chat-status-pending'
 }
 
+function sourceLabel(status: string): string {
+  if (status === 'active') return '可导入'
+  if (status === 'deleting') return '清理中'
+  return status
+}
+
 async function loadJobs(showError = false) {
   if (!sourceId.value || jobsLoading.value) return
   jobsLoading.value = true
@@ -353,7 +359,7 @@ onUnmounted(() => {
               <b>{{ source.name }}</b>
               <small>Source Account ID：{{ source.source_account_id }}</small>
             </div>
-            <label :class="statusClass(source.status)">{{ source.status === 'active' ? '可导入' : source.status }}</label>
+            <label :class="statusClass(source.status)">{{ sourceLabel(source.status) }}</label>
           </div>
           <div class="chat-source-overview-bottom">
             <div class="chat-identity-state">
