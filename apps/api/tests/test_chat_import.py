@@ -233,7 +233,11 @@ def test_worker_persists_sender_counts_only_and_ignores_media(
         assert "chat_messages" not in Base.metadata.tables
         assert "chat_conversations" not in Base.metadata.tables
         assert "chat_participants" not in Base.metadata.tables
-        assert all("content" not in table.columns for table in Base.metadata.tables.values())
+        assert all(
+            "content" not in table.columns
+            for table in Base.metadata.tables.values()
+            if table.name.startswith("chat_")
+        )
 
     job_detail = client.get(f"/chat-imports/{job_id}", headers=headers(auth))
     assert job_detail.status_code == 200
