@@ -76,7 +76,8 @@ async function loadPreview(showError = false) {
     targetRef.value = preview.value.target_sender_ref ?? targetRef.value
     if (preview.value.target_sender_ref) {
       const found = preview.value.participants.find(item => item.sender_ref === preview.value?.target_sender_ref)
-      if (found) targetName.value = found.sender_name
+      const currentSource = sources.value.find(item => item.id === sourceId.value)
+      if (found) targetName.value = currentSource?.target_sender_name || found.sender_name
     }
   } catch (error) { if (showError) notify(error instanceof Error ? error.message : '读取联系人预览失败') }
 }
@@ -195,9 +196,10 @@ async function confirmIdentity() {
   if (!sourceId.value || !targetRef.value) { notify('请先选择本人对应的发送者'); return }
   identityBusy.value = true
   try {
-    await request('/chat-sources/' + sourceId.value + '/confirm-identity', 'POST', {
+    const updatedSource = await request<ChatSource>('/chat-sources/' + sourceId.value + '/confirm-identity', 'POST', {
       target_sender_ref: targetRef.value, target_sender_name: targetName.value.trim() || null,
     })
+    sources.value = sources.value.map(item => item.id === updatedSource.id ? updatedSource : item)
     await Promise.all([loadJobs(true), loadPreview(true), loadMessages(true, true)])
     notify('本人身份已确认，消息身份标签已更新')
   } catch (error) { notify(error instanceof Error ? error.message : '确认本人身份失败') }
@@ -250,7 +252,7 @@ onUnmounted(() => { if (pollTimer !== undefined) window.clearInterval(pollTimer)
         <section class="panel chat-source-overview">
           <div class="panel-title"><div><b>{{ source.name }}</b><small>{{ source.export_tool || '通用聊天导出' }} · 创建于 {{ dateText(source.created_at) }}</small></div><label :class="stateClass(source.status)">{{ source.status === 'active' ? '可导入' : source.status }}</label></div>
           <div class="chat-source-overview-bottom">
-            <div class="chat-identity-state"><CheckCircle2 v-if="preview?.identity_confirmed" :size="16" /><UserRound v-else :size="16" /><span>{{ preview?.identity_confirmed ? '本人已确认：' + (source.target_sender_name || source.target_sender_ref) : '尚未确认本人身份' }}</span></div>
+            <div class="chat-identity-state"><CheckCircle2 v-if="preview?.identity_confirmed" :size="16" /><UserRound v-else :size="16" /><span>{{ preview?.identity_confirmed ? '本人已确认：' + (targetName || preview?.target_sender_ref || source.target_sender_ref) : '尚未确认本人身份' }}</span></div>
             <div class="chat-toolbar-actions">
               <button class="btn secondary small" @click="refreshAll" :disabled="loading || jobsLoading"><RefreshCw :size="14" />刷新</button>
               <button class="btn primary small" @click="pickFiles" :disabled="uploadBusy || source.status !== 'active'"><Upload :size="14" />{{ uploadBusy ? '上传中…' : '导入聊天文件' }}</button>
