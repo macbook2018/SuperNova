@@ -434,3 +434,90 @@ export async function downloadApiFile(path: string, filename: string): Promise<v
   anchor.remove()
   window.URL.revokeObjectURL(objectUrl)
 }
+
+
+export interface ChatSource {
+  id: string
+  name: string
+  export_tool: string | null
+  target_sender_ref: string | null
+  target_sender_name: string | null
+  identity_confirmed_at: string | null
+  status: string
+  created_at: string
+  updated_at: string
+}
+export interface ChatImportJob {
+  id: string
+  source_id: string
+  status: string
+  progress: number
+  total_files: number
+  processed_files: number
+  parsed_messages: number
+  imported_messages: number
+  duplicate_messages: number
+  error_count: number
+  error_summary: string | null
+  attempts: number
+  created_at: string
+  updated_at: string
+}
+export interface ChatImportAccepted {
+  job: ChatImportJob
+  accepted_files: number
+  skipped_duplicate_files: number
+}
+export interface ChatImportFile {
+  id: string
+  original_filename: string
+  extension: string
+  mime_type: string
+  file_size_bytes: number
+  sha256: string
+  status: string
+  parsed_message_count: number
+  error_code: string | null
+  error_message: string | null
+  created_at: string
+  updated_at: string
+}
+export interface ChatImportJobDetail extends ChatImportJob {
+  files: ChatImportFile[]
+}
+export interface ChatImportParticipantPreview {
+  sender_ref: string
+  sender_name: string
+  message_count: number
+  conversation_count: number
+  identity_role: string
+}
+export interface ChatConversationPreview {
+  id: string
+  external_conversation_id: string
+  title: string | null
+  conversation_type: string
+  message_count: number
+  first_message_at: string | null
+  last_message_at: string | null
+}
+export interface ChatImportPreview {
+  source_id: string
+  identity_confirmed: boolean
+  target_sender_ref: string | null
+  participants: ChatImportParticipantPreview[]
+  conversations: ChatConversationPreview[]
+}
+export interface ChatMessage {
+  id: string
+  conversation_id: string
+  sender_ref: string
+  sender_name: string
+  receiver_ref: string | null
+  receiver_name: string | null
+  content: string
+  message_type: string
+  timestamp: string
+  identity_role: string
+  metadata: Record<string, unknown>
+}

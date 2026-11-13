@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import ChatImportsView from './components/ChatImportsView.vue'
 import {
   Activity, AlertCircle, ArrowRight, Bell, Bot, Check, CheckCircle2,
   ChevronDown, ChevronRight, CircleHelp, Copy, Cpu, Database, Download, FileText,
@@ -35,7 +36,7 @@ import {
   type UsageSummary,
 } from './lib/api'
 
-type Page = 'overview' | 'personas' | 'providers' | 'knowledge' | 'knowledgeDetail' | 'api' | 'billing' | 'usage' | 'settings'
+type Page = 'overview' | 'personas' | 'providers' | 'knowledge' | 'knowledgeDetail' | 'chatImports' | 'api' | 'billing' | 'usage' | 'settings'
 type PersonaView = Persona & { color: string }
 type KnowledgeBaseView = KnowledgeBase & { color: string; docs: KnowledgeDocument[] }
 
@@ -58,6 +59,7 @@ const titles: Record<Page, string> = {
   providers: '模型供应商',
   knowledge: '知识库',
   knowledgeDetail: '知识库详情',
+  chatImports: '聊天记录',
   api: 'API 接口',
   billing: '套餐与额度',
   usage: '用量与账单',
@@ -69,6 +71,7 @@ const descriptions: Record<Page, string> = {
   providers: '集中管理模型供应商、兼容接口地址和加密保存的 API Key。',
   knowledge: '集中管理知识库资料空间，并关联到一个或多个 AI 人格。',
   knowledgeDetail: '管理文档导入、索引状态、混合检索与 RAG 来源。',
+  chatImports: '导入微信等平台的聊天记录，确认联系人身份，并浏览标准化后的会话与消息。',
   api: '使用一个用户级 API Key，通过 OpenAI 兼容接口调用多个独立人格。',
   billing: '查看当前订阅、实时额度预留、影子计价和账本记录；当前不会产生真实扣款。',
   usage: '查看真实模型调用次数、输入输出 Token、响应时间和未计量请求。',
@@ -81,6 +84,7 @@ const nav = [
       { key: 'overview' as Page, label: '工作台总览', icon: LayoutDashboard },
       { key: 'personas' as Page, label: '人格管理', icon: Bot },
       { key: 'knowledge' as Page, label: '知识库', icon: Database },
+      { key: 'chatImports' as Page, label: '聊天记录', icon: MessageSquare },
     ],
   },
   {
@@ -960,6 +964,8 @@ async function revokeKey(key: ApiKey) {
    </template>
 
 
+
+   <template v-else-if="page==='chatImports'"><ChatImportsView @notify="notify" /></template>
 
    <template v-else-if="page==='api'">
     <section class="api-notice"><ShieldCheck :size="21"/><div><b>一个用户级密钥，调用多个独立人格</b><p>OpenAI 兼容网关已开放。所有人格共用当前用户的 API Key，通过请求中的 model 字段选择人格。</p></div></section>
