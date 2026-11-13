@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import structlog
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, delete, or_, select
 
 from app.chat_import.media import extract_wekeep_media
 from app.chat_import.parsers import NormalizedChatMessage, parse_chat_export

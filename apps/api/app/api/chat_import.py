@@ -8,17 +8,20 @@ from typing import Annotated
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, File, Header, HTTPException, Query, UploadFile, status
+from fastapi.responses import Response
 from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import CurrentPrincipal, DatabaseSession
 from app.chat_import.parsers import SUPPORTED_CHAT_EXTENSIONS
 from app.core.config import get_settings
-from app.knowledge.storage import delete_object, put_object
+from app.knowledge.storage import delete_object, get_object, put_object
 from app.models.chat_import import (
     ChatConversation,
     ChatImportFile,
     ChatImportJob,
+    ChatMediaAsset,
+    ChatMediaExtractionJob,
     ChatMessage,
     ChatParticipant,
     ChatSource,
@@ -33,6 +36,9 @@ from app.schemas.chat_import import (
     ChatImportParticipantPreview,
     ChatImportPreview,
     ChatMessageRead,
+    ChatMediaAssetRead,
+    ChatMediaExtractionAccepted,
+    ChatMediaExtractionJobRead,
     ChatSourceCreate,
     ChatSourceRead,
 )
@@ -491,6 +497,196 @@ def get_chat_import_job(
     )
 
 
+
+
+@router.post(
+    "/chat-sources/{source_id}/media-extractions",
+    response_model=ChatMediaExtractionAccepted,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def enqueue_chat_media_extraction(
+    source_id: UUID,
+    principal: CurrentPrincipal,
+    db: DatabaseSession,
+) -> ChatMediaExtractionAccepted:
+    source = _get_source(db, principal.tenant.id, source_id)
+    if source.status != "active":
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "chat_source_not_active",
+                "message": "该聊天记录数据集当前不可提取媒体资源",
+            },
+        )
+
+    files = db.scalars(
+        select(ChatImportFile).where(
+            ChatImportFile.tenant_id == principal.tenant.id,
+            ChatImportFile.source_id == source.id,
+            ChatImportFile.extension == ".zip",
+            ChatImportFile.status == "parsed",
+        )
+    ).all()
+    jobs: list[ChatMediaExtractionJob] = []
+    accepted = 0
+    reused = 0
+    for file_record in files:
+        parser_markers = db.scalars(
+            select(ChatMessage.metadata_json).where(
+                ChatMessage.tenant_id == principal.tenant.id,
+                ChatMessage.source_id == source.id,
+                ChatMessage.import_file_id == file_record.id,
+            )
+        ).all()
+        if not any(
+            isinstance(metadata, dict)
+            and metadata.get("parser") == "wekeep-export-v1"
+            for metadata in parser_markers
+        ):
+            continue
+
+        existing = db.scalar(
+            select(ChatMediaExtractionJob).where(
+                ChatMediaExtractionJob.tenant_id == principal.tenant.id,
+                ChatMediaExtractionJob.source_id == source.id,
+                ChatMediaExtractionJob.import_file_id == file_record.id,
+            )
+        )
+        if existing is None:
+            existing = ChatMediaExtractionJob(
+                id=uuid4(),
+                tenant_id=principal.tenant.id,
+                source_id=source.id,
+                import_file_id=file_record.id,
+                status="queued",
+                progress=0,
+                max_attempts=5,
+            )
+            db.add(existing)
+            accepted += 1
+        elif existing.status in {"failed", "cancelled"}:
+            existing.status = "queued"
+            existing.progress = 0
+            existing.total_assets = 0
+            existing.extracted_assets = 0
+            existing.missing_assets = 0
+            existing.error_count = 0
+            existing.error_summary = None
+            existing.attempts = 0
+            existing.worker_id = None
+            existing.locked_at = None
+            existing.lease_expires_at = None
+            accepted += 1
+        else:
+            reused += 1
+        jobs.append(existing)
+
+    if not jobs:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "chat_media_extraction_unavailable",
+                "message": "当前数据源没有已解析的 WeKeep ZIP 文件",
+            },
+        )
+    db.commit()
+    for job in jobs:
+        db.refresh(job)
+    return ChatMediaExtractionAccepted(
+        jobs=[
+            ChatMediaExtractionJobRead.model_validate(job, from_attributes=True)
+            for job in jobs
+        ],
+        accepted_files=accepted,
+        reused_jobs=reused,
+    )
+
+
+@router.get(
+    "/chat-sources/{source_id}/media-extractions",
+    response_model=list[ChatMediaExtractionJobRead],
+)
+def list_chat_media_extraction_jobs(
+    source_id: UUID,
+    principal: CurrentPrincipal,
+    db: DatabaseSession,
+) -> list[ChatMediaExtractionJobRead]:
+    source = _get_source(db, principal.tenant.id, source_id)
+    jobs = db.scalars(
+        select(ChatMediaExtractionJob)
+        .where(
+            ChatMediaExtractionJob.tenant_id == principal.tenant.id,
+            ChatMediaExtractionJob.source_id == source.id,
+        )
+        .order_by(ChatMediaExtractionJob.created_at.desc())
+    ).all()
+    return [
+        ChatMediaExtractionJobRead.model_validate(job, from_attributes=True)
+        for job in jobs
+    ]
+
+
+@router.get("/chat-media-assets/{asset_id}/content")
+def get_chat_media_asset_content(
+    asset_id: UUID,
+    principal: CurrentPrincipal,
+    db: DatabaseSession,
+) -> Response:
+    asset = db.scalar(
+        select(ChatMediaAsset).where(
+            ChatMediaAsset.id == asset_id,
+            ChatMediaAsset.tenant_id == principal.tenant.id,
+        )
+    )
+    if asset is None or asset.status != "available" or not asset.object_key:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "chat_media_asset_not_found",
+                "message": "媒体资源不存在或当前不可用",
+            },
+        )
+    try:
+        body = get_object(
+            asset.object_key,
+            max_bytes=get_settings().chat_media_max_asset_bytes,
+        )
+    except ValueError:
+        raise HTTPException(
+            status_code=413,
+            detail={
+                "code": "chat_media_asset_too_large",
+                "message": "媒体资源超过读取限制",
+            },
+        ) from None
+    except Exception:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "chat_media_storage_unavailable",
+                "message": "媒体资源暂时无法读取",
+            },
+        ) from None
+
+    filename = PurePosixPath(asset.original_name or "attachment").name
+    inline = bool(asset.mime_type and (
+        asset.mime_type.startswith("image/")
+        or asset.mime_type.startswith("audio/")
+        or asset.mime_type.startswith("video/")
+    ))
+    disposition = "inline" if inline else "attachment"
+    safe_filename = filename.replace('"', "")
+    return Response(
+        content=body,
+        media_type=asset.mime_type or "application/octet-stream",
+        headers={
+            "Content-Disposition": f'{disposition}; filename="{safe_filename}"',
+            "Cache-Control": "private, max-age=300",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
 @router.get(
     "/chat-sources/{source_id}/messages",
     response_model=list[ChatMessageRead],
@@ -529,6 +725,37 @@ def list_chat_messages(
         .limit(limit)
         .offset(offset)
     ).all()
+    message_ids = [item.id for item in messages]
+    assets_by_message: dict[UUID, list[ChatMediaAssetRead]] = {}
+    if message_ids:
+        assets = db.scalars(
+            select(ChatMediaAsset)
+            .where(
+                ChatMediaAsset.tenant_id == principal.tenant.id,
+                ChatMediaAsset.source_id == source.id,
+                ChatMediaAsset.message_id.in_(message_ids),
+            )
+            .order_by(ChatMediaAsset.created_at, ChatMediaAsset.id)
+        ).all()
+        for asset in assets:
+            assets_by_message.setdefault(asset.message_id, []).append(
+                ChatMediaAssetRead(
+                    id=asset.id,
+                    asset_type=asset.asset_type,
+                    role=asset.role,
+                    status=asset.status,
+                    original_name=asset.original_name,
+                    mime_type=asset.mime_type,
+                    file_size_bytes=asset.file_size_bytes,
+                    width=asset.width,
+                    height=asset.height,
+                    content_url=(
+                        f"/chat-media-assets/{asset.id}/content"
+                        if asset.status == "available" and asset.object_key
+                        else None
+                    ),
+                )
+            )
     return [
         ChatMessageRead(
             id=item.id,
@@ -542,6 +769,7 @@ def list_chat_messages(
             timestamp=item.timestamp,
             identity_role=item.identity_role,
             metadata=item.metadata_json,
+            media_assets=assets_by_message.get(item.id, []),
         )
         for item in messages
     ]
@@ -580,6 +808,29 @@ def preview_chat_source(
         if item["sender_name"] != participant.sender_name:
             item["sender_name"] = participant.sender_name
 
+    participant_ids = [item.id for item in participant_rows]
+    avatar_by_participant: dict[UUID, UUID] = {}
+    if participant_ids:
+        avatar_assets = db.scalars(
+            select(ChatMediaAsset)
+            .where(
+                ChatMediaAsset.tenant_id == principal.tenant.id,
+                ChatMediaAsset.source_id == source.id,
+                ChatMediaAsset.participant_id.in_(participant_ids),
+                ChatMediaAsset.asset_type == "avatar",
+                ChatMediaAsset.status == "available",
+            )
+            .order_by(ChatMediaAsset.created_at, ChatMediaAsset.id)
+        ).all()
+        for asset in avatar_assets:
+            avatar_by_participant.setdefault(asset.participant_id, asset.id)
+
+    avatar_by_sender: dict[str, UUID] = {}
+    for participant in participant_rows:
+        avatar_id = avatar_by_participant.get(participant.id)
+        if avatar_id is not None:
+            avatar_by_sender.setdefault(participant.sender_ref, avatar_id)
+
     participants = [
         ChatImportParticipantPreview(
             sender_ref=item["sender_ref"],
@@ -587,6 +838,7 @@ def preview_chat_source(
             message_count=item["message_count"],
             conversation_count=len(item["conversations"]),
             identity_role=item["identity_role"],
+            avatar_asset_id=avatar_by_sender.get(item["sender_ref"]),
         )
         for item in sorted(
             grouped.values(), key=lambda value: value["message_count"], reverse=True
@@ -706,8 +958,15 @@ def delete_chat_source(
             ChatImportFile.source_id == source.id,
         )
     ).all()
+    media_object_keys = db.scalars(
+        select(ChatMediaAsset.object_key).where(
+            ChatMediaAsset.tenant_id == principal.tenant.id,
+            ChatMediaAsset.source_id == source.id,
+            ChatMediaAsset.object_key.is_not(None),
+        )
+    ).all()
     try:
-        for object_key in object_keys:
+        for object_key in [*object_keys, *media_object_keys]:
             delete_object(object_key)
     except Exception:
         raise HTTPException(
@@ -718,6 +977,18 @@ def delete_chat_source(
             },
         ) from None
 
+    db.execute(
+        delete(ChatMediaExtractionJob).where(
+            ChatMediaExtractionJob.tenant_id == principal.tenant.id,
+            ChatMediaExtractionJob.source_id == source.id,
+        )
+    )
+    db.execute(
+        delete(ChatMediaAsset).where(
+            ChatMediaAsset.tenant_id == principal.tenant.id,
+            ChatMediaAsset.source_id == source.id,
+        )
+    )
     db.execute(
         delete(ChatMessage).where(
             ChatMessage.tenant_id == principal.tenant.id,
