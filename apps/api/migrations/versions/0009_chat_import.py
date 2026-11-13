@@ -25,8 +25,12 @@ def upgrade() -> None:
         sa.Column("target_sender_name", sa.String(length=160), nullable=True),
         sa.Column("identity_confirmed_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("status", sa.String(length=16), nullable=False, server_default="active"),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
         sa.CheckConstraint(
             "status IN ('active', 'deleting', 'deleted')",
             name="ck_chat_sources_status",
@@ -61,10 +65,15 @@ def upgrade() -> None:
         sa.Column("worker_id", sa.String(length=120), nullable=True),
         sa.Column("attempts", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("max_attempts", sa.Integer(), nullable=False, server_default="5"),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
         sa.CheckConstraint(
-            "status IN ('queued', 'processing', 'awaiting_identity', 'succeeded', 'failed', 'cancelled')",
+            "status IN ('queued', 'processing', 'awaiting_identity', "
+            "'succeeded', 'failed', 'cancelled')",
             name="ck_chat_import_jobs_status",
         ),
         sa.CheckConstraint("progress BETWEEN 0 AND 100", name="ck_chat_import_jobs_progress"),
@@ -106,8 +115,12 @@ def upgrade() -> None:
         sa.Column("error_code", sa.String(length=80), nullable=True),
         sa.Column("error_message", sa.String(length=500), nullable=True),
         sa.Column("metadata_json", sa.JSON(), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
         sa.CheckConstraint(
             "status IN ('uploaded', 'processing', 'parsed', 'failed', 'deleted')",
             name="ck_chat_import_files_status",
@@ -150,12 +163,18 @@ def upgrade() -> None:
         sa.Column("source_id", sa.Uuid(as_uuid=True), nullable=False),
         sa.Column("external_conversation_id", sa.String(length=255), nullable=False),
         sa.Column("title", sa.String(length=255), nullable=True),
-        sa.Column("conversation_type", sa.String(length=16), nullable=False, server_default="unknown"),
+        sa.Column(
+            "conversation_type", sa.String(length=16), nullable=False, server_default="unknown"
+        ),
         sa.Column("first_message_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("last_message_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("message_count", sa.BigInteger(), nullable=False, server_default="0"),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
         sa.CheckConstraint(
             "conversation_type IN ('direct', 'group', 'unknown')",
             name="ck_chat_conversations_type",
@@ -193,15 +212,23 @@ def upgrade() -> None:
         sa.Column("sender_name", sa.String(length=160), nullable=False),
         sa.Column("identity_role", sa.String(length=16), nullable=False, server_default="unknown"),
         sa.Column("message_count", sa.BigInteger(), nullable=False, server_default="0"),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
         sa.CheckConstraint(
             "identity_role IN ('unknown', 'target', 'other')",
             name="ck_chat_participants_identity_role",
         ),
         sa.ForeignKeyConstraint(
             ["tenant_id", "source_id", "conversation_id"],
-            ["chat_conversations.tenant_id", "chat_conversations.source_id", "chat_conversations.id"],
+            [
+                "chat_conversations.tenant_id",
+                "chat_conversations.source_id",
+                "chat_conversations.id",
+            ],
             name="fk_chat_participants_conversation_same_tenant",
             ondelete="CASCADE",
         ),
@@ -236,14 +263,20 @@ def upgrade() -> None:
         sa.Column("timestamp", sa.DateTime(timezone=True), nullable=False),
         sa.Column("identity_role", sa.String(length=16), nullable=False, server_default="unknown"),
         sa.Column("metadata_json", sa.JSON(), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
         sa.CheckConstraint(
             "identity_role IN ('unknown', 'target', 'other')",
             name="ck_chat_messages_identity_role",
         ),
         sa.ForeignKeyConstraint(
             ["tenant_id", "source_id", "conversation_id"],
-            ["chat_conversations.tenant_id", "chat_conversations.source_id", "chat_conversations.id"],
+            [
+                "chat_conversations.tenant_id",
+                "chat_conversations.source_id",
+                "chat_conversations.id",
+            ],
             name="fk_chat_messages_conversation_same_tenant",
             ondelete="CASCADE",
         ),
