@@ -102,6 +102,10 @@ class ChatImportFile(Base):
     __table_args__ = (
         UniqueConstraint("tenant_id", "id", name="uq_chat_import_files_tenant_id"),
         UniqueConstraint(
+            "tenant_id", "source_id", "id",
+            name="uq_chat_import_files_tenant_source_id",
+        ),
+        UniqueConstraint(
             "tenant_id", "source_id", "sha256",
             name="uq_chat_import_files_source_sha256",
         ),
@@ -152,6 +156,10 @@ class ChatConversation(Base):
     __tablename__ = "chat_conversations"
     __table_args__ = (
         UniqueConstraint("tenant_id", "id", name="uq_chat_conversations_tenant_id"),
+        UniqueConstraint(
+            "tenant_id", "source_id", "id",
+            name="uq_chat_conversations_tenant_source_id",
+        ),
         UniqueConstraint(
             "tenant_id", "source_id", "external_conversation_id",
             name="uq_chat_conversations_external_id",
