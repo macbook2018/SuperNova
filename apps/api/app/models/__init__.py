@@ -16,7 +16,7 @@ from app.models.billing import (
     TenantSubscription,
 )
 from app.models.catalog import KnowledgeBase, ModelProvider, Persona, PersonaKnowledgeBase
-from app.models.identity import ApiKey, RefreshSession, Tenant, TenantMembership, User
+from app.models.chat_import import (\n    ChatConversation,\n    ChatImportFile,\n    ChatImportJob,\n    ChatMessage,\n    ChatParticipant,\n    ChatSource,\n)\nfrom app.models.identity import ApiKey, RefreshSession, Tenant, TenantMembership, User
 from app.models.knowledge import (
     KnowledgeChunk,
     KnowledgeDocument,
@@ -39,6 +39,12 @@ __all__ = [
     "BillingReservation",
     "BillingReservationItem",
     "BillingUsageEvent",
+    "ChatConversation",
+    "ChatImportFile",
+    "ChatImportJob",
+    "ChatMessage",
+    "ChatParticipant",
+    "ChatSource",
     "KnowledgeBase",
     "KnowledgeChunk",
     "KnowledgeDocument",
