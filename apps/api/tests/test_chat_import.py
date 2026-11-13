@@ -1,10 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Generator
-from uuid import uuid4
-
 import pytest
-from app.api.chat_import import router as chat_import_router
 from app.chat_import import worker
 from app.db.base import Base
 from app.db.session import get_db
