@@ -79,6 +79,7 @@ def _sample_chat_export_body() -> bytes:
         ']}'
     ).encode("utf-8")
 
+
 def create_source(client: TestClient, auth: dict) -> dict:
     response = client.post(
         "/chat-sources",
