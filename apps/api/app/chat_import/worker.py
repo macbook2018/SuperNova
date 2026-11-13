@@ -97,15 +97,31 @@ def _persist_batch(
             raise ValueError("chat_source_not_available")
 
         fingerprints = {_message_fingerprint(record) for record in records}
-        existing = set(
-            db.scalars(
-                select(ChatMessage.fingerprint).where(
-                    ChatMessage.tenant_id == tenant_id,
-                    ChatMessage.source_id == source_id,
-                    ChatMessage.fingerprint.in_(fingerprints),
-                )
-            ).all()
-        )
+        existing_messages = db.scalars(
+            select(ChatMessage).where(
+                ChatMessage.tenant_id == tenant_id,
+                ChatMessage.source_id == source_id,
+                ChatMessage.fingerprint.in_(fingerprints),
+            )
+        ).all()
+        existing_by_fingerprint = {
+            item.fingerprint: item for item in existing_messages
+        }
+        existing = set(existing_by_fingerprint)
+        file_record = db.get(ChatImportFile, import_file_id)
+        if file_record is not None and any(
+            record.metadata.get("parser") == "wekeep-export-v1"
+            for record in records
+        ):
+            file_metadata = (
+                file_record.metadata_json
+                if isinstance(file_record.metadata_json, dict)
+                else {}
+            )
+            file_record.metadata_json = {
+                **file_metadata,
+                "parser": "wekeep-export-v1",
+            }
         conversation_cache: dict[str, ChatConversation] = {}
         participant_cache: dict[tuple[UUID, str], ChatParticipant] = {}
 
@@ -113,6 +129,22 @@ def _persist_batch(
             fingerprint = _message_fingerprint(record)
             if fingerprint in existing:
                 duplicates += 1
+                existing_message = existing_by_fingerprint.get(fingerprint)
+                if (
+                    existing_message is not None
+                    and record.metadata.get("parser") == "wekeep-export-v1"
+                ):
+                    existing_metadata = (
+                        existing_message.metadata_json
+                        if isinstance(existing_message.metadata_json, dict)
+                        else {}
+                    )
+                    existing_message.metadata_json = {
+                        **existing_metadata,
+                        **record.metadata,
+                        "source_file": record.source_file,
+                        "media_import_file_id": str(import_file_id),
+                    }
                 continue
             existing.add(fingerprint)
 
@@ -201,29 +233,32 @@ def _persist_batch(
                     else "other"
                 )
             )
-            db.add(
-                ChatMessage(
-                    id=uuid4(),
-                    tenant_id=tenant_id,
-                    source_id=source_id,
-                    conversation_id=conversation.id,
-                    import_file_id=import_file_id,
-                    external_message_id=record.external_message_id,
-                    fingerprint=fingerprint,
-                    sender_ref=record.sender_ref,
-                    sender_name=record.sender_name,
-                    receiver_ref=record.receiver_ref,
-                    receiver_name=record.receiver_name,
-                    content=record.content,
-                    message_type=record.message_type,
-                    timestamp=record.timestamp,
-                    identity_role=identity_role,
-                    metadata_json={
-                        **record.metadata,
-                        "source_file": record.source_file,
-                    },
-                )
+            message_metadata = {
+                **record.metadata,
+                "source_file": record.source_file,
+            }
+            if record.metadata.get("parser") == "wekeep-export-v1":
+                message_metadata["media_import_file_id"] = str(import_file_id)
+            message = ChatMessage(
+                id=uuid4(),
+                tenant_id=tenant_id,
+                source_id=source_id,
+                conversation_id=conversation.id,
+                import_file_id=import_file_id,
+                external_message_id=record.external_message_id,
+                fingerprint=fingerprint,
+                sender_ref=record.sender_ref,
+                sender_name=record.sender_name,
+                receiver_ref=record.receiver_ref,
+                receiver_name=record.receiver_name,
+                content=record.content,
+                message_type=record.message_type,
+                timestamp=record.timestamp,
+                identity_role=identity_role,
+                metadata_json=message_metadata,
             )
+            db.add(message)
+            existing_by_fingerprint[fingerprint] = message
             imported += 1
         job.parsed_messages += len(records)
         job.imported_messages += imported
@@ -533,6 +568,7 @@ def process_chat_media_extraction_job(job_id: UUID) -> None:
                 archive_body,
                 messages,
                 participants,
+                import_file_id=import_file_id,
                 max_asset_bytes=settings.chat_media_max_asset_bytes,
                 max_total_bytes=settings.chat_media_max_total_bytes,
             )

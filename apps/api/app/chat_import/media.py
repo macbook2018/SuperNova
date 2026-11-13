@@ -182,6 +182,7 @@ def extract_wekeep_media(
     messages: Iterable[ChatMessage],
     participants: list[ChatParticipant],
     *,
+    import_file_id: UUID,
     max_asset_bytes: int,
     max_total_bytes: int,
 ) -> list[ExtractedChatMedia]:
@@ -213,6 +214,11 @@ def extract_wekeep_media(
         for message in messages:
             metadata = message.metadata_json if isinstance(message.metadata_json, dict) else {}
             if metadata.get("parser") != "wekeep-export-v1":
+                continue
+            media_file_ref = metadata.get("media_import_file_id") or str(
+                message.import_file_id
+            )
+            if media_file_ref != str(import_file_id):
                 continue
             wekeep = metadata.get("wekeep")
             if not isinstance(wekeep, dict):

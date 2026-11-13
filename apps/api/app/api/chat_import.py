@@ -531,19 +531,27 @@ def enqueue_chat_media_extraction(
     accepted = 0
     reused = 0
     for file_record in files:
-        parser_marker = db.scalar(
-            select(ChatMessage.metadata_json)
-            .where(
-                ChatMessage.tenant_id == principal.tenant.id,
-                ChatMessage.source_id == source.id,
-                ChatMessage.import_file_id == file_record.id,
-            )
-            .limit(1)
+        file_metadata = (
+            file_record.metadata_json
+            if isinstance(file_record.metadata_json, dict)
+            else {}
         )
-        if (
-            not isinstance(parser_marker, dict)
-            or parser_marker.get("parser") != "wekeep-export-v1"
-        ):
+        is_wekeep = file_metadata.get("parser") == "wekeep-export-v1"
+        if not is_wekeep:
+            parser_marker = db.scalar(
+                select(ChatMessage.metadata_json)
+                .where(
+                    ChatMessage.tenant_id == principal.tenant.id,
+                    ChatMessage.source_id == source.id,
+                    ChatMessage.import_file_id == file_record.id,
+                )
+                .limit(1)
+            )
+            is_wekeep = (
+                isinstance(parser_marker, dict)
+                and parser_marker.get("parser") == "wekeep-export-v1"
+            )
+        if not is_wekeep:
             continue
 
         existing = db.scalar(
