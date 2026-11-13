@@ -102,6 +102,27 @@ def list_chat_sources(
     return [_source_read(source) for source in sources]
 
 
+@router.get(
+    "/chat-sources/{source_id}/imports",
+    response_model=list[ChatImportJobRead],
+)
+def list_chat_import_jobs(
+    source_id: UUID,
+    principal: CurrentPrincipal,
+    db: DatabaseSession,
+) -> list[ChatImportJobRead]:
+    source = _get_source(db, principal.tenant.id, source_id)
+    jobs = db.scalars(
+        select(ChatImportJob)
+        .where(
+            ChatImportJob.tenant_id == principal.tenant.id,
+            ChatImportJob.source_id == source.id,
+        )
+        .order_by(ChatImportJob.created_at.desc())
+    ).all()
+    return [_job_read(job) for job in jobs]
+
+
 @router.post(
     "/chat-sources/{source_id}/imports",
     response_model=ChatImportAccepted,
