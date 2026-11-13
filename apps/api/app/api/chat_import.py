@@ -290,9 +290,12 @@ def upload_chat_import(
         total_files=len(pending),
         max_attempts=5,
     )
-    db.add(job)
     uploaded_keys: list[str] = []
     try:
+        # Persist the parent job before its files; these models intentionally
+        # use explicit foreign keys without ORM relationships.
+        db.add(job)
+        db.flush()
         for item in pending:
             file_id = uuid4()
             object_key = (
