@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Generator
+
 import pytest
 from app.chat_import import worker
 from app.db.base import Base
