@@ -54,3 +54,31 @@ All child rows include `tenant_id` and use composite foreign keys to enforce sam
 ## Known boundary
 
 A generic parser can support common export schemas, but it cannot guarantee correct parsing of an unspecified third-party export. Before production compatibility claims, obtain a sanitized sample from the actual export tool and add a fixture-based adapter test.
+
+## Implementation snapshot (Phase 6.1 backend foundation)
+
+The current branch now includes:
+- Generic parser adapters for JSON, CSV, TXT, HTML, XLSX and ZIP, with common English/Chinese field aliases.
+- Tenant-scoped source, job, file, conversation, participant and message ORM models.
+- Alembic revision `0009_chat_import`, chained after `0008_phase_6_knowledge`.
+- Authenticated APIs:
+  - `POST/GET /chat-sources`
+  - `POST/GET /chat-sources/{source_id}/imports`
+  - `GET /chat-imports/{job_id}`
+  - `POST /chat-imports/{job_id}/retry`
+  - `POST /chat-imports/{job_id}/cancel`
+  - `GET /chat-sources/{source_id}/preview`
+  - `GET /chat-sources/{source_id}/messages`
+  - `POST /chat-sources/{source_id}/confirm-identity`
+  - `DELETE /chat-sources/{source_id}`
+- A dedicated `chat-import-worker` Compose service. It uses PostgreSQL job claiming with `SKIP LOCKED`, lease expiry, bounded message batches, source-level serialization, atomic message/counter commits, retry-safe fingerprints and cooperative cancellation.
+- ZIP and XLSX expansion limits, per-file and aggregate upload limits, private S3-compatible raw-file storage, tenant-scoped APIs and source-level deletion.
+- Parser and API/worker tests in `test_chat_import_parsers.py` and `test_chat_import.py`.
+
+### Current limits and acceptance gates
+
+1. The adapters are generic and have not yet been certified against a named WeChat exporter. A sanitized real export fixture is still required to verify exact field mappings, sender IDs, group IDs, timestamp formats and multi-message structure.
+2. JSON is decoded as a bounded file in memory; records are yielded and persisted in batches. The upload size is currently bounded by `SUPERNOVA_CHAT_IMPORT_MAX_FILE_BYTES` and aggregate request size by `SUPERNOVA_CHAT_IMPORT_MAX_BATCH_BYTES`.
+3. The first implementation stores raw and normalized chat data and supports explicit identity confirmation. It does not run Persona analysis or FAQ extraction yet.
+4. PII redaction before any future model call, retention policy controls and derived-data deletion propagation must be completed before Persona/FAQ model analysis is enabled.
+5. The Console UI is not part of this backend increment. The API contract should be locally tested before adding the management screens.
