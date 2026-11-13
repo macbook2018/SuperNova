@@ -71,7 +71,11 @@ def _persist_batch(
     with SessionLocal() as db:
         job = db.scalar(
             select(ChatImportJob)
-            .where(ChatImportJob.id == job_id)
+            .where(
+                ChatImportJob.id == job_id,
+                ChatImportJob.tenant_id == tenant_id,
+                ChatImportJob.source_id == source_id,
+            )
             .with_for_update()
         )
         if job is None or job.status != "processing":
