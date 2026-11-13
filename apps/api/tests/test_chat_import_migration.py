@@ -259,14 +259,14 @@ def _create_legacy_schema(connection) -> tuple:
         ),
         {"id": message_id, "conversation_id": conversation_id, "file_id": file_id},
     )
-    return tenant_id, source_id, job_id, file_id, created_at
+    return tenant_id, source_id, job_id, file_id
 
 
 def test_0010_upgrades_legacy_0009_schema_without_losing_import_metadata(
     postgres_schema,
 ) -> None:
     connection = postgres_schema
-    tenant_id, source_id, job_id, file_id, _created_at = _create_legacy_schema(connection)
+    tenant_id, source_id, job_id, file_id = _create_legacy_schema(connection)
 
     migration = _load_migration("0010_chat_import_text_only.py")
     _run_migration(connection, migration)
