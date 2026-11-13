@@ -393,7 +393,7 @@ def process_chat_import_job(job_id: UUID) -> None:
             error_code = str(exc)[:80]
             if error_code == "wekeep_archive_requires_zip":
                 error_message = "检测到 WeKeep 离线归档，请上传包含完整文件夹的 ZIP 压缩包"
-            elif error_code.startswith("wekeep_") or error_code == "invalid_wekeep_manifest":
+            elif "wekeep" in error_code:
                 error_message = "WeKeep 导出包结构不完整或消息分片损坏，请重新导出完整 ZIP"
             else:
                 error_message = "文件格式不受支持或内容无法解析"
