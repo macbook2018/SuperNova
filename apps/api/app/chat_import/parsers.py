@@ -194,10 +194,17 @@ def _normalize_row(
     receiver_id = _string(_first(merged, "receiver_id"))
     receiver_name = _string(_first(merged, "receiver_name"))
     external_message_id = _string(_first(merged, "message_id"))
+    unresolved_conversation = conversation_id is None and conversation_title is None
     return NormalizedChatMessage(
-        conversation_external_id=conversation_id or conversation_title or "default",
+        conversation_external_id=(
+            conversation_id
+            or conversation_title
+            or f"unresolved:{source_file}"
+        ),
         conversation_title=conversation_title,
-        conversation_type=_conversation_type(_first(merged, "conversation_type"), conversation_title),
+        conversation_type=_conversation_type(
+            _first(merged, "conversation_type"), conversation_title
+        ),
         external_message_id=external_message_id,
         sender_ref=sender_ref,
         sender_name=sender_name,
@@ -213,6 +220,7 @@ def _normalize_row(
             "raw_timestamp": _string(raw_timestamp),
             "timestamp_assumed_utc": assumed_utc,
             "source_row": source_row,
+            "conversation_identity_missing": unresolved_conversation,
         },
     )
 
@@ -231,7 +239,10 @@ def _json_rows(payload: Any) -> Iterator[tuple[Mapping[str, Any], Mapping[str, A
         if isinstance(items, list):
             inherited = {
                 k: payload[k]
-                for k in ("conversation_id", "chat_id", "session_id", "conversation_title", "chat_name", "conversation_type")
+                for k in (
+                    "conversation_id", "chat_id", "session_id", "conversation_title",
+                    "chat_name", "conversation_type",
+                )
                 if k in payload
             }
             for item in items:
@@ -267,7 +278,12 @@ def _parse_json(body: bytes, source_file: str) -> Iterator[NormalizedChatMessage
     for row_index, (row, inherited) in enumerate(_json_rows(payload), start=1):
         if row_index > MAX_RECORDS_PER_FILE:
             raise ValueError("chat_record_limit_exceeded")
-        yield _normalize_row(row, source_file=source_file, source_row=row_index, inherited=inherited)
+        yield _normalize_row(
+            row,
+            source_file=source_file,
+            source_row=row_index,
+            inherited=inherited,
+        )
 
 
 def _parse_csv(body: bytes, source_file: str) -> Iterator[NormalizedChatMessage]:
@@ -302,7 +318,11 @@ def _parse_xlsx(body: bytes, source_file: str) -> Iterator[NormalizedChatMessage
                 total += 1
                 if total > MAX_RECORDS_PER_FILE:
                     raise ValueError("chat_record_limit_exceeded")
-                row = {str(key or ""): value for key, value in zip(headers, values, strict=False) if key}
+                row = {
+                    str(key or ""): value
+                    for key, value in zip(headers, values, strict=False)
+                    if key
+                }
                 if not any(value not in (None, "") for value in row.values()):
                     continue
                 record = _normalize_row(row, source_file=source_file, source_row=row_index)
@@ -417,7 +437,10 @@ def parse_chat_export(
                         raise ValueError("zip_expansion_limit_exceeded")
                     if item.file_size and item.compress_size == 0:
                         raise ValueError("invalid_zip_compression_ratio")
-                    if item.compress_size and item.file_size / item.compress_size > MAX_ZIP_COMPRESSION_RATIO:
+                    if (
+                        item.compress_size
+                        and item.file_size / item.compress_size > MAX_ZIP_COMPRESSION_RATIO
+                    )
                         raise ValueError("zip_compression_ratio_limit_exceeded")
                 found = False
                 for item in members:
