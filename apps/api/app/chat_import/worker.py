@@ -239,6 +239,22 @@ def _update_job(
         db.commit()
 
 
+def _job_cancelled(job_id: UUID) -> bool:
+    with SessionLocal() as db:
+        status = db.scalar(
+            select(ChatImportJob.status).where(ChatImportJob.id == job_id)
+        )
+    return status == "cancelled"
+
+
+def _release_file_for_cancel(file_id: UUID) -> None:
+    with SessionLocal() as db:
+        file_record = db.get(ChatImportFile, file_id)
+        if file_record is not None and file_record.status == "processing":
+            file_record.status = "uploaded"
+            db.commit()
+
+
 def process_chat_import_job(job_id: UUID) -> None:
     with SessionLocal() as db:
         job = db.get(ChatImportJob, job_id)
@@ -286,6 +302,8 @@ def process_chat_import_job(job_id: UUID) -> None:
     completed = 0
     failed_files = 0
     for file_record in files:
+        if _job_cancelled(job_id):
+            return
         file_id = file_record.id
         object_key = file_record.object_key
         filename = file_record.original_filename
@@ -305,6 +323,9 @@ def process_chat_import_job(job_id: UUID) -> None:
             body = get_object(object_key, max_bytes=settings.chat_import_max_file_bytes)
             batch: list[NormalizedChatMessage] = []
             for record in parse_chat_export(filename, body):
+                if _job_cancelled(job_id):
+                    _release_file_for_cancel(file_id)
+                    return
                 batch.append(record)
                 if len(batch) >= settings.chat_import_batch_size:
                     imported, duplicates = _persist_batch(
@@ -368,7 +389,7 @@ def process_chat_import_job(job_id: UUID) -> None:
     with SessionLocal() as db:
         job = db.get(ChatImportJob, job_id)
         source = db.get(ChatSource, source_id)
-        if job is None:
+        if job is None or job.status == "cancelled":
             return
         job.progress = 100
         job.worker_id = None
