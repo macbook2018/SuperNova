@@ -209,7 +209,18 @@ jobs:
           ssh -p "$STAGING_SSH_PORT" "$STAGING_USER@$STAGING_HOST" \
             "chmod 700 '$STAGING_DEPLOY_PATH/'*.sh"
 
+      - name: Check server bootstrap state
+        id: bootstrap
+        run: |
+          if ssh -p "$STAGING_SSH_PORT" "$STAGING_USER@$STAGING_HOST" \
+            "test -s '$STAGING_DEPLOY_PATH/.env'"; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Deploy immutable image tag
+        if: steps.bootstrap.outputs.ready == 'true'
         run: |
           DOCKER_CONFIG_DIR="/tmp/supernova-ghcr-${{ github.run_id }}"
           printf '%s' "$STAGING_GHCR_READ_TOKEN" | ssh -p "$STAGING_SSH_PORT" \
@@ -227,4 +238,15 @@ jobs:
              docker logout ghcr.io >/dev/null 2>&1 || true
              rm -rf \"\$DOCKER_CONFIG\"
              exit \"\$result\""
+
+      - name: Report first-time server bootstrap
+        if: steps.bootstrap.outputs.ready != 'true'
+        run: |
+          echo "Deployment files and images were prepared, but the server .env is not initialized yet."
+          echo "SSH to the server, create the MinIO bucket-only account, then run:"
+          echo "cd '$STAGING_DEPLOY_PATH' && ./bootstrap-staging.sh"
+          {
+            echo "## Server bootstrap required"
+            echo "Deployment files were uploaded. Initialize the server-only .env and MinIO bucket credentials, then run this workflow again."
+          } >> "$GITHUB_STEP_SUMMARY"
 

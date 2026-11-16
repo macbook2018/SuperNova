@@ -95,6 +95,16 @@ if ! wait_for_service_health console; then
   echo "Database backup retained at: ${BACKUP_FILE}"
   exit 1
 fi
+if ! wait_for_service_health knowledge-worker; then
+  echo "Knowledge Worker failed its health check."
+  echo "Database backup retained at: ${BACKUP_FILE}"
+  exit 1
+fi
+if ! wait_for_service_health chat-import-worker; then
+  echo "Chat Import Worker failed its health check."
+  echo "Database backup retained at: ${BACKUP_FILE}"
+  exit 1
+fi
 
 wait_for_url "http://127.0.0.1:18082/health/ready" "API"
 wait_for_url "http://127.0.0.1:18083/healthz" "Console"

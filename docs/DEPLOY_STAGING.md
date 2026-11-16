@@ -60,7 +60,7 @@ and set owner supernova-deploy:supernova-deploy, mode 600. The private key goes 
 
 The deployment account must be able to run Docker commands and write to /opt/supernova-staging.
 
-After the deployment workflow has uploaded the scripts, run:
+On the first deployment workflow run, the workflow publishes the images and uploads the scripts, then reports that bootstrap is required if .env is absent. After the MinIO bucket/user and DNS/domain decisions are ready, run:
 
 ~~~bash
 cd /opt/supernova-staging
@@ -99,7 +99,7 @@ Before enabling deployment, verify GitHub Actions can actually allocate hosted r
 - Deployment pulls immutable SHA-tagged images; the server never builds source code.
 - PostgreSQL and Redis data use dedicated named volumes.
 - Before every Alembic upgrade, the script writes a PostgreSQL custom-format backup under /opt/supernova-staging/backups and keeps the latest three.
-- API and Console health checks must pass before the new SHA is recorded as the last successful deployment.
+- API, Console, Knowledge Worker and Chat Import Worker health checks must pass before the new SHA is recorded as the last successful deployment.
 - On failure, inspect logs and the backup. The script does not automatically restore database data.
 - Application image rollback is available with ./rollback-staging.sh (or pass an explicit SHA). It does not reverse Alembic migrations or restore database contents. Use it only when the previous application version is compatible with the current schema.
 - Never run docker compose down -v, docker system prune -a, or global volume/image cleanup on Server A.
