@@ -5,11 +5,6 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, event, select
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
-
 from app.chat_import import analysis, worker
 from app.chat_import.analysis import AnalysisModelConfig, ChatAnalysisResult
 from app.chat_import.parsers import NormalizedChatMessage
@@ -22,6 +17,10 @@ from app.models.chat_analysis import (
 )
 from app.models.chat_import import ChatImportFile, ChatImportJob, ChatSource
 from app.models.knowledge import KnowledgeDocument, KnowledgeIngestionJob
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, event, select
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 
 @pytest.fixture
