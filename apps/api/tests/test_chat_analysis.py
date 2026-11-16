@@ -115,6 +115,8 @@ def _seed_ready_import(
                 max_attempts=5,
             )
         )
+        # Ensure the referenced import job exists before inserting its files.
+        db.flush()
         db.add(
             ChatImportFile(
                 id=uuid4(),

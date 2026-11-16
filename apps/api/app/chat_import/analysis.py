@@ -457,8 +457,8 @@ def analyze_chat_records(
         raise ValueError("confirmed_owner_messages_not_found")
 
     owner_texts = [
-        _bounded_text(record.content, 500)
-        for record in _sample_evenly(
+        _bounded_text(content, 500)
+        for content in _sample_evenly(
             [record.content for record in owner_records],
             80,
         )
