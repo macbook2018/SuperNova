@@ -765,21 +765,26 @@ def publish_faq_candidate(
         dedupe_key=f"faq-publish:{candidate.id}:{knowledge_base.id}",
         index_version=1,
     )
-    db.add(document)
-    db.add(ingestion_job)
-    candidate.status = "published"
-    candidate.published_document_id = document.id
-    candidate.published_at = datetime.now(UTC)
-    _record_event(
-        db,
-        principal=principal,
-        source_id=candidate.source_id,
-        entity_type="faq_candidate",
-        entity_id=candidate.id,
-        action="published",
-        after={"knowledge_base_id": str(knowledge_base.id), "document_id": str(document.id)},
-    )
     try:
+        db.add(document)
+        # Persist the document before rows that reference it through foreign keys.
+        db.flush()
+        db.add(ingestion_job)
+        candidate.status = "published"
+        candidate.published_document_id = document.id
+        candidate.published_at = datetime.now(UTC)
+        _record_event(
+            db,
+            principal=principal,
+            source_id=candidate.source_id,
+            entity_type="faq_candidate",
+            entity_id=candidate.id,
+            action="published",
+            after={
+                "knowledge_base_id": str(knowledge_base.id),
+                "document_id": str(document.id),
+            },
+        )
         db.commit()
     except IntegrityError:
         db.rollback()
