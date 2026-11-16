@@ -10,10 +10,12 @@ from uuid import UUID, uuid4
 import structlog
 from sqlalchemy import and_, delete, or_, select
 
+from app.chat_import.analysis import analyze_chat_records, resolve_analysis_model
 from app.chat_import.parsers import is_text_message, parse_chat_export
 from app.core.config import get_settings
 from app.db.session import SessionLocal, engine
 from app.knowledge.storage import delete_object, get_object
+from app.models.chat_analysis import ChatAnalysisJob, FaqCandidate, PersonaDraft
 from app.models.chat_import import (
     ChatImportFile,
     ChatImportJob,
@@ -102,6 +104,18 @@ def cleanup_expired_chat_import_uploads() -> int:
                         ChatImportSenderSummary.job_id == job_id
                     )
                 )
+                analysis_jobs = db.scalars(
+                    select(ChatAnalysisJob).where(
+                        ChatAnalysisJob.import_job_id == job_id,
+                        ChatAnalysisJob.status.in_(("queued", "running", "retry_wait")),
+                    )
+                ).all()
+                for analysis_job in analysis_jobs:
+                    analysis_job.status = "failed"
+                    analysis_job.last_error = "chat_import_upload_expired"
+                    analysis_job.worker_id = None
+                    analysis_job.locked_at = None
+                    analysis_job.lease_expires_at = None
                 db.commit()
 
         if cleanup_job_temporary_uploads(job_id):
@@ -301,6 +315,232 @@ def process_chat_import_job(job_id: UUID) -> None:
         cleanup_job_temporary_uploads(job_id)
 
 
+def _extend_analysis_lease(job_id: UUID, worker_id: str) -> None:
+    settings = get_settings()
+    with SessionLocal() as db:
+        job = db.get(ChatAnalysisJob, job_id)
+        if job is None or job.status != "running" or job.worker_id != worker_id:
+            raise ValueError("chat_analysis_cancelled")
+        job.lease_expires_at = datetime.now(UTC) + timedelta(
+            seconds=settings.chat_import_worker_lease_seconds
+        )
+        db.commit()
+
+
+def claim_next_chat_analysis_job(worker_id: str) -> UUID | None:
+    now = datetime.now(UTC)
+    with SessionLocal() as db:
+        job = db.scalar(
+            select(ChatAnalysisJob)
+            .where(
+                or_(
+                    and_(
+                        ChatAnalysisJob.status.in_(("queued", "retry_wait")),
+                        ChatAnalysisJob.available_at <= now,
+                    ),
+                    and_(
+                        ChatAnalysisJob.status == "running",
+                        ChatAnalysisJob.lease_expires_at < now,
+                    ),
+                )
+            )
+            .order_by(ChatAnalysisJob.available_at, ChatAnalysisJob.created_at)
+            .with_for_update(skip_locked=True)
+            .limit(1)
+        )
+        if job is None:
+            return None
+        if job.attempts >= job.max_attempts:
+            job.status = "failed"
+            job.last_error = "analysis_max_attempts_exceeded"
+            job.worker_id = None
+            job.lease_expires_at = None
+            import_job = db.get(ChatImportJob, job.import_job_id)
+            if import_job is not None:
+                import_job.status = "failed"
+                import_job.progress = 100
+                import_job.error_summary = "聊天分析失败，请重新上传后重试"
+            db.commit()
+            return None
+        job.status = "running"
+        job.worker_id = worker_id
+        job.locked_at = now
+        job.lease_expires_at = now + timedelta(
+            seconds=get_settings().chat_import_worker_lease_seconds
+        )
+        job.attempts += 1
+        job.last_error = None
+        db.commit()
+        return job.id
+
+
+def _handle_analysis_failure(
+    job_id: UUID,
+    worker_id: str,
+    error: Exception,
+) -> None:
+    cleanup_import_job_id: UUID | None = None
+    with SessionLocal() as db:
+        job = db.get(ChatAnalysisJob, job_id)
+        if job is None or job.status != "running" or job.worker_id != worker_id:
+            return
+        import_job = db.get(ChatImportJob, job.import_job_id)
+        final = job.attempts >= job.max_attempts or isinstance(error, ValueError)
+        job.status = "failed" if final else "retry_wait"
+        job.last_error = (
+            str(error).splitlines()[0][:500]
+            if isinstance(error, (ValueError, RuntimeError))
+            else error.__class__.__name__
+        )
+        job.worker_id = None
+        job.locked_at = None
+        job.lease_expires_at = None
+        if not final:
+            delay = min(300, 2 ** min(job.attempts, 8))
+            job.available_at = datetime.now(UTC) + timedelta(seconds=delay)
+        elif import_job is not None:
+            import_job.status = "failed"
+            import_job.progress = 100
+            import_job.error_summary = "聊天分析失败，请检查模型配置后重新上传"
+            cleanup_import_job_id = import_job.id
+        db.commit()
+    if cleanup_import_job_id is not None:
+        cleanup_job_temporary_uploads(cleanup_import_job_id)
+    logger.warning(
+        "chat_analysis_job_failed",
+        analysis_job_id=str(job_id),
+        worker_id=worker_id,
+        error_type=error.__class__.__name__,
+        terminal=cleanup_import_job_id is not None,
+    )
+
+
+def process_chat_analysis_job(job_id: UUID, worker_id: str) -> None:
+    try:
+        with SessionLocal() as db:
+            job = db.get(ChatAnalysisJob, job_id)
+            if job is None or job.status != "running" or job.worker_id != worker_id:
+                return
+            import_job = db.get(ChatImportJob, job.import_job_id)
+            source = db.scalar(
+                select(ChatSource).where(
+                    ChatSource.id == job.source_id,
+                    ChatSource.tenant_id == job.tenant_id,
+                    ChatSource.status == "active",
+                )
+            )
+            if (
+                import_job is None
+                or import_job.status != "ready_for_analysis"
+                or source is None
+                or source.identity_confirmed_at is None
+                or not job.owner_sender_ref
+            ):
+                raise ValueError("chat_analysis_source_not_ready")
+
+            files = db.scalars(
+                select(ChatImportFile)
+                .where(
+                    ChatImportFile.tenant_id == job.tenant_id,
+                    ChatImportFile.source_id == job.source_id,
+                    ChatImportFile.job_id == import_job.id,
+                    ChatImportFile.expires_at > datetime.now(UTC),
+                )
+                .order_by(ChatImportFile.created_at)
+            ).all()
+            if not files:
+                raise ValueError("chat_analysis_upload_expired")
+            file_items = [(item.object_key, item.original_filename) for item in files]
+            owner_ref = job.owner_sender_ref
+            model_config = resolve_analysis_model(db, job)
+
+        records = []
+        settings = get_settings()
+        for object_key, filename in file_items:
+            _extend_analysis_lease(job_id, worker_id)
+            body = get_object(object_key, max_bytes=settings.chat_import_max_file_bytes)
+            for record in parse_chat_export(filename, body):
+                if is_text_message(record):
+                    if len(records) >= 50000:
+                        raise ValueError("chat_analysis_record_limit_exceeded")
+                    records.append(record)
+
+        result = analyze_chat_records(
+            model_config,
+            records,
+            owner_ref,
+            on_request=lambda: _extend_analysis_lease(job_id, worker_id),
+        )
+
+        with SessionLocal() as db:
+            job = db.get(ChatAnalysisJob, job_id)
+            if job is None or job.status != "running" or job.worker_id != worker_id:
+                return
+            import_job = db.get(ChatImportJob, job.import_job_id)
+            if import_job is None or import_job.status != "ready_for_analysis":
+                job.status = "cancelled"
+                job.worker_id = None
+                job.lease_expires_at = None
+                db.commit()
+                return
+
+            db.add(
+                PersonaDraft(
+                    id=uuid4(),
+                    tenant_id=job.tenant_id,
+                    source_id=job.source_id,
+                    analysis_job_id=job.id,
+                    status="pending_review",
+                    summary=result.persona_summary,
+                    profile_json=result.persona_profile,
+                    system_prompt_suggestion=result.system_prompt_suggestion,
+                    evidence_message_count=result.owner_message_count,
+                )
+            )
+            for candidate in result.faq_candidates:
+                db.add(
+                    FaqCandidate(
+                        id=uuid4(),
+                        tenant_id=job.tenant_id,
+                        source_id=job.source_id,
+                        analysis_job_id=job.id,
+                        status="pending_review",
+                        title=candidate["title"],
+                        category=candidate["category"],
+                        canonical_question=candidate["canonical_question"],
+                        question_variants=candidate["question_variants"],
+                        answer=candidate["answer"],
+                        confidence=candidate["confidence"],
+                        occurrence_count=candidate["occurrence_count"],
+                        effective_date=candidate["effective_date"],
+                        fingerprint=candidate["fingerprint"],
+                    )
+                )
+            job.status = "succeeded"
+            job.owner_message_count = result.owner_message_count
+            job.faq_candidate_count = len(result.faq_candidates)
+            job.input_tokens = result.input_tokens
+            job.output_tokens = result.output_tokens
+            job.request_count = result.request_count
+            job.completed_at = datetime.now(UTC)
+            job.worker_id = None
+            job.locked_at = None
+            job.lease_expires_at = None
+            job.last_error = None
+            import_job.status = "succeeded"
+            import_job.progress = 100
+            import_job.error_summary = None
+            import_job.worker_id = None
+            import_job.locked_at = None
+            import_job.lease_expires_at = None
+            db.commit()
+            import_job_id = import_job.id
+
+        cleanup_job_temporary_uploads(import_job_id)
+    except Exception as exc:
+        _handle_analysis_failure(job_id, worker_id, exc)
+
+
 def claim_next_chat_import_job(worker_id: str) -> UUID | None:
     now = datetime.now(UTC)
     with SessionLocal() as db:
@@ -352,23 +592,32 @@ def run_forever() -> None:
                 logger.exception("chat_import_temp_cleanup_failed")
             last_cleanup = now_monotonic
 
-        job_id = claim_next_chat_import_job(worker_id)
-        if job_id is None:
-            time.sleep(poll_seconds)
+        import_job_id = claim_next_chat_import_job(worker_id)
+        if import_job_id is not None:
+            try:
+                process_chat_import_job(import_job_id)
+            except Exception:
+                logger.exception(
+                    "chat_import_job_unhandled_failure",
+                    job_id=str(import_job_id),
+                )
+                with SessionLocal() as db:
+                    job = db.get(ChatImportJob, import_job_id)
+                    if job is not None:
+                        job.status = "failed" if job.attempts >= job.max_attempts else "queued"
+                        job.error_summary = "任务执行异常，请重新上传或稍后重试"
+                        job.worker_id = None
+                        job.locked_at = None
+                        job.lease_expires_at = None
+                        db.commit()
             continue
-        try:
-            process_chat_import_job(job_id)
-        except Exception:
-            logger.exception("chat_import_job_unhandled_failure", job_id=str(job_id))
-            with SessionLocal() as db:
-                job = db.get(ChatImportJob, job_id)
-                if job is not None:
-                    job.status = "failed" if job.attempts >= job.max_attempts else "queued"
-                    job.error_summary = "任务执行异常，请重新上传或稍后重试"
-                    job.worker_id = None
-                    job.locked_at = None
-                    job.lease_expires_at = None
-                    db.commit()
+
+        analysis_job_id = claim_next_chat_analysis_job(worker_id)
+        if analysis_job_id is not None:
+            process_chat_analysis_job(analysis_job_id, worker_id)
+            continue
+
+        time.sleep(poll_seconds)
 
 
 def main() -> None:

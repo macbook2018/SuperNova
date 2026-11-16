@@ -364,3 +364,91 @@ def test_0010_is_noop_after_revised_0009_on_a_fresh_database(postgres_schema) ->
     assert "expires_at" in {
         column["name"] for column in inspector.get_columns("chat_import_files")
     }
+
+
+def test_0011_creates_persona_faq_and_review_tables_after_0010(postgres_schema) -> None:
+    connection = postgres_schema
+    connection.exec_driver_sql("CREATE TABLE tenants (id uuid PRIMARY KEY)")
+    connection.exec_driver_sql("CREATE TABLE users (id uuid PRIMARY KEY)")
+    connection.exec_driver_sql(
+        "CREATE TABLE model_providers ("
+        "id uuid PRIMARY KEY, tenant_id uuid NOT NULL, UNIQUE (tenant_id, id))"
+    )
+    connection.exec_driver_sql("CREATE TABLE platform_models (id uuid PRIMARY KEY)")
+    connection.exec_driver_sql(
+        "CREATE TABLE personas ("
+        "id uuid PRIMARY KEY, tenant_id uuid NOT NULL, UNIQUE (tenant_id, id))"
+    )
+    connection.exec_driver_sql(
+        "CREATE TABLE knowledge_documents ("
+        "id uuid PRIMARY KEY, tenant_id uuid NOT NULL, UNIQUE (tenant_id, id))"
+    )
+    connection.commit()
+
+    revised_0009 = _load_migration("0009_chat_import.py")
+    migration_0010 = _load_migration("0010_chat_import_text_only.py")
+    migration_0011 = _load_migration("0011_chat_analysis_review.py")
+    _run_migration(connection, revised_0009)
+    _run_migration(connection, migration_0010)
+    _run_migration(connection, migration_0011)
+
+    inspector = inspect(connection)
+    expected_tables = {
+        "chat_analysis_jobs",
+        "persona_drafts",
+        "faq_candidates",
+        "chat_analysis_review_events",
+    }
+    assert expected_tables.issubset(set(inspector.get_table_names()))
+
+    analysis_columns = {
+        column["name"] for column in inspector.get_columns("chat_analysis_jobs")
+    }
+    assert {
+        "tenant_id",
+        "source_id",
+        "import_job_id",
+        "owner_sender_ref",
+        "model_source",
+        "provider_id",
+        "platform_model_id",
+        "status",
+        "input_tokens",
+        "output_tokens",
+    }.issubset(analysis_columns)
+
+    persona_columns = {
+        column["name"] for column in inspector.get_columns("persona_drafts")
+    }
+    assert {
+        "profile_json",
+        "system_prompt_suggestion",
+        "status",
+        "applied_persona_id",
+    }.issubset(persona_columns)
+
+    faq_columns = {
+        column["name"] for column in inspector.get_columns("faq_candidates")
+    }
+    assert {
+        "canonical_question",
+        "question_variants",
+        "answer",
+        "confidence",
+        "occurrence_count",
+        "published_document_id",
+    }.issubset(faq_columns)
+
+    event_columns = {
+        column["name"] for column in inspector.get_columns("chat_analysis_review_events")
+    }
+    assert {
+        "actor_user_id",
+        "entity_type",
+        "entity_id",
+        "action",
+        "before_hash",
+        "after_hash",
+    }.issubset(
+        event_columns
+    )

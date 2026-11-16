@@ -15,6 +15,7 @@ from app.api.deps import CurrentPrincipal, DatabaseSession
 from app.chat_import.parsers import SUPPORTED_CHAT_EXTENSIONS
 from app.core.config import get_settings
 from app.knowledge.storage import delete_object, put_object
+from app.models.chat_analysis import ChatAnalysisJob
 from app.models.chat_import import (
     ChatImportFile,
     ChatImportJob,
@@ -429,6 +430,20 @@ def cancel_chat_import_job(
     job.worker_id = None
     job.locked_at = None
     job.lease_expires_at = None
+    analysis_jobs = db.scalars(
+        select(ChatAnalysisJob).where(
+            ChatAnalysisJob.tenant_id == principal.tenant.id,
+            ChatAnalysisJob.source_id == job.source_id,
+            ChatAnalysisJob.import_job_id == job.id,
+            ChatAnalysisJob.status.in_(("queued", "running", "retry_wait")),
+        )
+    ).all()
+    for analysis_job in analysis_jobs:
+        analysis_job.status = "cancelled"
+        analysis_job.worker_id = None
+        analysis_job.locked_at = None
+        analysis_job.lease_expires_at = None
+        analysis_job.last_error = "cancelled_by_user"
     db.commit()
 
     files = db.scalars(

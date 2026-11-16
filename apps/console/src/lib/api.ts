@@ -481,3 +481,64 @@ export interface ChatImportPreview {
   target_sender_ref: string | null
   senders: ChatImportSenderPreview[]
 }
+
+export interface ChatAnalysisJob {
+  id: string
+  import_job_id: string
+  source_account_id: string
+  model_source: 'platform' | 'byok'
+  model_name: string
+  status: 'queued' | 'running' | 'retry_wait' | 'succeeded' | 'failed' | 'cancelled'
+  attempts: number
+  owner_message_count: number
+  faq_candidate_count: number
+  input_tokens: number
+  output_tokens: number
+  request_count: number
+  last_error: string | null
+  completed_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface PersonaDraft {
+  id: string
+  source_account_id: string
+  analysis_job_id: string
+  status: 'pending_review' | 'approved' | 'rejected' | 'applied'
+  summary: string
+  profile_json: Record<string, unknown>
+  system_prompt_suggestion: string
+  evidence_message_count: number
+  applied_persona_id: string | null
+  approved_at: string | null
+  applied_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface FaqCandidate {
+  id: string
+  source_account_id: string
+  analysis_job_id: string
+  status: 'pending_review' | 'approved' | 'rejected' | 'published'
+  title: string
+  category: string
+  canonical_question: string
+  question_variants: string[]
+  answer: string
+  confidence: number
+  occurrence_count: number
+  effective_date: string | null
+  published_document_id: string | null
+  approved_at: string | null
+  published_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface ChatAnalysisBundle {
+  analysis_job: ChatAnalysisJob | null
+  persona_draft: PersonaDraft | null
+  faq_candidates: FaqCandidate[]
+}

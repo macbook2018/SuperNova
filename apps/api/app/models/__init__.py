@@ -16,6 +16,12 @@ from app.models.billing import (
     TenantSubscription,
 )
 from app.models.catalog import KnowledgeBase, ModelProvider, Persona, PersonaKnowledgeBase
+from app.models.chat_analysis import (
+    ChatAnalysisJob,
+    ChatAnalysisReviewEvent,
+    FaqCandidate,
+    PersonaDraft,
+)
 from app.models.chat_import import (
     ChatImportFile,
     ChatImportJob,
@@ -45,6 +51,10 @@ __all__ = [
     "BillingReservation",
     "BillingReservationItem",
     "BillingUsageEvent",
+    "ChatAnalysisJob",
+    "ChatAnalysisReviewEvent",
+    "FaqCandidate",
+    "PersonaDraft",
     "ChatImportFile",
     "ChatImportJob",
     "ChatImportSenderSummary",
