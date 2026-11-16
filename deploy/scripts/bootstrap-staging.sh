@@ -9,8 +9,8 @@ if [[ -e .env ]]; then
   exit 1
 fi
 
-read -r -p "Console origin [https://test.wet001.com]: " CONSOLE_ORIGIN
-CONSOLE_ORIGIN="${CONSOLE_ORIGIN:-https://test.wet001.com}"
+read -r -p "Console origin [https://bot.ai-supernova.com]: " CONSOLE_ORIGIN
+CONSOLE_ORIGIN="${CONSOLE_ORIGIN:-https://bot.ai-supernova.com}"
 read -r -p "Platform admin email: " ADMIN_EMAIL
 read -r -p "MinIO bucket [supernova-staging]: " S3_BUCKET
 S3_BUCKET="${S3_BUCKET:-supernova-staging}"
