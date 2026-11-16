@@ -5,8 +5,9 @@ import json
 import math
 import re
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 from urllib.parse import urlparse
 
 import httpx

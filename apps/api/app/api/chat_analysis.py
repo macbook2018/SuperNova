@@ -211,7 +211,10 @@ def _validate_analysis_model(db, principal, payload: ChatAnalysisStart) -> str:
         decrypt_provider_api_key(provider.api_key_ciphertext)
         validate_public_service_url(provider.base_url)
     except RuntimeError:
-        raise _conflict("analysis_provider_credentials_unavailable", "模型供应商凭据无法解密") from None
+        raise _conflict(
+            "analysis_provider_credentials_unavailable",
+            "模型供应商凭据无法解密",
+        ) from None
     except ValueError:
         raise _conflict("analysis_provider_endpoint_invalid", "模型供应商接口地址不可用") from None
     return payload.model_name or ""
@@ -487,7 +490,10 @@ def apply_persona_draft(
     if len(next_prompt) > 20000:
         raise HTTPException(
             status_code=422,
-            detail={"code": "persona_prompt_too_large", "message": "应用后的 Persona 提示词超过 20000 字符"},
+            detail={
+                "code": "persona_prompt_too_large",
+                "message": "应用后的 Persona 提示词超过 20000 字符",
+            },
         )
 
     persona.system_prompt = next_prompt
