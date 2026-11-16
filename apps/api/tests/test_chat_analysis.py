@@ -210,7 +210,7 @@ def test_analysis_uses_owner_samples_redacts_secrets_and_extracts_faqs(
                         "question_variants": ["费用如何计算？"],
                         "answer": "目前标准价格为 99 元。",
                         "confidence": 0.94,
-                        "occurrence_count": 3,
+                        "occurrence_count": 99999,
                         "effective_date": "2026-11-12",
                     }
                 ]

@@ -828,7 +828,7 @@ onUnmounted(() => {
               <div class="chat-review-heading">
                 <div>
                   <b>6.3 FAQ 高频问题候选</b>
-                  <small>仅保留本人明确回答过的问题；冲突答案分开审核。</small>
+                  <small>仅保留本人明确回答过的问题；出现次数按抽样消息估算，冲突答案分开审核。</small>
                 </div>
                 <span class="chat-counter">{{ analysisBundle.faq_candidates.length }} 条</span>
               </div>
@@ -851,7 +851,7 @@ onUnmounted(() => {
                   </div>
                   <div class="chat-faq-meta">
                     <span>{{ candidate.category }}</span>
-                    <span>出现 {{ candidate.occurrence_count }} 次</span>
+                    <span>样本中出现 {{ candidate.occurrence_count }} 次</span>
                     <span>置信度 {{ Math.round(candidate.confidence * 100) }}%</span>
                     <span v-if="candidate.effective_date">适用时间：{{ candidate.effective_date }}</span>
                   </div>

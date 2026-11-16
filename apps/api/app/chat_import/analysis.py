@@ -354,6 +354,7 @@ def _extract_faqs(
         "才能生成 FAQ。不得把对方的话当成业务事实，不得补充聊天中没有的答案。"
         "删除姓名、账号、联系方式、订单号、地址等客户个人信息，将个案问题改写成通用问法。"
         "价格、政策和日期等时效性信息必须保留适用日期；不确定日期则留空。"
+        "occurrence_count 只能统计当前提供的抽样消息中实际出现的次数，不得推测或外推整个历史记录。"
         "相同问题但答案冲突时分别输出，不要合并。不要输出聊天原文或消息引用。"
         "只返回 JSON 对象：{items:[{title,category,question,question_variants,answer,"
         "confidence,occurrence_count,effective_date}]}。"
@@ -364,6 +365,7 @@ def _extract_faqs(
     request_count = 0
     for offset in range(0, min(len(conversations), 80), 4):
         batch = conversations[offset : offset + 4]
+        batch_message_count = sum(len(conversation) for conversation in batch)
         if on_request is not None:
             on_request()
         decoded, used_input, used_output = call_json_completion(
@@ -396,7 +398,7 @@ def _extract_faqs(
             count = raw.get("occurrence_count", 1)
             if isinstance(count, bool) or not isinstance(count, int):
                 count = 1
-            count = min(100000, max(1, count))
+            count = min(batch_message_count, max(1, count))
             title = _bounded_text(raw.get("title"), 160) or question[:160]
             category = _bounded_text(raw.get("category"), 60) or "general"
             effective_date = _bounded_text(raw.get("effective_date"), 32) or None
@@ -428,7 +430,7 @@ def _extract_faqs(
             merged[fingerprint] = candidate
             continue
         existing["occurrence_count"] = min(
-            100000,
+            1920,
             existing["occurrence_count"] + candidate["occurrence_count"],
         )
         existing["confidence"] = max(existing["confidence"], candidate["confidence"])
