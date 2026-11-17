@@ -120,7 +120,7 @@ jobs:
               "ci@example.com",
               "",
               "ci_access_key",
-              "ci-secret-!@#$%^&*()",
+              "Abc123!@#_-45",  # 13 characters: existing MinIO password length
               "",
           ]
           subprocess.run(
