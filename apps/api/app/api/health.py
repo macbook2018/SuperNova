@@ -10,9 +10,10 @@ router = APIRouter(tags=["health"])
 
 async def _check_database(database_url: str) -> str:
     connection = None
+    psycopg_dsn = database_url.replace("postgresql+psycopg://", "postgresql://", 1)
     try:
         connection = await psycopg.AsyncConnection.connect(
-            database_url,
+            psycopg_dsn,
             connect_timeout=2,
         )
         await connection.execute("SELECT 1")
