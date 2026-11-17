@@ -34,10 +34,15 @@ if [[ ! "$S3_ACCESS_KEY" =~ ^[A-Za-z0-9_-]{8,128}$ ]]; then
   echo "S3 access key must use 8-128 letters, numbers, underscores or hyphens."
   exit 1
 fi
-if [[ ! "$S3_SECRET_KEY" =~ ^[A-Za-z0-9_-]{16,128}$ ]]; then
-  echo "S3 secret key must use 16-128 letters, numbers, underscores or hyphens."
+if [[ ${#S3_SECRET_KEY} -lt 16 || ${#S3_SECRET_KEY} -gt 128 || "$S3_SECRET_KEY" =~ [[:cntrl:]] ]]; then
+  echo "S3 secret key must be 16-128 printable characters without line breaks."
   exit 1
 fi
+
+# Store the S3 secret as a single-quoted Compose .env value so punctuation
+# such as #, $, !, and quotes is preserved literally.
+S3_SECRET_KEY_DOTENV="${S3_SECRET_KEY//\\/\\\\}"
+S3_SECRET_KEY_DOTENV="${S3_SECRET_KEY_DOTENV//\\'/\\\\'}"
 
 POSTGRES_PASSWORD="$(openssl rand -hex 24)"
 REDIS_PASSWORD="$(openssl rand -hex 24)"
@@ -60,7 +65,7 @@ SUPERNOVA_PLATFORM_ADMIN_EMAILS=${ADMIN_EMAIL}
 SUPERNOVA_CORS_ORIGINS=${CONSOLE_ORIGIN}
 SUPERNOVA_S3_ENDPOINT_URL=http://host.docker.internal:9000
 SUPERNOVA_S3_ACCESS_KEY=${S3_ACCESS_KEY}
-SUPERNOVA_S3_SECRET_KEY=${S3_SECRET_KEY}
+SUPERNOVA_S3_SECRET_KEY='${S3_SECRET_KEY_DOTENV}'
 SUPERNOVA_S3_BUCKET=${S3_BUCKET}
 SUPERNOVA_S3_REGION=us-east-1
 SUPERNOVA_KNOWLEDGE_MAX_UPLOAD_BYTES=10485760
