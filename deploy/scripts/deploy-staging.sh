@@ -21,12 +21,15 @@ COMPOSE=(docker compose --project-name supernova-staging --env-file .env -f comp
 
 "${COMPOSE[@]}" config --quiet
 
-API_IMAGE="ghcr.io/macbook2018/supernova-api:${TAG}"
-CONSOLE_IMAGE="ghcr.io/macbook2018/supernova-console:${TAG}"
+API_IMAGE="macbook201808/supernova:api-${TAG}"
+CONSOLE_IMAGE="macbook201808/supernova:console-${TAG}"
+
+echo "Pulling immutable API and Console images from Docker Hub..."
+"${COMPOSE[@]}" pull api console
+
 for image in "$API_IMAGE" "$CONSOLE_IMAGE"; do
   if ! docker image inspect "$image" >/dev/null 2>&1; then
-    echo "Required staging image is missing locally: $image"
-    echo "Transfer the immutable Docker images before running deployment."
+    echo "Required staging image is missing after Docker Hub pull: $image"
     exit 1
   fi
 done

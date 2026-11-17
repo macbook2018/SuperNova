@@ -185,6 +185,9 @@ jobs:
       STAGING_SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
       STAGING_DEPLOY_PATH: ${{ vars.STAGING_DEPLOY_PATH || '/opt/supernova-staging' }}
       STAGING_API_BASE_URL: ${{ vars.STAGING_API_BASE_URL || 'https://api.ai-supernova.com' }}
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      DOCKERHUB_PULL_TOKEN: ${{ secrets.DOCKERHUB_PULL_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -195,31 +198,38 @@ jobs:
           test -n "$STAGING_USER"
           test -n "$STAGING_SSH_PRIVATE_KEY"
           test -n "$STAGING_API_BASE_URL"
+          test "$DOCKERHUB_USERNAME" = "macbook201808"
+          test -n "$DOCKERHUB_TOKEN"
+          test -n "$DOCKERHUB_PULL_TOKEN"
+
+      - name: Log in to Docker Hub for image publishing
+        uses: docker/login-action@v3
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build and load API image
+      - name: Build and push API image
         uses: docker/build-push-action@v6
         with:
           context: .
           file: apps/api/Dockerfile
-          push: false
-          load: true
-          tags: ghcr.io/${{ github.repository_owner }}/supernova-api:${{ github.sha }}
+          push: true
+          tags: macbook201808/supernova:api-${{ github.sha }}
           cache-from: type=gha,scope=supernova-api
           cache-to: type=gha,mode=max,scope=supernova-api
 
-      - name: Build and load Console image
+      - name: Build and push Console image
         uses: docker/build-push-action@v6
         with:
           context: .
           file: apps/console/Dockerfile
-          push: false
-          load: true
+          push: true
           build-args: |
             VITE_API_BASE_URL=${{ env.STAGING_API_BASE_URL }}
-          tags: ghcr.io/${{ github.repository_owner }}/supernova-console:${{ github.sha }}
+          tags: macbook201808/supernova:console-${{ github.sha }}
           cache-from: type=gha,scope=supernova-console
           cache-to: type=gha,mode=max,scope=supernova-console
 
@@ -253,24 +263,14 @@ jobs:
             echo "ready=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Transfer Docker images to staging
+      - name: Configure read-only Docker Hub access on staging server
         if: steps.bootstrap.outputs.ready == 'true'
         env:
-          API_IMAGE: ghcr.io/${{ github.repository_owner }}/supernova-api:${{ github.sha }}
-          CONSOLE_IMAGE: ghcr.io/${{ github.repository_owner }}/supernova-console:${{ github.sha }}
+          DOCKERHUB_PULL_TOKEN: ${{ secrets.DOCKERHUB_PULL_TOKEN }}
         run: |
-          set -euo pipefail
-          docker image inspect "$API_IMAGE" >/dev/null
-          docker image inspect "$CONSOLE_IMAGE" >/dev/null
-          echo "Streaming API and Console images to staging server..."
-          docker save "$API_IMAGE" "$CONSOLE_IMAGE" \
-            | gzip -1 \
-            | ssh -p "$STAGING_SSH_PORT" \
-                -o ServerAliveInterval=30 \
-                -o ServerAliveCountMax=10 \
-                "$STAGING_USER@$STAGING_HOST" \
-                "bash -o pipefail -c 'gzip -dc | docker load'"
-          echo "Docker images transferred and loaded successfully."
+          printf '%s' "$DOCKERHUB_PULL_TOKEN" | ssh -p "$STAGING_SSH_PORT" \
+            "$STAGING_USER@$STAGING_HOST" \
+            "docker login --username '$DOCKERHUB_USERNAME' --password-stdin"
 
       - name: Deploy immutable image tag
         if: steps.bootstrap.outputs.ready == 'true'

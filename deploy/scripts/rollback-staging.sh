@@ -22,8 +22,8 @@ chmod 600 .env
 export SUPERNOVA_IMAGE_TAG="$TAG"
 COMPOSE=(docker compose --project-name supernova-staging --env-file .env -f compose.staging.yaml)
 
-API_IMAGE="ghcr.io/macbook2018/supernova-api:${TAG}"
-CONSOLE_IMAGE="ghcr.io/macbook2018/supernova-console:${TAG}"
+API_IMAGE="macbook201808/supernova:api-${TAG}"
+CONSOLE_IMAGE="macbook201808/supernova:console-${TAG}"
 for image in "$API_IMAGE" "$CONSOLE_IMAGE"; do
   if ! docker image inspect "$image" >/dev/null 2>&1; then
     echo "Rollback image is not available locally: $image"

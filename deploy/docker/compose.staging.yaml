@@ -97,7 +97,7 @@ services:
         max-file: "2"
 
   api:
-    image: ghcr.io/macbook2018/supernova-api:${SUPERNOVA_IMAGE_TAG:-staging-latest}
+    image: macbook201808/supernova:api-${SUPERNOVA_IMAGE_TAG:-staging-latest}
     restart: unless-stopped
     init: true
     mem_limit: 256m
@@ -125,7 +125,7 @@ services:
         max-file: "3"
 
   knowledge-worker:
-    image: ghcr.io/macbook2018/supernova-api:${SUPERNOVA_IMAGE_TAG:-staging-latest}
+    image: macbook201808/supernova:api-${SUPERNOVA_IMAGE_TAG:-staging-latest}
     restart: unless-stopped
     init: true
     command: ["python", "-m", "app.knowledge.worker"]
@@ -150,7 +150,7 @@ services:
         max-file: "2"
 
   chat-import-worker:
-    image: ghcr.io/macbook2018/supernova-api:${SUPERNOVA_IMAGE_TAG:-staging-latest}
+    image: macbook201808/supernova:api-${SUPERNOVA_IMAGE_TAG:-staging-latest}
     restart: unless-stopped
     init: true
     command: ["python", "-m", "app.chat_import.worker"]
@@ -175,7 +175,7 @@ services:
         max-file: "2"
 
   console:
-    image: ghcr.io/macbook2018/supernova-console:${SUPERNOVA_IMAGE_TAG:-staging-latest}
+    image: macbook201808/supernova:console-${SUPERNOVA_IMAGE_TAG:-staging-latest}
     restart: unless-stopped
     mem_limit: 32m
     cpus: 0.10
