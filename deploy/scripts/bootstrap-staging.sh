@@ -41,7 +41,7 @@ fi
 
 # Store the S3 secret as a single-quoted Compose .env value so punctuation
 # such as #, $, !, and quotes is preserved literally.
-S3_SECRET_KEY_DOTENV="$(python3 -c 'import sys; s=sys.stdin.read().rstrip("\\n"); print(s.replace("\\\\", "\\\\\\\\").replace("\\'", "\\\\'"), end="")' <<< "$S3_SECRET_KEY")"
+S3_SECRET_KEY_DOTENV="$(S3_SECRET_KEY="$S3_SECRET_KEY" python3 -c 'import os; q=chr(39); b=chr(92); s=os.environ["S3_SECRET_KEY"]; print(s.replace(b,b+b).replace(q,b+q), end="")')"
 
 POSTGRES_PASSWORD="$(openssl rand -hex 24)"
 REDIS_PASSWORD="$(openssl rand -hex 24)"
