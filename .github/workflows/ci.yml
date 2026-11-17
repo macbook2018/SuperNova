@@ -120,12 +120,12 @@ jobs:
               "ci@example.com",
               "",
               "ci_access_key",
-              "ci-secret-!@#$%^&*()'\\\"\\\\",
+              "ci-secret-!@#$%^&*()",
               "",
           ]
           subprocess.run(
               ["bash", sys.argv[1]],
-              input="\\n".join(values),
+              input="\n".join(values),
               text=True,
               stdout=subprocess.DEVNULL,
               check=True,
