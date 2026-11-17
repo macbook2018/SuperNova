@@ -132,8 +132,8 @@ jobs:
           )
           PY
           test "$(stat -c '%a' "$tmpdir/.env")" = "600"
-          docker compose --project-name supernova-staging \\
-            --env-file "$tmpdir/.env" \\
+          docker compose --project-name supernova-staging \
+            --env-file "$tmpdir/.env" \
             -f deploy/docker/compose.staging.yaml config --quiet
 
       - name: Start stack
