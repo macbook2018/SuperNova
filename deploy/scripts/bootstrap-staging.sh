@@ -34,8 +34,8 @@ if [[ ! "$S3_ACCESS_KEY" =~ ^[A-Za-z0-9_-]{8,128}$ ]]; then
   echo "S3 access key must use 8-128 letters, numbers, underscores or hyphens."
   exit 1
 fi
-if [[ ${#S3_SECRET_KEY} -lt 16 || ${#S3_SECRET_KEY} -gt 128 || "$S3_SECRET_KEY" =~ [[:cntrl:]] ]]; then
-  echo "S3 secret key must be 16-128 printable characters without line breaks."
+if [[ ${#S3_SECRET_KEY} -lt 8 || ${#S3_SECRET_KEY} -gt 128 || "$S3_SECRET_KEY" =~ [[:cntrl:]] ]]; then
+  echo "S3 secret key must be 8-128 printable characters without line breaks."
   exit 1
 fi
 
