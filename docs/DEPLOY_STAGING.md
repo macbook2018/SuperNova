@@ -1,0 +1,119 @@
+# SuperNova staging deployment on Server A
+
+This is a temporary, low-concurrency staging deployment. It is isolated from the existing Docker projects and must not stop or modify Activation Manager, Website Watch, EmbedEaseAI, OpenClaw or other sites.
+
+## Target topology
+
+- Host: Server A, Debian 12, 2 vCPU, 4 GB RAM.
+- Existing host Nginx (Baota) remains the only public HTTP/HTTPS entry point.
+- Console: 127.0.0.1:18083, served by a small Nginx container.
+- API: 127.0.0.1:18082.
+- PostgreSQL/pgvector and Redis are private to the Compose network.
+- Existing MinIO is reused through host.docker.internal:9000; SuperNova uses its own bucket and least-privilege access key.
+- No server-side source checkout or image build. GitHub Actions builds and publishes immutable SHA-tagged images to GHCR.
+
+The Compose memory limits total about 976 MiB. They are ceilings, not guaranteed reservations. Monitor host memory, Swap, container OOM events and disk during testing. If memory pressure rises, stop staging workloads and review before changing existing services.
+
+## Domains (proposed; confirm before DNS changes)
+
+- Console: bot.ai-supernova.com
+- API: api.ai-supernova.com
+
+Create A records for both names pointing to Server A's public IP. Do not change existing DNS records.
+
+In Baota:
+1. Add a site for bot.ai-supernova.com, issue/attach its HTTPS certificate, and reverse-proxy / to http://127.0.0.1:18083.
+2. Add a site for api.ai-supernova.com, issue/attach its HTTPS certificate, and reverse-proxy / to http://127.0.0.1:18082.
+3. For the API site, set client_max_body_size 45m and proxy read/send timeouts to at least 300 seconds.
+4. Preserve all existing vhost files. Do not replace the global Nginx configuration.
+
+The Console image is built with VITE_API_BASE_URL; set the GitHub repository variable STAGING_API_BASE_URL to the exact HTTPS API origin.
+
+## MinIO preparation
+
+Do not use the existing MinIO root credentials in the SuperNova application.
+
+1. In the existing MinIO Console, create bucket supernova-staging.
+2. Create a dedicated user/service account for SuperNova.
+3. Apply deploy/minio/supernova-staging-policy.json (or an equivalent bucket-only read/write policy).
+4. Put the generated access key and secret into the server-only .env using the bootstrap script.
+5. Do not paste MinIO credentials into chat or commit them to GitHub.
+
+Server A currently exposes the existing MinIO API/Console ports on public interfaces. This deployment does not change those bindings because other applications may depend on them. Review their firewall restrictions separately after confirming those dependencies.
+
+## One-time server setup
+
+Create a dedicated deploy account. Docker-group membership is effectively root-equivalent; protect its SSH key accordingly.
+
+As root on Server A:
+
+~~~bash
+useradd --create-home --shell /bin/bash supernova-deploy 2>/dev/null || true
+usermod -aG docker supernova-deploy
+install -d -o supernova-deploy -g supernova-deploy -m 750 /opt/supernova-staging
+install -d -o supernova-deploy -g supernova-deploy -m 700 /home/supernova-deploy/.ssh
+~~~
+
+Add the public half of a dedicated Ed25519 deployment key to:
+ /home/supernova-deploy/.ssh/authorized_keys
+and set owner supernova-deploy:supernova-deploy, mode 600. The private key goes only into the GitHub Actions secret STAGING_SSH_PRIVATE_KEY.
+
+The deployment account must be able to run Docker commands and write to /opt/supernova-staging.
+
+On the first deployment workflow run, the workflow publishes the images and uploads the scripts, then reports that bootstrap is required if .env is absent. After the MinIO bucket/user and DNS/domain decisions are ready, run:
+
+~~~bash
+cd /opt/supernova-staging
+chmod 700 bootstrap-staging.sh deploy-staging.sh rollback-staging.sh
+./bootstrap-staging.sh
+~~~
+
+The bootstrap script generates PostgreSQL, Redis, JWT and Fernet secrets locally and writes a mode-600 .env. It prompts for the MinIO bucket-only access key/secret and the platform-admin email. Do not share the resulting .env.
+
+## GitHub configuration
+
+Repository: Settings -> Secrets and variables -> Actions.
+
+Variables:
+- STAGING_DEPLOY_ENABLED = true (set this only after one-time server setup and GitHub Actions runner checks).
+- STAGING_DEPLOY_PATH = /opt/supernova-staging.
+- STAGING_API_BASE_URL = https://api.ai-supernova.com (change if another API domain is selected).
+
+Secrets:
+- STAGING_HOST = Server A public IP.
+- STAGING_USER = supernova-deploy.
+- STAGING_SSH_PORT = SSH port (usually 22).
+- STAGING_SSH_PRIVATE_KEY = private half of the dedicated deployment key.
+- STAGING_GHCR_READ_TOKEN = GitHub PAT with read:packages, used only by the server to pull private GHCR images.
+
+The workflow uses the repository-scoped GITHUB_TOKEN with packages: write to publish images. The server PAT is not committed to the repository.
+
+## CI and automatic deployment
+
+The staging deployment job depends on all three existing CI jobs (Console build, API lint/tests/migrations, Compose smoke test). It runs only on feat/phase-6-knowledge-base-rag and only when STAGING_DEPLOY_ENABLED=true.
+
+Before enabling deployment, verify GitHub Actions can actually allocate hosted runners and execute steps. A recent run for commit f67759b4eff273d891ef4f8487638c4d6a90f1b2 ended in failure with zero steps and no runner name; that is a runner/platform issue to resolve, not evidence of a code test failure.
+
+## Deploy and rollback behavior
+
+- Deployment pulls immutable SHA-tagged images; the server never builds source code.
+- PostgreSQL and Redis data use dedicated named volumes.
+- Before every Alembic upgrade, the script writes a PostgreSQL custom-format backup under /opt/supernova-staging/backups and keeps the latest three.
+- API, Console, Knowledge Worker and Chat Import Worker health checks must pass before the new SHA is recorded as the last successful deployment.
+- On failure, inspect logs and the backup. The script does not automatically restore database data.
+- Application image rollback is available with ./rollback-staging.sh (or pass an explicit SHA). It does not reverse Alembic migrations or restore database contents. Use it only when the previous application version is compatible with the current schema.
+- Never run docker compose down -v, docker system prune -a, or global volume/image cleanup on Server A.
+
+## Resource monitoring
+
+During the first tests, check:
+
+~~~bash
+free -h
+swapon --show
+df -h /
+docker stats --no-stream
+docker compose --project-name supernova-staging --env-file .env -f compose.staging.yaml ps
+~~~
+
+If host available memory falls below 500 MiB, Swap grows rapidly, or any staging container is OOM-killed, stop and review the resource plan before continuing.

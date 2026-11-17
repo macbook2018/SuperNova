@@ -37,7 +37,7 @@ def postgres_session_factory():
 
     engine = create_engine(
         database_url,
-        connect_args={"options": f"-c search_path={schema}"},
+        connect_args={"options": f"-c search_path={schema},public"},
         pool_size=8,
         max_overflow=0,
         pool_pre_ping=True,

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import ChatImportsView from './components/ChatImportsView.vue'
 import {
   Activity, AlertCircle, ArrowRight, Bell, Bot, Check, CheckCircle2,
   ChevronDown, ChevronRight, CircleHelp, Copy, Cpu, Database, Download, FileText,
@@ -10,6 +11,7 @@ import {
 import {
   API_BASE_URL,
   apiRequest,
+  downloadApiFile,
   clearStoredSession,
   getStoredSession,
   storeSession,
@@ -22,6 +24,10 @@ import {
   type BillingShadowUsageSummary,
   type PlatformModel,
   type KnowledgeBase,
+  type KnowledgeDocument,
+  type KnowledgeSearchResponse,
+  type KnowledgeUsageSummary,
+  type PlatformEmbeddingModel,
   type ModelProvider,
   type Persona,
   type Tenant,
@@ -30,9 +36,9 @@ import {
   type UsageSummary,
 } from './lib/api'
 
-type Page = 'overview' | 'personas' | 'providers' | 'knowledge' | 'knowledgeDetail' | 'api' | 'billing' | 'usage' | 'settings'
+type Page = 'overview' | 'personas' | 'providers' | 'knowledge' | 'knowledgeDetail' | 'chatImports' | 'api' | 'billing' | 'usage' | 'settings'
 type PersonaView = Persona & { color: string }
-type KnowledgeBaseView = KnowledgeBase & { color: string; docs: never[] }
+type KnowledgeBaseView = KnowledgeBase & { color: string; docs: KnowledgeDocument[] }
 
 const page = ref<Page>('overview')
 const mobileOpen = ref(false)
@@ -53,6 +59,7 @@ const titles: Record<Page, string> = {
   providers: '模型供应商',
   knowledge: '知识库',
   knowledgeDetail: '知识库详情',
+  chatImports: '聊天文本分析',
   api: 'API 接口',
   billing: '套餐与额度',
   usage: '用量与账单',
@@ -63,7 +70,8 @@ const descriptions: Record<Page, string> = {
   personas: '创建和管理独立 AI 人格，为每个人格配置模型与行为方式。',
   providers: '集中管理模型供应商、兼容接口地址和加密保存的 API Key。',
   knowledge: '集中管理知识库资料空间，并关联到一个或多个 AI 人格。',
-  knowledgeDetail: '管理知识库基本信息及其关联人格。',
+  knowledgeDetail: '管理文档导入、索引状态、混合检索与 RAG 来源。',
+  chatImports: '导入历史聊天文本，提炼人格表达风格与业务知识；不保存聊天记录。',
   api: '使用一个用户级 API Key，通过 OpenAI 兼容接口调用多个独立人格。',
   billing: '查看当前订阅、实时额度预留、影子计价和账本记录；当前不会产生真实扣款。',
   usage: '查看真实模型调用次数、输入输出 Token、响应时间和未计量请求。',
@@ -76,6 +84,7 @@ const nav = [
       { key: 'overview' as Page, label: '工作台总览', icon: LayoutDashboard },
       { key: 'personas' as Page, label: '人格管理', icon: Bot },
       { key: 'knowledge' as Page, label: '知识库', icon: Database },
+      { key: 'chatImports' as Page, label: '聊天文本分析', icon: MessageSquare },
     ],
   },
   {
@@ -96,12 +105,19 @@ const activeNav = computed(() => page.value === 'knowledgeDetail' ? 'knowledge' 
 const personas = ref<PersonaView[]>([])
 const providers = ref<ModelProvider[]>([])
 const platformModels = ref<PlatformModel[]>([])
+const embeddingModels = ref<PlatformEmbeddingModel[]>([])
 const billingPlans = ref<BillingPlan[]>([])
 const billingEntitlements = ref<BillingEntitlements | null>(null)
 const billingUsage = ref<BillingShadowUsageSummary | null>(null)
 const billingLedger = ref<BillingLedgerTransaction[]>([])
 const billingLoading = ref(false)
 const kbs = ref<KnowledgeBaseView[]>([])
+const knowledgeDocuments = ref<KnowledgeDocument[]>([])
+const knowledgeUsage = ref<KnowledgeUsageSummary | null>(null)
+const knowledgeBusy = ref(false)
+const knowledgeSearchQuery = ref('')
+const knowledgeSearchHits = ref<KnowledgeSearchResponse['hits']>([])
+const knowledgeSearchBusy = ref(false)
 const apiKeys = ref<ApiKey[]>([])
 const usageSummary = ref<UsageSummary | null>(null)
 const usageRecords = ref<UsageRecord[]>([])
@@ -110,7 +126,7 @@ const selectedId = ref('')
 const selectedKb = computed<KnowledgeBaseView>(() =>
   kbs.value.find(k => k.id === selectedId.value) ??
   kbs.value[0] ??
-  { id: '', name: '', description: '', documents_count: 0, created_at: '', updated_at: '', color: 'blue', docs: [] },
+  { id: '', name: '', description: '', embedding_source: 'platform', platform_embedding_model_id: null, embedding_provider_id: null, embedding_model_name: null, embedding_dimensions: 1536, chunk_size: 800, chunk_overlap: 120, retrieval_top_k: 5, retrieval_score_threshold: 0.15, enabled: true, documents_count: 0, created_at: '', updated_at: '', color: 'blue', docs: [] },
 )
 const linkedPersonas = computed(() =>
   personas.value.filter(persona => persona.knowledge_base_ids.includes(selectedKb.value.id)),
@@ -166,19 +182,40 @@ function formatMinorAmount(
 }
 
 async function loadWorkspace() {
-  const [personaData, providerData, platformData, knowledgeData, keyData] = await Promise.all([
+  const [personaData, providerData, platformData, embeddingData, knowledgeData, keyData] = await Promise.all([
     request<Persona[]>('/personas'),
     request<ModelProvider[]>('/model-providers'),
     request<PlatformModel[]>('/platform/models'),
+    request<PlatformEmbeddingModel[]>('/platform/embedding-models'),
     request<KnowledgeBase[]>('/knowledge-bases'),
     request<ApiKey[]>('/api-keys'),
   ])
   personas.value = personaData.map((persona, index) => ({ ...persona, color: colorFor(index) }))
   providers.value = providerData
   platformModels.value = platformData
+  embeddingModels.value = embeddingData
   kbs.value = knowledgeData.map((kb, index) => ({ ...kb, color: colorFor(index), docs: [] }))
   apiKeys.value = keyData
   if (!kbs.value.some(kb => kb.id === selectedId.value)) selectedId.value = kbs.value[0]?.id ?? ''
+}
+
+async function loadKnowledgeDetail(showError = false) {
+  if (!selectedId.value) return
+  knowledgeBusy.value = true
+  try {
+    const [documents, usage] = await Promise.all([
+      request<KnowledgeDocument[]>(`/knowledge-bases/${selectedId.value}/documents`),
+      request<KnowledgeUsageSummary>(`/knowledge-bases/${selectedId.value}/usage`),
+    ])
+    knowledgeDocuments.value = documents
+    knowledgeUsage.value = usage
+    const selected = kbs.value.find(kb => kb.id === selectedId.value)
+    if (selected) selected.documents_count = usage.document_count
+  } catch (error) {
+    if (showError) notify(error instanceof Error ? error.message : '读取知识库文档失败')
+  } finally {
+    knowledgeBusy.value = false
+  }
 }
 async function loadBilling(showError = false) {
   if (!authenticated.value) return
@@ -528,19 +565,55 @@ async function deleteProvider(provider: ModelProvider) {
 }
 
 const kbModal = ref(false)
-const kbForm = ref({ name: '', description: '' })
+const newKnowledgeBaseForm = () => ({
+  name: '',
+  description: '',
+  embedding_source: 'platform' as 'platform' | 'byok',
+  platform_embedding_model_id: embeddingModels.value[0]?.id ?? '',
+  embedding_provider_id: '',
+  embedding_model_name: '',
+  embedding_dimensions: 1536,
+  chunk_size: 800,
+  chunk_overlap: 120,
+  retrieval_top_k: 5,
+  retrieval_score_threshold: 0.15,
+  enabled: true,
+})
+const kbForm = ref(newKnowledgeBaseForm())
 async function createKb() {
   if (!kbForm.value.name.trim()) {
     notify('请填写知识库名称')
     return
   }
+  if (kbForm.value.embedding_source === 'platform' && !kbForm.value.platform_embedding_model_id) {
+    notify('平台尚未配置 Embedding 模型，请联系管理员，或选择 BYOK 模式')
+    return
+  }
+  if (kbForm.value.embedding_source === 'byok' &&
+      (!kbForm.value.embedding_provider_id || !kbForm.value.embedding_model_name.trim())) {
+    notify('BYOK 模式必须选择支持 Embedding 的供应商并填写模型名称')
+    return
+  }
+  const payload = {
+    ...kbForm.value,
+    name: kbForm.value.name.trim(),
+    description: kbForm.value.description.trim(),
+    platform_embedding_model_id: kbForm.value.embedding_source === 'platform'
+      ? kbForm.value.platform_embedding_model_id : null,
+    embedding_provider_id: kbForm.value.embedding_source === 'byok'
+      ? kbForm.value.embedding_provider_id : null,
+    embedding_model_name: kbForm.value.embedding_source === 'byok'
+      ? kbForm.value.embedding_model_name.trim() : null,
+  }
   try {
-    const created = await request<KnowledgeBase>('/knowledge-bases', 'POST', kbForm.value)
-    kbForm.value = { name: '', description: '' }
+    const created = await request<KnowledgeBase>('/knowledge-bases', 'POST', payload)
+    kbForm.value = newKnowledgeBaseForm()
     kbModal.value = false
     await loadWorkspace()
     selectedId.value = created.id
     page.value = 'knowledgeDetail'
+    knowledgeSearchHits.value = []
+    await loadKnowledgeDetail()
     notify('知识库创建成功')
   } catch (error) {
     notify(error instanceof Error ? error.message : '创建知识库失败')
@@ -549,20 +622,154 @@ async function createKb() {
 function openKb(kb: KnowledgeBaseView) {
   selectedId.value = kb.id
   page.value = 'knowledgeDetail'
+  knowledgeSearchHits.value = []
+  void loadKnowledgeDetail()
 }
 async function deleteKb(kb: KnowledgeBaseView) {
-  if (!window.confirm(`确定删除知识库「${kb.name}」吗？关联关系也会一并移除。`)) return
+  if (!window.confirm(`确定删除知识库「${kb.name}」吗？请先删除其中的全部文档。`)) return
   try {
     await request<void>(`/knowledge-bases/${kb.id}`, 'DELETE')
     await loadWorkspace()
     page.value = 'knowledge'
     notify('知识库已删除')
   } catch (error) {
-    notify(error instanceof Error ? error.message : '删除知识库失败')
+    notify(error instanceof Error ? error.message : '删除知识库失败；请先删除文档')
   }
 }
 function upload() {
-  notify('知识库文档上传、解析和向量化将在后续知识库阶段接入；当前已完成知识库元数据与人格关联')
+  if (!selectedId.value) return
+  const input = document.createElement('input')
+  input.type = 'file'
+  input.multiple = true
+  input.accept = '.pdf,.docx,.pptx,.xlsx,.txt,.md,.csv,.html,.htm'
+  input.onchange = async () => {
+    const files = Array.from(input.files ?? [])
+    if (!files.length) return
+    knowledgeBusy.value = true
+    let succeeded = 0
+    try {
+      for (const file of files) {
+        const form = new FormData()
+        form.append('file', file)
+        await apiRequest<KnowledgeDocument>(
+          `/knowledge-bases/${selectedId.value}/documents/upload`,
+          { method: 'POST', body: form },
+        )
+        succeeded += 1
+      }
+      await loadKnowledgeDetail()
+      await loadWorkspace()
+      notify(`已提交 ${succeeded} 份文档，后台正在解析和建立索引`)
+    } catch (error) {
+      await loadKnowledgeDetail()
+      notify(error instanceof Error ? error.message : '部分文档上传失败')
+    } finally {
+      knowledgeBusy.value = false
+    }
+  }
+  input.click()
+}
+async function importKnowledgeUrl() {
+  const url = window.prompt('输入需要导入的公开网页 URL（公网地址必须使用 HTTPS）')
+  if (!url?.trim() || !selectedId.value) return
+  knowledgeBusy.value = true
+  try {
+    await request<KnowledgeDocument>(
+      `/knowledge-bases/${selectedId.value}/documents/import-url`,
+      'POST',
+      { url: url.trim() },
+    )
+    await loadKnowledgeDetail()
+    notify('网页已提交，后台正在抓取和建立索引')
+  } catch (error) {
+    notify(error instanceof Error ? error.message : '网页导入失败')
+  } finally {
+    knowledgeBusy.value = false
+  }
+}
+async function retryKnowledgeDocument(item: KnowledgeDocument) {
+  try {
+    await request<KnowledgeDocument>(
+      `/knowledge-bases/${selectedId.value}/documents/${item.id}/retry`,
+      'POST',
+    )
+    await loadKnowledgeDetail()
+    notify('已重新提交处理任务')
+  } catch (error) {
+    notify(error instanceof Error ? error.message : '重试失败')
+  }
+}
+async function reindexKnowledgeDocument(item: KnowledgeDocument) {
+  try {
+    await request<KnowledgeDocument>(
+      `/knowledge-bases/${selectedId.value}/documents/${item.id}/reindex`,
+      'POST',
+    )
+    await loadKnowledgeDetail()
+    notify('已提交重建索引任务')
+  } catch (error) {
+    notify(error instanceof Error ? error.message : '重建索引失败')
+  }
+}
+async function downloadKnowledgeDocument(item: KnowledgeDocument) {
+  try {
+    await downloadApiFile(
+      `/knowledge-bases/${selectedId.value}/documents/${item.id}/download`,
+      item.original_filename,
+    )
+  } catch (error) {
+    notify(error instanceof Error ? error.message : '文档下载失败')
+  }
+}
+async function deleteKnowledgeDocument(item: KnowledgeDocument) {
+  if (!window.confirm(`确定删除文档「${item.original_filename}」吗？`)) return
+  try {
+    await request<void>(
+      `/knowledge-bases/${selectedId.value}/documents/${item.id}`,
+      'DELETE',
+    )
+    await loadKnowledgeDetail()
+    notify('文档已进入删除队列')
+  } catch (error) {
+    notify(error instanceof Error ? error.message : '删除文档失败')
+  }
+}
+async function reindexAllKnowledgeBase() {
+  if (!selectedId.value || !window.confirm('将对当前知识库所有可用文档重新解析并建立索引，是否继续？')) return
+  knowledgeBusy.value = true
+  try {
+    const result = await request<{ queued_documents: number }>(
+      `/knowledge-bases/${selectedId.value}/reindex`,
+      'POST',
+    )
+    await loadKnowledgeDetail()
+    notify(`已提交 ${result.queued_documents} 份文档的重建索引任务`)
+  } catch (error) {
+    notify(error instanceof Error ? error.message : '批量重建索引失败')
+  } finally {
+    knowledgeBusy.value = false
+  }
+}
+async function searchKnowledge() {
+  if (!selectedId.value || !knowledgeSearchQuery.value.trim()) return
+  knowledgeSearchBusy.value = true
+  try {
+    const result = await request<KnowledgeSearchResponse>(
+      `/knowledge-bases/${selectedId.value}/search`,
+      'POST',
+      { query: knowledgeSearchQuery.value.trim() },
+    )
+    knowledgeSearchHits.value = result.hits
+  } catch (error) {
+    notify(error instanceof Error ? error.message : '知识库检索失败')
+  } finally {
+    knowledgeSearchBusy.value = false
+  }
+}
+function formatBytes(value: number): string {
+  if (value < 1024) return `${value} B`
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`
 }
 
 const keyModal = ref(false)
@@ -645,7 +852,7 @@ async function revokeKey(key: ApiKey) {
     <button v-if="page==='overview'||page==='personas'" class="btn primary" @click="editPersona()"><Plus :size="16"/>新建人格</button>
     <button v-else-if="page==='providers'" class="btn primary" @click="editProvider()"><Plus :size="16"/>添加供应商</button>
     <button v-else-if="page==='knowledge'" class="btn primary" @click="kbModal=true"><Plus :size="16"/>新建知识库</button>
-    <template v-else-if="page==='knowledgeDetail'"><button class="btn secondary" @click="go('knowledge')">返回知识库</button><button class="btn primary" @click="upload"><Upload :size="16"/>上传文档</button></template>
+    <template v-else-if="page==='knowledgeDetail'"><button class="btn secondary" @click="go('knowledge')">返回知识库</button><button class="btn secondary" @click="importKnowledgeUrl" :disabled="knowledgeBusy">导入网页</button><button class="btn primary" @click="upload" :disabled="knowledgeBusy"><Upload :size="16"/>上传文档</button></template>
     <button v-else-if="page==='api'" class="btn primary" @click="keyModal=true"><Plus :size="16"/>创建 API Key</button>
     <button v-else-if="page==='usage'" class="btn secondary" disabled><Download :size="16"/>暂无可导出数据</button>
     <button v-else-if="page==='billing'" class="btn secondary" @click="loadBilling(true)" :disabled="billingLoading"><Activity :size="16"/>刷新权益</button>
@@ -686,17 +893,79 @@ async function revokeKey(key: ApiKey) {
    </template>
 
    <template v-else-if="page==='knowledge'">
-    <section class="kb-summary"><div><Database :size="18"/><small>知识库总数</small><b>{{kbs.length}} 个</b></div><div><FileText :size="18"/><small>文档总数</small><b>{{totalDocs}} 份</b></div><div><CheckCircle2 :size="18"/><small>文档索引</small><b>待接入</b></div></section>
-    <section class="kb-grid"><article v-for="k in kbs" :key="k.id" class="kb-card"><div class="kb-card-head"><span class="kb-icon" :class="k.color"><Database :size="20"/></span><button @click="deleteKb(k)" aria-label="删除知识库"><Trash2 :size="17"/></button></div><h3>{{k.name}}</h3><p>{{k.description||'暂无描述'}}</p><div class="kb-meta"><span><FileText :size="13"/> {{k.documents_count}} 份文档</span><span>最近更新</span></div><footer><small><i></i>元数据已保存</small><a @click="openKb(k)">管理知识库 →</a></footer></article><button class="kb-create" @click="kbModal=true"><span><Plus :size="22"/></span><b>创建知识库</b><small>管理知识库元数据</small></button></section>
-    <div class="info"><AlertCircle :size="17"/><div><b>当前阶段边界</b><small>知识库元数据与人格关联已接入数据库。文档上传、解析、切片和向量化检索将在后续知识库阶段实现。</small></div></div>
+    <section class="kb-summary">
+     <div><Database :size="18"/><small>知识库总数</small><b>{{kbs.length}} 个</b></div>
+     <div><FileText :size="18"/><small>文档总数</small><b>{{totalDocs}} 份</b></div>
+     <div><CheckCircle2 :size="18"/><small>已配置 Embedding</small><b>{{kbs.filter(kb => kb.embedding_source === 'byok' ? !!kb.embedding_provider_id : !!kb.platform_embedding_model_id).length}} 个</b></div>
+    </section>
+    <section class="kb-grid">
+     <article v-for="k in kbs" :key="k.id" class="kb-card">
+      <div class="kb-card-head"><span class="kb-icon" :class="k.color"><Database :size="20"/></span><button @click="deleteKb(k)" aria-label="删除知识库"><Trash2 :size="17"/></button></div>
+      <h3>{{k.name}}</h3><p>{{k.description||'暂无描述'}}</p>
+      <div class="kb-meta"><span><FileText :size="13"/> {{k.documents_count}} 份文档</span><span>{{k.embedding_source==='platform'?'平台 Embedding':'BYOK Embedding'}}</span></div>
+      <footer><small><i></i>知识库已配置</small><a @click="openKb(k)">管理知识库 →</a></footer>
+     </article>
+     <button class="kb-create" @click="kbModal=true"><span><Plus :size="22"/></span><b>创建知识库</b><small>配置 Embedding 与检索参数</small></button>
+    </section>
+    <div v-if="!embeddingModels.length" class="info"><AlertCircle :size="17"/><div><b>平台 Embedding 尚未配置</b><small>管理员需要先在 /admin/platform/embedding-models 配置 1536 维度的 Embedding 模型；也可以在创建知识库时使用支持 Embedding 的 BYOK 供应商。</small></div></div>
    </template>
 
    <template v-else-if="page==='knowledgeDetail'">
-    <section class="panel kb-detail"><span class="kb-icon" :class="selectedKb.color"><Database :size="23"/></span><div><h2>{{selectedKb.name}}</h2><p>{{selectedKb.description}}</p><small>{{selectedKb.documents_count}} 份文档 · 文档处理待接入</small></div><button class="btn secondary" @click="deleteKb(selectedKb)"><Trash2 :size="15"/>删除知识库</button></section>
-    <section class="panel"><div class="panel-title"><div><b>文档管理</b><small>文档上传、解析和向量化检索将在后续知识库阶段实现。</small></div><button class="btn secondary small" @click="upload"><Upload :size="14"/>上传文档</button></div><div class="empty"><FileText :size="28"/><b>当前知识库还没有文档</b><small>本阶段已完成知识库元数据保存；文档处理流水线将在后续阶段接入。</small></div></section>
-    <section class="panel binding"><div class="panel-title"><div><b>已关联人格</b><small>一个知识库可以关联多个 AI 人格；在人格编辑窗口中管理关联。</small></div><a @click="go('personas')">管理人格 →</a></div><span v-for="persona in linkedPersonas" :key="persona.id"><Bot :size="14"/> {{persona.name}} <Check :size="13"/></span><div v-if="!linkedPersonas.length" class="empty"><b>尚未关联人格</b><small>编辑人格并选择此知识库即可建立关联。</small></div></section>
+    <section class="panel kb-detail">
+     <span class="kb-icon" :class="selectedKb.color"><Database :size="23"/></span>
+     <div><h2>{{selectedKb.name}}</h2><p>{{selectedKb.description}}</p><small>{{selectedKb.embedding_source==='platform'?'平台 Embedding':'BYOK Embedding'}} · {{selectedKb.embedding_model_name || embeddingModels.find(model => model.id === selectedKb.platform_embedding_model_id)?.model_name || '未配置模型'}} · {{selectedKb.embedding_dimensions}} 维</small></div>
+     <button class="btn secondary" @click="deleteKb(selectedKb)"><Trash2 :size="15"/>删除知识库</button>
+    </section>
+    <section class="metric-strip">
+     <div><small>文档总数</small><b>{{knowledgeUsage?.document_count ?? selectedKb.documents_count}}</b></div>
+     <div><small>可检索文档</small><b class="green-text">{{knowledgeUsage?.ready_documents ?? 0}}</b></div>
+     <div><small>处理中 / 失败</small><b>{{knowledgeUsage?.queued_documents ?? 0}} / {{knowledgeUsage?.failed_documents ?? 0}}</b></div>
+     <div><small>活动切片</small><b>{{knowledgeUsage?.active_chunks.toLocaleString() ?? '—'}}</b></div>
+    </section>
+    <section class="panel">
+     <div class="panel-title"><div><b>文档管理</b><small>支持 PDF、DOCX、PPTX、XLSX、TXT、Markdown、CSV、HTML；单文件默认上限 25 MB。</small></div><div class="heading-actions"><button class="btn secondary small" @click="importKnowledgeUrl" :disabled="knowledgeBusy">导入网页 URL</button><button class="btn primary small" @click="upload" :disabled="knowledgeBusy"><Upload :size="14"/>上传文件</button><button class="btn secondary small" @click="reindexAllKnowledgeBase" :disabled="knowledgeBusy">全部重建索引</button><button class="btn secondary small" @click="loadKnowledgeDetail(true)" :disabled="knowledgeBusy"><Activity :size="14"/>刷新</button></div></div>
+     <div v-if="knowledgeBusy && !knowledgeDocuments.length" class="empty"><Activity :size="25"/><b>正在读取知识库</b></div>
+     <div v-else-if="knowledgeDocuments.length" class="usage-list">
+      <div v-for="item in knowledgeDocuments" :key="item.id" class="usage-row">
+       <div><b>{{item.original_filename}}</b><small>{{item.source_type==='url'?'网页导入':'文件上传'}} · {{formatBytes(item.file_size_bytes)}} · {{item.chunk_count}} 个切片 · {{new Date(item.created_at).toLocaleString()}}</small><small v-if="item.error_message" class="warning">{{item.error_message}}</small></div>
+       <label :class="item.status==='ready'?'running':'paused'">{{item.status==='ready'?'可检索':item.status==='queued'?'排队中':item.status==='processing'?'处理中':item.status==='failed'?'失败':item.status==='deleting'?'删除中':'已删除'}}</label>
+       <div class="row-actions">
+        <button v-if="item.status==='ready'" @click="downloadKnowledgeDocument(item)" aria-label="下载文档"><Download :size="15"/></button>
+        <button v-if="item.status==='failed' || item.status==='deleting'" @click="retryKnowledgeDocument(item)" aria-label="重试"><Activity :size="15"/></button>
+        <button v-if="item.status==='ready'" @click="reindexKnowledgeDocument(item)" aria-label="重建索引"><Zap :size="15"/></button>
+        <button v-if="item.status!=='deleted' && item.status!=='deleting'" @click="deleteKnowledgeDocument(item)" aria-label="删除文档"><Trash2 :size="15"/></button>
+       </div>
+      </div>
+     </div>
+     <div v-else class="empty"><FileText :size="28"/><b>当前知识库还没有文档</b><small>上传文件或导入公开网页，后台 Worker 会自动解析、切片并建立向量索引。</small><button class="btn primary" @click="upload"><Upload :size="15"/>上传第一份文档</button></div>
+    </section>
+    <section class="panel">
+     <div class="panel-title"><div><b>检索调试</b><small>直接测试当前知识库的向量 + 关键词混合检索，并查看真实来源片段。</small></div></div>
+     <form class="toolbar" @submit.prevent="searchKnowledge"><label class="search"><Search :size="16"/><input v-model="knowledgeSearchQuery" placeholder="输入一个问题，例如：退货政策是什么？"></label><button class="btn primary small" type="submit" :disabled="knowledgeSearchBusy || !knowledgeSearchQuery.trim()">{{knowledgeSearchBusy?'检索中…':'测试检索'}}</button></form>
+     <div v-if="knowledgeSearchHits.length" class="kb-search-results">
+      <article v-for="hit in knowledgeSearchHits" :key="hit.chunk_id" class="kb-search-hit">
+       <div><b>{{hit.document_name}}</b><label class="running">{{Math.round(hit.score*100)}}% 匹配</label></div>
+       <small>{{hit.page_number ? '第 '+hit.page_number+' 页' : hit.sheet_name ? '工作表 '+hit.sheet_name : hit.slide_number ? '幻灯片 '+hit.slide_number : '切片 '+(hit.chunk_index+1)}} · 向量排名 {{hit.vector_rank ?? '—'}} · 关键词排名 {{hit.lexical_rank ?? '—'}}</small>
+       <p>{{hit.snippet}}</p>
+      </article>
+     </div>
+     <div v-else class="empty"><Search :size="24"/><b>输入问题开始检索</b><small>检索结果会显示来源文档、页码和匹配分数；没有相关资料时不会虚构引用。</small></div>
+    </section>
+    <section class="panel">
+     <div class="panel-title"><div><b>知识库用量（仅统计，不扣费）</b><small>Embedding 和检索资源将在最后商业化阶段再纳入真实收费。</small></div><label class="paused">SHADOW · 不扣款</label></div>
+     <div class="usage-mini-grid">
+      <div><small>存储空间</small><b>{{formatBytes(knowledgeUsage?.storage_bytes ?? 0)}}</b></div>
+      <div><small>Embedding Token</small><b>{{knowledgeUsage?.embedding_tokens.toLocaleString() ?? '—'}}</b></div>
+      <div><small>Embedding 请求</small><b>{{knowledgeUsage?.embedding_requests.toLocaleString() ?? '—'}}</b></div>
+      <div><small>检索次数</small><b>{{knowledgeUsage?.retrieval_requests.toLocaleString() ?? '—'}}</b></div>
+     </div>
+    </section>
+    <section class="panel binding"><div class="panel-title"><div><b>已关联人格</b><small>Persona 关联此知识库后，Chat Completions 会自动执行 RAG 并返回引用。</small></div><a @click="go('personas')">管理人格 →</a></div><span v-for="persona in linkedPersonas" :key="persona.id"><Bot :size="14"/> {{persona.name}} <Check :size="13"/></span><div v-if="!linkedPersonas.length" class="empty"><b>尚未关联人格</b><small>编辑人格并选择此知识库即可启用自动 RAG。</small></div></section>
    </template>
 
+
+
+   <template v-else-if="page==='chatImports'"><ChatImportsView @notify="notify" /></template>
 
    <template v-else-if="page==='api'">
     <section class="api-notice"><ShieldCheck :size="21"/><div><b>一个用户级密钥，调用多个独立人格</b><p>OpenAI 兼容网关已开放。所有人格共用当前用户的 API Key，通过请求中的 model 字段选择人格。</p></div></section>
@@ -819,7 +1088,24 @@ async function revokeKey(key: ApiKey) {
   </div>
   <div class="modal-actions"><button class="btn secondary" @click="personaModal=false">取消</button><button class="btn primary" @click="savePersona"><Check :size="15"/>保存人格</button></div>
  </section></div>
- <div v-if="kbModal" class="modal-backdrop" @click.self="kbModal=false"><section class="modal small-modal"><div class="modal-title"><div><small>KNOWLEDGE BASE</small><h2>创建知识库</h2><p>建立独立资料空间，后续可关联到不同人格。</p></div><button @click="kbModal=false"><X :size="18"/></button></div><div class="form-grid"><label class="full">知识库名称 <b>*</b><input v-model="kbForm.name" placeholder="例如：产品资料库"></label><label class="full">知识库描述<textarea v-model="kbForm.description" rows="3" placeholder="说明知识库包含哪些内容..."></textarea></label></div><div class="modal-actions"><button class="btn secondary" @click="kbModal=false">取消</button><button class="btn primary" @click="createKb"><Plus :size="15"/>创建知识库</button></div></section></div>
+ <div v-if="kbModal" class="modal-backdrop" @click.self="kbModal=false"><section class="modal small-modal"><div class="modal-title"><div><small>KNOWLEDGE BASE</small><h2>创建知识库</h2><p>配置资料空间、Embedding 模型和检索参数。</p></div><button @click="kbModal=false"><X :size="18"/></button></div>
+  <div class="form-grid">
+   <label class="full">知识库名称 <b>*</b><input v-model="kbForm.name" maxlength="100" placeholder="例如：产品资料库"></label>
+   <label class="full">知识库描述<textarea v-model="kbForm.description" rows="2" maxlength="500" placeholder="说明知识库包含哪些内容..."></textarea></label>
+   <label class="full">Embedding 来源<select v-model="kbForm.embedding_source"><option value="platform">使用 SuperNova 平台 Embedding</option><option value="byok">使用自己的供应商 API Key（BYOK）</option></select></label>
+   <label v-if="kbForm.embedding_source==='platform'" class="full">平台 Embedding 模型<select v-model="kbForm.platform_embedding_model_id"><option value="">请选择模型</option><option v-for="model in embeddingModels" :key="model.id" :value="model.id">{{model.display_name}}（{{model.model_name}} · {{model.dimensions}} 维）</option></select><small v-if="!embeddingModels.length">管理员尚未发布可用的平台 Embedding 模型。</small></label>
+   <template v-else>
+    <label class="full">模型供应商<select v-model="kbForm.embedding_provider_id"><option value="">请选择已配置 API Key 的供应商</option><option v-for="provider in providers" :key="provider.id" :value="provider.id" :disabled="!provider.enabled || !provider.has_api_key || provider.provider_type==='anthropic'">{{provider.name}}（{{provider.provider_type}}）</option></select></label>
+    <label class="full">Embedding 模型名称<input v-model="kbForm.embedding_model_name" maxlength="120" placeholder="例如：text-embedding-3-small"><small>供应商必须兼容 OpenAI /embeddings 接口，并返回 1536 维向量。</small></label>
+   </template>
+   <label>切片长度（字符）<input v-model.number="kbForm.chunk_size" type="number" min="100" max="4000"></label>
+   <label>切片重叠（字符）<input v-model.number="kbForm.chunk_overlap" type="number" min="0" max="3999"></label>
+   <label>检索 Top K<input v-model.number="kbForm.retrieval_top_k" type="number" min="1" max="20"></label>
+   <label>相似度阈值<input v-model.number="kbForm.retrieval_score_threshold" type="number" min="0" max="1" step="0.05"></label>
+   <small class="form-hint full">当前向量索引固定为 1536 维。更换 Embedding 模型需要重建知识库索引，不能混用不同向量空间。</small>
+  </div>
+  <div class="modal-actions"><button class="btn secondary" @click="kbModal=false">取消</button><button class="btn primary" @click="createKb"><Plus :size="15"/>创建知识库</button></div>
+ </section></div>
  <div v-if="providerModal" class="modal-backdrop" @click.self="providerModal=false"><section class="modal small-modal"><div class="modal-title"><div><small>MODEL PROVIDER</small><h2>{{editingProviderId?'编辑模型供应商':'添加模型供应商'}}</h2><p>API Key 会在服务端加密保存，读取接口不会返回明文。</p></div><button @click="providerModal=false"><X :size="18"/></button></div>
   <div class="form-grid">
    <label class="full">供应商名称 <b>*</b><input v-model="providerForm.name" maxlength="80" placeholder="例如：DeepSeek 主账户"></label>
