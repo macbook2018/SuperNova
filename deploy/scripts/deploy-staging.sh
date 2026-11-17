@@ -20,7 +20,17 @@ mkdir -p backups
 COMPOSE=(docker compose --project-name supernova-staging --env-file .env -f compose.staging.yaml)
 
 "${COMPOSE[@]}" config --quiet
-"${COMPOSE[@]}" pull api console
+
+API_IMAGE="ghcr.io/macbook2018/supernova-api:${TAG}"
+CONSOLE_IMAGE="ghcr.io/macbook2018/supernova-console:${TAG}"
+for image in "$API_IMAGE" "$CONSOLE_IMAGE"; do
+  if ! docker image inspect "$image" >/dev/null 2>&1; then
+    echo "Required staging image is missing locally: $image"
+    echo "Transfer the immutable Docker images before running deployment."
+    exit 1
+  fi
+done
+
 "${COMPOSE[@]}" up -d postgres redis
 
 wait_for_service_health() {

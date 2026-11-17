@@ -22,7 +22,16 @@ chmod 600 .env
 export SUPERNOVA_IMAGE_TAG="$TAG"
 COMPOSE=(docker compose --project-name supernova-staging --env-file .env -f compose.staging.yaml)
 
-"${COMPOSE[@]}" pull api console
+API_IMAGE="ghcr.io/macbook2018/supernova-api:${TAG}"
+CONSOLE_IMAGE="ghcr.io/macbook2018/supernova-console:${TAG}"
+for image in "$API_IMAGE" "$CONSOLE_IMAGE"; do
+  if ! docker image inspect "$image" >/dev/null 2>&1; then
+    echo "Rollback image is not available locally: $image"
+    echo "Rollback images are retained locally after successful deployments."
+    exit 1
+  fi
+done
+
 "${COMPOSE[@]}" up -d api knowledge-worker chat-import-worker console
 
 for attempt in $(seq 1 45); do
