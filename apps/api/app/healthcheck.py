@@ -26,7 +26,7 @@ def worker_process_running(
                 continue
             argv = [
                 part.decode("utf-8", errors="replace")
-                for part in cmdline_path.read_bytes().split(b"\\0")
+                for part in cmdline_path.read_bytes().split(b"\0")
                 if part
             ]
         except (OSError, ValueError):
