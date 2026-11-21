@@ -14,16 +14,16 @@ This is a temporary, low-concurrency staging deployment. It is isolated from the
 
 The Compose memory limits total about 976 MiB. They are ceilings, not guaranteed reservations. Monitor host memory, Swap, container OOM events and disk during testing. If memory pressure rises, stop staging workloads and review before changing existing services.
 
-## Domains (proposed; confirm before DNS changes)
+## Domains (confirmed)
 
-- Console: bot.ai-supernova.com
-- API: api.ai-supernova.com
+- Console: bot.wet001.com
+- API: api.wet001.com
 
 Create A records for both names pointing to Server A's public IP. Do not change existing DNS records.
 
 In Baota:
-1. Add a site for bot.ai-supernova.com, issue/attach its HTTPS certificate, and reverse-proxy / to http://127.0.0.1:18083.
-2. Add a site for api.ai-supernova.com, issue/attach its HTTPS certificate, and reverse-proxy / to http://127.0.0.1:18082.
+1. Add a site for bot.wet001.com, issue/attach its HTTPS certificate, and reverse-proxy / to http://127.0.0.1:18083.
+2. Add a site for api.wet001.com, issue/attach its HTTPS certificate, and reverse-proxy / to http://127.0.0.1:18082.
 3. For the API site, set client_max_body_size 45m and proxy read/send timeouts to at least 300 seconds.
 4. Preserve all existing vhost files. Do not replace the global Nginx configuration.
 
@@ -77,7 +77,7 @@ Repository: Settings -> Secrets and variables -> Actions.
 Variables:
 - STAGING_DEPLOY_ENABLED = true (set this only after one-time server setup and GitHub Actions runner checks).
 - STAGING_DEPLOY_PATH = /opt/supernova-staging.
-- STAGING_API_BASE_URL = https://api.ai-supernova.com (change if another API domain is selected).
+- STAGING_API_BASE_URL = https://api.wet001.com (change if another API domain is selected).
 
 Secrets:
 - STAGING_HOST = Server A public IP.

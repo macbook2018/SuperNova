@@ -42,7 +42,7 @@
 - 核实新版本 `.last_successful_tag`、GitHub Actions 部署记录、所有六个容器当前健康状态。
 - 检查页面 Network 中所有请求均指向 `api.wet001.com`，并验收 CORS 预检。
 - 继续验收 Persona 人格学习、FAQ 提取、知识审核与发布、RAG、微信聊天导入、API Key 和模型调用。
-- 更新仓库中仍引用 `ai-supernova.com` 的模板、Dockerfile 默认值、CI 测试配置及旧部署文档，避免未来重新部署回退到旧域名。
+- 已将 Staging 部署文档、Console Dockerfile 的 API 默认地址、CI 的 CORS 测试源和 `STAGING_API_BASE_URL` 回退值更新为 `wet001.com`；仍建议在后续仓库扫描中检查其他历史示例，避免旧域名残留。
 - 品牌图标已统一更换：使用 `apps/console/public/logo.ico`（256×256），浏览器 favicon、登录/注册页、后台侧边栏和工作台首页均引用同一文件；旧 `logo.svg` 已从 public 目录移除。
 
 > 本文记录用户已验收的事实和待核验事项，不构成 Phase 6 业务功能的全部通过证明。
