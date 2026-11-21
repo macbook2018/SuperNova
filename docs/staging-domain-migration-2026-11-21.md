@@ -43,6 +43,6 @@
 - 检查页面 Network 中所有请求均指向 `api.wet001.com`，并验收 CORS 预检。
 - 继续验收 Persona 人格学习、FAQ 提取、知识审核与发布、RAG、微信聊天导入、API Key 和模型调用。
 - 更新仓库中仍引用 `ai-supernova.com` 的模板、Dockerfile 默认值、CI 测试配置及旧部署文档，避免未来重新部署回退到旧域名。
-- 品牌图标更换尚未实施：现有 `apps/console/public/logo.svg` 被 `apps/console/src/App.vue` 的登录页、侧栏和首页引用；favicon 应单独加入 `apps/console/public/logo.ico` 并在 `apps/console/index.html` 添加 `<link rel="icon" type="image/x-icon" href="/logo.ico">`。
+- 品牌图标已统一更换：使用 `apps/console/public/logo.ico`（256×256），浏览器 favicon、登录/注册页、后台侧边栏和工作台首页均引用同一文件；旧 `logo.svg` 已从 public 目录移除。
 
 > 本文记录用户已验收的事实和待核验事项，不构成 Phase 6 业务功能的全部通过证明。

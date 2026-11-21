@@ -823,7 +823,7 @@ async function revokeKey(key: ApiKey) {
 <template>
 <section v-if="!authenticated" class="auth-shell">
  <div class="auth-card">
-  <div class="auth-brand"><img src="/logo.svg" alt="SuperNova"><div><b>SuperNova</b><small>智能体服务平台</small></div></div>
+  <div class="auth-brand"><img src="/logo.ico" alt="SuperNova"><div><b>SuperNova</b><small>智能体服务平台</small></div></div>
   <div class="auth-intro"><span>WELCOME TO SUPERNOVA</span><h1>{{authMode==='login'?'欢迎回来':'创建你的工作空间'}}</h1><p>{{authMode==='login'?'登录后管理你的人格、模型供应商和知识库。':'注册账户后即可创建独立的 AI 人格与模型配置。'}}</p></div>
   <div class="auth-tabs"><button :class="{active:authMode==='login'}" @click="authMode='login';authError=''">登录</button><button :class="{active:authMode==='register'}" @click="authMode='register';authError=''">注册账户</button></div>
   <form class="auth-form" @submit.prevent="submitAuth">
@@ -840,7 +840,7 @@ async function revokeKey(key: ApiKey) {
 <div v-else class="app-shell">
  <div v-if="mobileOpen" class="scrim" @click="mobileOpen=false"></div>
  <aside class="sidebar" :class="{'sidebar-open':mobileOpen}">
-  <div class="brand"><img src="/logo.svg" alt="SuperNova"><div><b>SuperNova</b><small>智能体平台</small></div><i>BETA</i></div>
+  <div class="brand"><img src="/logo.ico" alt="SuperNova"><div><b>SuperNova</b><small>智能体平台</small></div><i>BETA</i></div>
   <button class="workspace" @click="notify('当前账户使用单一默认工作空间')"><span>{{(currentTenant?.name||'S').slice(0,1).toUpperCase()}}</span><div><b>{{currentTenant?.name||'我的工作空间'}}</b><small>{{currentTenant?.role==='owner'?'工作空间所有者':'工作空间成员'}}</small></div><ChevronDown :size="15"/></button>
   <nav><div v-for="g in nav" :key="g.label" class="nav-group"><small>{{g.label}}</small><button v-for="n in g.items" :key="n.key" :class="{active:activeNav===n.key}" @click="go(n.key)"><component :is="n.icon" :size="18"/>{{n.label}}<em v-if="n.key==='personas'">{{personas.length}}</em></button></div></nav>
   <div class="sidebar-bottom"><div class="help"><LifeBuoy :size="17"/><div><b>需要帮助？</b><small>查看使用指南与接口文档</small></div></div><button class="side-setting" @click="go('settings')"><Settings2 :size="17"/>账户设置</button><div class="profile"><span>{{(currentUser?.display_name||'U').slice(0,1).toUpperCase()}}</span><div><b>{{currentUser?.display_name||'用户'}}</b><small>{{currentUser?.email}}</small></div><button @click="logout" aria-label="退出登录"><LogOut :size="16"/></button></div></div>
@@ -859,7 +859,7 @@ async function revokeKey(key: ApiKey) {
    </div></div>
 
    <template v-if="page==='overview'">
-    <section class="hero"><div><span><Sparkles :size="14"/>让 AI 助手开始为你工作</span><h2>你好，{{currentUser?.display_name||'用户'}} <i>✦</i></h2><p>你的智能体工作空间已准备就绪。创建人格、连接知识库，开始构建专属 AI 助手。</p><button @click="go('personas')">管理我的人格 <ArrowRight :size="15"/></button></div><div class="hero-art"><div class="orbit one"></div><div class="orbit two"></div><img src="/logo.svg" alt=""><i class="orb-a"></i><i class="orb-b"></i><i class="orb-c"></i></div></section>
+    <section class="hero"><div><span><Sparkles :size="14"/>让 AI 助手开始为你工作</span><h2>你好，{{currentUser?.display_name||'用户'}} <i>✦</i></h2><p>你的智能体工作空间已准备就绪。创建人格、连接知识库，开始构建专属 AI 助手。</p><button @click="go('personas')">管理我的人格 <ArrowRight :size="15"/></button></div><div class="hero-art"><div class="orbit one"></div><div class="orbit two"></div><img src="/logo.ico" alt=""><i class="orb-a"></i><i class="orb-b"></i><i class="orb-c"></i></div></section>
     <section class="stats">
      <article><div><span class="ico blue"><Bot :size="18"/></span>我的人格<button @click="go('personas')"><MoreHorizontal :size="17"/></button></div><strong>{{personas.length}}<small>个</small></strong><footer><b>{{personas.filter(p=>p.enabled).length}} 个已启用</b><span>共创建</span></footer></article>
      <article><div><span class="ico purple"><Zap :size="18"/></span>本月 Token 消耗<button @click="go('usage')"><MoreHorizontal :size="17"/></button></div><strong>—</strong><footer><span>Phase 4 接入真实计量</span></footer></article>
