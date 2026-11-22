@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Header, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select
 
 from app.api.deps import CurrentPrincipal, DatabaseSession, Principal
@@ -19,6 +19,13 @@ router = APIRouter(tags=["平台权限"])
 class PlatformRoleChangeRequest(BaseModel):
     reason: str = Field(min_length=3, max_length=500)
     expires_at: datetime | None = None
+
+    @field_validator("expires_at")
+    @classmethod
+    def require_timezone_for_expiry(cls, value: datetime | None) -> datetime | None:
+        if value is not None and value.tzinfo is None:
+            raise ValueError("角色到期时间必须包含时区")
+        return value
 
 
 def require_platform_permission(principal: Principal, permission: str) -> None:
