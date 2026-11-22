@@ -215,7 +215,7 @@ def test_platform_role_grant_rejects_expired_and_inactive_assignments(
             db,
             code="temporary_support",
             name="临时支持",
-            permissions=("platform.users.read",),
+            permissions=("platform.users.read", "platform.tenants.read"),
         )
         _assign_role(db, user_id=UUID(actor["user"]["id"]), role=super_admin)
         _assign_role(
@@ -269,3 +269,96 @@ def test_last_active_super_admin_cannot_revoke_own_final_assignment(
     access = client.get("/admin/platform/access", headers=_headers(actor))
     assert access.status_code == 200
     assert "platform.rbac.manage" in access.json()["permissions"]
+
+
+def test_platform_user_search_and_profile_require_users_read_permission(
+    rbac_environment: tuple[TestClient, sessionmaker],
+) -> None:
+    client, factory = rbac_environment
+    actor = _register(client, "platform-user-admin@example.com")
+    target = _register(client, "customer-search@example.com")
+    _register(client, "another-customer@example.com")
+
+    with factory() as db:
+        reader = _seed_role(
+            db,
+            code="support_reader",
+            name="客户支持只读",
+            permissions=("platform.users.read", "platform.tenants.read"),
+        )
+        _assign_role(db, user_id=UUID(actor["user"]["id"]), role=reader)
+
+    headers = _headers(actor)
+    searched = client.get(
+        "/admin/platform/users",
+        headers=headers,
+        params={"q": "customer-search", "limit": 10, "offset": 0},
+    )
+    assert searched.status_code == 200
+    payload = searched.json()
+    assert payload["total"] == 1
+    assert payload["items"][0]["id"] == target["user"]["id"]
+    assert payload["items"][0]["email"] == "customer-search@example.com"
+    assert payload["items"][0]["tenant_count"] == 1
+
+    profile = client.get(
+        f"/admin/platform/users/{target['user']['id']}",
+        headers=headers,
+    )
+    assert profile.status_code == 200
+    detail = profile.json()
+    assert detail["email"] == "customer-search@example.com"
+    assert len(detail["tenants"]) == 1
+    assert detail["tenants"][0]["tenant_id"] == target["tenant"]["id"]
+    assert detail["tenants"][0]["tenant_name"]
+
+    missing = client.get(
+        f"/admin/platform/users/{uuid4()}",
+        headers=headers,
+    )
+    assert missing.status_code == 404
+    assert missing.json()["detail"]["code"] == "user_not_found"
+
+
+def test_platform_user_search_rejects_users_without_read_permission(
+    rbac_environment: tuple[TestClient, sessionmaker],
+) -> None:
+    client, _factory = rbac_environment
+    user = _register(client, "no-platform-user-read@example.com")
+
+    response = client.get("/admin/platform/users", headers=_headers(user))
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "platform_permission_required"
+
+
+def test_platform_user_read_does_not_disclose_tenant_metadata_without_tenant_permission(
+    rbac_environment: tuple[TestClient, sessionmaker],
+) -> None:
+    client, factory = rbac_environment
+    actor = _register(client, "user-read-only@example.com")
+    target = _register(client, "private-tenant-customer@example.com")
+
+    with factory() as db:
+        reader = _seed_role(
+            db,
+            code="user_directory_reader",
+            name="用户目录只读",
+            permissions=("platform.users.read",),
+        )
+        _assign_role(db, user_id=UUID(actor["user"]["id"]), role=reader)
+
+    headers = _headers(actor)
+    listing = client.get("/admin/platform/users", headers=headers)
+    assert listing.status_code == 200
+    target_row = next(
+        item for item in listing.json()["items"]
+        if item["id"] == target["user"]["id"]
+    )
+    assert target_row["tenant_count"] is None
+
+    detail = client.get(
+        f"/admin/platform/users/{target['user']['id']}",
+        headers=headers,
+    )
+    assert detail.status_code == 200
+    assert detail.json()["tenants"] == []

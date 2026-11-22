@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select
 
 from app.api.deps import CurrentPrincipal, DatabaseSession, Principal
-from app.models.identity import User
+from app.models.identity import Tenant, TenantMembership, User
 from app.models.platform_rbac import (
     PlatformAdminAuditLog,
     PlatformRole,
@@ -97,6 +97,109 @@ def list_platform_roles(
         }
         for role in roles
     ]
+
+
+
+
+@router.get("/admin/platform/users")
+def list_platform_users(
+    principal: CurrentPrincipal,
+    db: DatabaseSession,
+    q: str | None = Query(default=None, min_length=1, max_length=160),
+    user_status: str | None = Query(
+        default=None, alias="status", pattern="^(active|disabled)$"
+    ),
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> dict:
+    require_platform_permission(principal, "platform.users.read")
+    statement = select(User)
+    count_statement = select(func.count(User.id))
+    if q:
+        term = f"%{q.strip()}%"
+        condition = User.email.ilike(term) | User.display_name.ilike(term)
+        statement = statement.where(condition)
+        count_statement = count_statement.where(condition)
+    if user_status:
+        statement = statement.where(User.status == user_status)
+        count_statement = count_statement.where(User.status == user_status)
+
+    total = db.scalar(count_statement) or 0
+    rows = db.scalars(
+        statement.order_by(User.created_at.desc(), User.id).offset(offset).limit(limit)
+    ).all()
+    membership_counts = (
+        dict(
+            db.execute(
+                select(TenantMembership.user_id, func.count(TenantMembership.id))
+                .where(TenantMembership.user_id.in_([item.id for item in rows]))
+                .group_by(TenantMembership.user_id)
+            ).all()
+        )
+        if rows
+        else {}
+    )
+    return {
+        "items": [
+            {
+                "id": str(item.id),
+                "email": item.email,
+                "display_name": item.display_name,
+                "status": item.status,
+                "created_at": item.created_at.isoformat(),
+                "tenant_count": (
+                    membership_counts.get(item.id, 0)
+                    if "platform.tenants.read" in principal.platform_permissions
+                    else None
+                ),
+            }
+            for item in rows
+        ],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@router.get("/admin/platform/users/{user_id}")
+def get_platform_user(
+    user_id: UUID,
+    principal: CurrentPrincipal,
+    db: DatabaseSession,
+) -> dict:
+    require_platform_permission(principal, "platform.users.read")
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "user_not_found", "message": "用户不存在"},
+        )
+    memberships = []
+    if "platform.tenants.read" in principal.platform_permissions:
+        memberships = db.execute(
+            select(TenantMembership, Tenant)
+            .join(Tenant, Tenant.id == TenantMembership.tenant_id)
+            .where(TenantMembership.user_id == user_id)
+            .order_by(TenantMembership.created_at.desc())
+        ).all()
+    return {
+        "id": str(user.id),
+        "email": user.email,
+        "display_name": user.display_name,
+        "status": user.status,
+        "created_at": user.created_at.isoformat(),
+        "tenants": [
+            {
+                "tenant_id": str(membership.tenant_id),
+                "tenant_name": tenant.name,
+                "tenant_status": tenant.status,
+                "membership_role": membership.role,
+                "membership_status": membership.status,
+                "joined_at": membership.created_at.isoformat(),
+            }
+            for membership, tenant in memberships
+        ],
+    }
 
 
 @router.post(

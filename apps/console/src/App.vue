@@ -118,6 +118,7 @@ const activeNav = computed(() => page.value === 'knowledgeDetail' ? 'knowledge' 
 const platformRbacAccess = ref(false)
 const platformRbacManage = ref(false)
 const platformAuditRead = ref(false)
+const platformUsersRead = ref(false)
 const visibleNav = computed(() => nav.map(group => ({
   ...group,
   items: group.items.filter(item => {
@@ -234,7 +235,8 @@ async function loadPlatformAdminAccess() {
       || access.permissions.includes('platform.models.manage')
     platformRbacManage.value = access.permissions.includes('platform.rbac.manage')
     platformAuditRead.value = access.permissions.includes('platform.audit.read')
-    platformRbacAccess.value = platformRbacManage.value || platformAuditRead.value
+    platformUsersRead.value = access.permissions.includes('platform.users.read')
+    platformRbacAccess.value = platformRbacManage.value || platformAuditRead.value || platformUsersRead.value
     if (!platformAdminAccess.value && page.value === 'platformAdmin') page.value = 'overview'
     if (!platformRbacAccess.value && page.value === 'platformAccess') page.value = 'overview'
   } catch {
@@ -242,6 +244,7 @@ async function loadPlatformAdminAccess() {
     platformRbacAccess.value = false
     platformRbacManage.value = false
     platformAuditRead.value = false
+    platformUsersRead.value = false
     if (page.value === 'platformAdmin' || page.value === 'platformAccess') page.value = 'overview'
   }
 }
@@ -373,6 +376,7 @@ async function logout() {
   platformRbacAccess.value = false
   platformRbacManage.value = false
   platformAuditRead.value = false
+  platformUsersRead.value = false
   personas.value = []
   providers.value = []
   kbs.value = []
@@ -964,7 +968,7 @@ async function revokeKey(key: ApiKey) {
    </template>
 
    <PlatformAdminView v-else-if="page==='platformAdmin'" />
-   <PlatformAccessView v-else-if="page==='platformAccess'" :can-manage="platformRbacManage" :can-audit="platformAuditRead" />
+   <PlatformAccessView v-else-if="page==='platformAccess'" :can-manage="platformRbacManage" :can-audit="platformAuditRead" :can-read-users="platformUsersRead" />
 
    <template v-else-if="page==='knowledge'">
     <section class="kb-summary">
