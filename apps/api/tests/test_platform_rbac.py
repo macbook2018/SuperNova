@@ -362,3 +362,116 @@ def test_platform_user_read_does_not_disclose_tenant_metadata_without_tenant_per
     )
     assert detail.status_code == 200
     assert detail.json()["tenants"] == []
+
+
+def test_platform_tenant_directory_and_lifecycle_are_permission_gated(
+    rbac_environment: tuple[TestClient, sessionmaker],
+) -> None:
+    client, factory = rbac_environment
+    actor = _register(client, "tenant-operator@example.com")
+    customer = _register(client, "tenant-customer@example.com")
+
+    with factory() as db:
+        operator = _seed_role(
+            db,
+            code="tenant_operator",
+            name="租户运营",
+            permissions=("platform.tenants.read", "platform.tenants.manage", "platform.audit.read"),
+        )
+        _assign_role(db, user_id=UUID(actor["user"]["id"]), role=operator)
+
+    headers = _headers(actor)
+    listing = client.get("/admin/platform/tenants", headers=headers)
+    assert listing.status_code == 200
+    tenant_row = next(
+        item for item in listing.json()["items"]
+        if item["id"] == customer["tenant"]["id"]
+    )
+    assert tenant_row["name"] == customer["tenant"]["name"]
+    assert tenant_row["member_count"] is None
+
+    detail = client.get(
+        f"/admin/platform/tenants/{customer['tenant']['id']}",
+        headers=headers,
+    )
+    assert detail.status_code == 200
+    assert detail.json()["members"] == []
+    assert detail.json()["member_count"] is None
+
+    disabled = client.patch(
+        f"/admin/platform/tenants/{customer['tenant']['id']}/status",
+        headers=headers,
+        json={"status": "disabled", "reason": "客户申请暂停服务"},
+    )
+    assert disabled.status_code == 200
+    assert disabled.json()["status"] == "disabled"
+
+    enabled = client.patch(
+        f"/admin/platform/tenants/{customer['tenant']['id']}/status",
+        headers=headers,
+        json={"status": "active", "reason": "客户恢复服务"},
+    )
+    assert enabled.status_code == 200
+    assert enabled.json()["status"] == "active"
+
+    audit = client.get("/admin/platform/audit-logs", headers=headers)
+    assert audit.status_code == 200
+    tenant_actions = [
+        item for item in audit.json()
+        if item["resource_type"] == "tenant"
+        and item["resource_id"] == customer["tenant"]["id"]
+    ]
+    assert [item["action"] for item in tenant_actions] == [
+        "platform.tenant.enable",
+        "platform.tenant.disable",
+    ]
+
+
+def test_platform_tenant_cannot_disable_workspace_containing_active_super_admin(
+    rbac_environment: tuple[TestClient, sessionmaker],
+) -> None:
+    client, factory = rbac_environment
+    actor = _register(client, "tenant-lockout-operator@example.com")
+    admin = _register(client, "tenant-lockout-superadmin@example.com")
+
+    with factory() as db:
+        operator = _seed_role(
+            db,
+            code="tenant_lockout_operator",
+            name="租户管理员",
+            permissions=("platform.tenants.read", "platform.tenants.manage"),
+        )
+        super_admin = _seed_role(
+            db,
+            code="super_admin",
+            name="超级管理员",
+            permissions=("platform.rbac.manage",),
+        )
+        _assign_role(db, user_id=UUID(actor["user"]["id"]), role=operator)
+        _assign_role(db, user_id=UUID(admin["user"]["id"]), role=super_admin)
+
+    response = client.patch(
+        f"/admin/platform/tenants/{admin['tenant']['id']}/status",
+        headers=_headers(actor),
+        json={"status": "disabled", "reason": "测试管理员保护"},
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "tenant_contains_super_admin"
+
+    current = client.get(
+        f"/admin/platform/tenants/{admin['tenant']['id']}",
+        headers=_headers(actor),
+    )
+    assert current.status_code == 200
+    assert current.json()["status"] == "active"
+
+
+def test_platform_tenant_directory_requires_tenant_read_permission(
+    rbac_environment: tuple[TestClient, sessionmaker],
+) -> None:
+    client, _factory = rbac_environment
+    user = _register(client, "tenant-directory-forbidden@example.com")
+
+    response = client.get("/admin/platform/tenants", headers=_headers(user))
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "platform_permission_required"

@@ -26,6 +26,24 @@ interface PlatformUserDetail extends PlatformUser {
     joined_at: string
   }>
 }
+interface PlatformTenant {
+  id: string
+  name: string
+  status: string
+  created_at: string
+  member_count: number | null
+}
+interface PlatformTenantDetail extends PlatformTenant {
+  members: Array<{
+    user_id: string
+    email: string
+    display_name: string
+    user_status: string
+    membership_role: string
+    membership_status: string
+    joined_at: string
+  }>
+}
 interface UserRole {
   role: string
   name: string
@@ -49,7 +67,13 @@ interface AuditLog {
   created_at: string
 }
 
-const props = defineProps<{ canManage: boolean; canAudit: boolean; canReadUsers: boolean }>()
+const props = defineProps<{
+  canManage: boolean
+  canAudit: boolean
+  canReadUsers: boolean
+  canReadTenants: boolean
+  canManageTenants: boolean
+}>()
 
 const roles = ref<PlatformRole[]>([])
 const users = ref<PlatformUser[]>([])
@@ -59,6 +83,14 @@ const userOffset = ref(0)
 const userPageSize = 30
 const userDetail = ref<PlatformUserDetail | null>(null)
 const usersLoading = ref(false)
+const tenants = ref<PlatformTenant[]>([])
+const tenantSearch = ref('')
+const tenantTotal = ref(0)
+const tenantOffset = ref(0)
+const tenantPageSize = 30
+const tenantDetail = ref<PlatformTenantDetail | null>(null)
+const tenantsLoading = ref(false)
+const tenantSaving = ref(false)
 const userId = ref('')
 const userRoles = ref<UserRole[]>([])
 const auditLogs = ref<AuditLog[]>([])
@@ -69,7 +101,11 @@ const loading = ref(false)
 const saving = ref(false)
 const error = ref('')
 const notice = ref('')
-const activeTab = ref<'users' | 'assignments' | 'audit'>(props.canReadUsers ? 'users' : props.canManage ? 'assignments' : 'audit')
+const activeTab = ref<'users' | 'tenants' | 'assignments' | 'audit'>(
+  props.canReadUsers ? 'users'
+    : props.canReadTenants ? 'tenants'
+      : props.canManage ? 'assignments' : 'audit',
+)
 
 function message(value: unknown): string {
   return value instanceof Error ? value.message : '请求失败，请稍后重试'
@@ -83,6 +119,69 @@ async function loadRoles() {
   roles.value = await apiRequest<PlatformRole[]>('/admin/platform/roles')
   if (!roles.value.some(role => role.code === selectedRole.value)) {
     selectedRole.value = roles.value[0]?.code ?? ''
+  }
+}
+async function searchTenants() {
+  if (!props.canReadTenants) return
+  tenantsLoading.value = true
+  error.value = ''
+  try {
+    const params = new URLSearchParams({
+      limit: String(tenantPageSize),
+      offset: String(tenantOffset.value),
+    })
+    if (tenantSearch.value.trim()) params.set('q', tenantSearch.value.trim())
+    const result = await apiRequest<{ items: PlatformTenant[]; total: number }>(
+      `/admin/platform/tenants?${params}`,
+    )
+    tenants.value = result.items
+    tenantTotal.value = result.total
+  } catch (value) {
+    error.value = message(value)
+    tenants.value = []
+  } finally {
+    tenantsLoading.value = false
+  }
+}
+function startTenantSearch() {
+  tenantOffset.value = 0
+  void searchTenants()
+}
+async function selectTenant(tenant: PlatformTenant) {
+  tenantDetail.value = null
+  try {
+    tenantDetail.value = await apiRequest<PlatformTenantDetail>(
+      `/admin/platform/tenants/${encodeURIComponent(tenant.id)}`,
+    )
+  } catch (value) {
+    error.value = message(value)
+  }
+}
+async function changeTenantStatus(tenant: PlatformTenant) {
+  if (!props.canManageTenants) return
+  const nextStatus = tenant.status === 'active' ? 'disabled' : 'active'
+  const action = nextStatus === 'disabled' ? '停用' : '恢复'
+  if (!window.confirm(`确定${action}工作空间「${tenant.name}」吗？`)) return
+  const reason = window.prompt(`请输入${action}原因（至少 3 个字符）`)
+  if (reason === null) return
+  if (reason.trim().length < 3) {
+    error.value = '操作原因至少需要 3 个字符'
+    return
+  }
+  tenantSaving.value = true
+  error.value = ''
+  try {
+    await apiRequest(`/admin/platform/tenants/${encodeURIComponent(tenant.id)}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status: nextStatus, reason: reason.trim() }),
+    })
+    await searchTenants()
+    if (tenantDetail.value?.id === tenant.id) await selectTenant({ ...tenant, status: nextStatus })
+    notify(nextStatus === 'disabled' ? '工作空间已停用' : '工作空间已恢复')
+  } catch (value) {
+    error.value = message(value)
+  } finally {
+    tenantSaving.value = false
   }
 }
 async function searchUsers() {
@@ -197,6 +296,7 @@ async function refresh() {
   try {
     if (props.canManage) await loadRoles()
     if (props.canReadUsers) await searchUsers()
+    if (props.canReadTenants) await searchTenants()
     if (props.canAudit && activeTab.value === 'audit') await loadAudit()
     if (userId.value.trim()) await loadUserRoles()
   } catch (value) {
@@ -218,6 +318,7 @@ onMounted(() => { void refresh() })
     <div v-if="notice" class="rbac-alert success">{{ notice }}</div>
     <div class="rbac-tabs">
       <button v-if="canReadUsers" :class="{active:activeTab==='users'}" @click="activeTab='users';searchUsers()">平台用户</button>
+      <button v-if="canReadTenants" :class="{active:activeTab==='tenants'}" @click="activeTab='tenants';searchTenants()">工作空间</button>
       <button v-if="canManage" :class="{active:activeTab==='assignments'}" @click="activeTab='assignments'">角色授权</button>
       <button v-if="canAudit" :class="{active:activeTab==='audit'}" @click="activeTab='audit';loadAudit()">操作审计</button>
     </div>
@@ -233,6 +334,18 @@ onMounted(() => { void refresh() })
       </table></div>
       <div class="rbac-pagination"><button class="rbac-button secondary" :disabled="usersLoading || userOffset===0" @click="userOffset=Math.max(0,userOffset-userPageSize);searchUsers()">上一页</button><span>{{ userTotal ? Math.floor(userOffset/userPageSize)+1 : 0 }} / {{ Math.max(1,Math.ceil(userTotal/userPageSize)) }} 页</span><button class="rbac-button secondary" :disabled="usersLoading || userOffset+userPageSize>=userTotal" @click="userOffset+=userPageSize;searchUsers()">下一页</button></div>
       <div v-if="userDetail" class="rbac-selected-user"><b>{{ userDetail.display_name }}</b><span>{{ userDetail.email }}</span><small>{{ userDetail.id }}</small><div v-if="userDetail.tenants.length"><b>所属工作空间</b><span v-for="tenant in userDetail.tenants" :key="tenant.tenant_id">{{ tenant.tenant_name }} · {{ tenant.membership_role }} · {{ tenant.membership_status }}</span></div><div v-else>该用户尚未加入工作空间</div></div>
+    </section>
+    <section v-if="canReadTenants && activeTab==='tenants'" class="rbac-panel">
+      <header><div><b>工作空间目录</b><small>查看租户状态与创建时间；成员资料需要额外的用户读取权限。</small></div><button class="rbac-button secondary" :disabled="tenantsLoading" @click="searchTenants">刷新</button></header>
+      <div class="rbac-search"><label>搜索工作空间<input v-model="tenantSearch" placeholder="输入工作空间名称" @keydown.enter="startTenantSearch"></label><button class="rbac-button primary" :disabled="tenantsLoading" @click="startTenantSearch">搜索</button></div>
+      <div class="rbac-directory-meta">共 {{ tenantTotal }} 个工作空间，当前显示 {{ tenants.length }} 个</div>
+      <div v-if="tenantsLoading" class="rbac-empty">正在读取工作空间…</div>
+      <div v-else-if="!tenants.length" class="rbac-empty">没有找到匹配的工作空间</div>
+      <div v-else class="rbac-table-wrap"><table class="rbac-table"><thead><tr><th>工作空间</th><th>状态</th><th>成员数</th><th>创建时间</th><th>操作</th></tr></thead>
+        <tbody><tr v-for="tenant in tenants" :key="tenant.id"><td><b>{{ tenant.name }}</b><small>{{ tenant.id }}</small></td><td><span :class="tenant.status==='active'?'rbac-on':'rbac-off'">{{ tenant.status==='active'?'正常':'已停用' }}</span></td><td>{{ tenant.member_count === null ? '无权限' : tenant.member_count }}</td><td>{{ new Date(tenant.created_at).toLocaleString() }}</td><td><button class="rbac-link" @click="selectTenant(tenant)">详情</button><button v-if="canManageTenants" class="rbac-link" :class="tenant.status==='active'?'danger':''" :disabled="tenantSaving" @click="changeTenantStatus(tenant)">{{ tenant.status==='active'?'停用':'恢复' }}</button></td></tr></tbody>
+      </table></div>
+      <div class="rbac-pagination"><button class="rbac-button secondary" :disabled="tenantsLoading || tenantOffset===0" @click="tenantOffset=Math.max(0,tenantOffset-tenantPageSize);searchTenants()">上一页</button><span>{{ tenantTotal ? Math.floor(tenantOffset/tenantPageSize)+1 : 0 }} / {{ Math.max(1,Math.ceil(tenantTotal/tenantPageSize)) }} 页</span><button class="rbac-button secondary" :disabled="tenantsLoading || tenantOffset+tenantPageSize>=tenantTotal" @click="tenantOffset+=tenantPageSize;searchTenants()">下一页</button></div>
+      <div v-if="tenantDetail" class="rbac-selected-user"><b>{{ tenantDetail.name }}</b><span>{{ tenantDetail.id }}</span><span>状态：{{ tenantDetail.status==='active'?'正常':'已停用' }}</span><div v-if="canReadUsers"><b>工作空间成员（最多展示 100 人）</b><span v-for="member in tenantDetail.members" :key="member.user_id">{{ member.display_name }} · {{ member.email }} · {{ member.membership_role }} · {{ member.membership_status }}</span><span v-if="!tenantDetail.members.length">暂无成员记录</span></div><div v-else>当前角色没有查看成员资料的权限</div></div>
     </section>
     <template v-if="canManage && activeTab==='assignments'">
       <section class="rbac-panel">

@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from typing import Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Header, HTTPException, Query, status
@@ -14,6 +15,14 @@ from app.models.platform_rbac import (
 )
 
 router = APIRouter(tags=["平台权限"])
+
+
+
+
+
+class TenantStatusChangeRequest(BaseModel):
+    status: Literal["active", "disabled"]
+    reason: str = Field(min_length=3, max_length=500)
 
 
 class PlatformRoleChangeRequest(BaseModel):
@@ -99,6 +108,204 @@ def list_platform_roles(
     ]
 
 
+
+
+
+
+@router.get("/admin/platform/tenants")
+def list_platform_tenants(
+    principal: CurrentPrincipal,
+    db: DatabaseSession,
+    q: str | None = Query(default=None, min_length=1, max_length=160),
+    tenant_status: str | None = Query(
+        default=None, alias="status", pattern="^(active|disabled)$"
+    ),
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> dict:
+    require_platform_permission(principal, "platform.tenants.read")
+    statement = select(Tenant)
+    count_statement = select(func.count(Tenant.id))
+    if q:
+        condition = Tenant.name.ilike(f"%{q.strip()}%")
+        statement = statement.where(condition)
+        count_statement = count_statement.where(condition)
+    if tenant_status:
+        statement = statement.where(Tenant.status == tenant_status)
+        count_statement = count_statement.where(Tenant.status == tenant_status)
+
+    total = db.scalar(count_statement) or 0
+    rows = db.scalars(
+        statement.order_by(Tenant.created_at.desc(), Tenant.id)
+        .offset(offset)
+        .limit(limit)
+    ).all()
+    member_counts = (
+        dict(
+            db.execute(
+                select(TenantMembership.tenant_id, func.count(TenantMembership.id))
+                .where(TenantMembership.tenant_id.in_([item.id for item in rows]))
+                .group_by(TenantMembership.tenant_id)
+            ).all()
+        )
+        if rows
+        else {}
+    )
+    return {
+        "items": [
+            {
+                "id": str(item.id),
+                "name": item.name,
+                "status": item.status,
+                "created_at": item.created_at.isoformat(),
+                "member_count": (
+                    member_counts.get(item.id, 0)
+                    if "platform.users.read" in principal.platform_permissions
+                    else None
+                ),
+            }
+            for item in rows
+        ],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@router.get("/admin/platform/tenants/{tenant_id}")
+def get_platform_tenant(
+    tenant_id: UUID,
+    principal: CurrentPrincipal,
+    db: DatabaseSession,
+) -> dict:
+    require_platform_permission(principal, "platform.tenants.read")
+    tenant = db.get(Tenant, tenant_id)
+    if tenant is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "tenant_not_found", "message": "工作空间不存在"},
+        )
+    membership_count = db.scalar(
+        select(func.count(TenantMembership.id)).where(
+            TenantMembership.tenant_id == tenant_id
+        )
+    ) or 0
+    members = []
+    if "platform.users.read" in principal.platform_permissions:
+        members = db.execute(
+            select(TenantMembership, User)
+            .join(User, User.id == TenantMembership.user_id)
+            .where(TenantMembership.tenant_id == tenant_id)
+            .order_by(TenantMembership.created_at.desc())
+            .limit(100)
+        ).all()
+    return {
+        "id": str(tenant.id),
+        "name": tenant.name,
+        "status": tenant.status,
+        "created_at": tenant.created_at.isoformat(),
+        "member_count": (
+            membership_count
+            if "platform.users.read" in principal.platform_permissions
+            else None
+        ),
+        "members": [
+            {
+                "user_id": str(membership.user_id),
+                "email": user.email,
+                "display_name": user.display_name,
+                "user_status": user.status,
+                "membership_role": membership.role,
+                "membership_status": membership.status,
+                "joined_at": membership.created_at.isoformat(),
+            }
+            for membership, user in members
+        ],
+    }
+
+
+@router.patch("/admin/platform/tenants/{tenant_id}/status")
+def update_platform_tenant_status(
+    tenant_id: UUID,
+    payload: TenantStatusChangeRequest,
+    principal: CurrentPrincipal,
+    db: DatabaseSession,
+    request_id: str | None = Header(default=None, alias="X-Request-ID"),
+) -> dict:
+    require_platform_permission(principal, "platform.tenants.manage")
+    tenant = db.get(Tenant, tenant_id)
+    if tenant is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "tenant_not_found", "message": "工作空间不存在"},
+        )
+    if tenant.status not in {"active", "disabled"}:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "tenant_status_not_supported",
+                "message": "当前工作空间状态不能通过此操作修改",
+            },
+        )
+    next_status = payload.status
+    if next_status == tenant.status:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "tenant_status_unchanged", "message": "工作空间状态没有变化"},
+        )
+    if next_status == "disabled":
+        active_super_admin_members = db.scalar(
+            select(func.count(PlatformUserRole.id))
+            .join(PlatformRole, PlatformRole.id == PlatformUserRole.role_id)
+            .join(
+                TenantMembership,
+                TenantMembership.user_id == PlatformUserRole.user_id,
+            )
+            .join(User, User.id == PlatformUserRole.user_id)
+            .where(
+                PlatformRole.code == "super_admin",
+                PlatformUserRole.revoked_at.is_(None),
+                (
+                    PlatformUserRole.expires_at.is_(None)
+                    | (PlatformUserRole.expires_at > datetime.now(UTC))
+                ),
+                User.status == "active",
+                TenantMembership.tenant_id == tenant_id,
+                TenantMembership.status == "active",
+            )
+        ) or 0
+        if active_super_admin_members:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "tenant_contains_super_admin",
+                    "message": "该工作空间包含有效超级管理员，不能停用，以免造成平台管理锁定",
+                },
+            )
+    previous_status = tenant.status
+    tenant.status = next_status
+    record_platform_audit(
+        db,
+        actor_user_id=principal.user.id,
+        target_user_id=None,
+        action=(
+            "platform.tenant.disable"
+            if next_status == "disabled"
+            else "platform.tenant.enable"
+        ),
+        resource_type="tenant",
+        resource_id=str(tenant.id),
+        reason=payload.reason,
+        request_id=request_id,
+        details={"previous_status": previous_status, "new_status": next_status},
+    )
+    db.commit()
+    return {
+        "tenant_id": str(tenant.id),
+        "previous_status": previous_status,
+        "status": tenant.status,
+        "updated": True,
+    }
 
 
 @router.get("/admin/platform/users")
