@@ -63,3 +63,21 @@ The operator has already confirmed that a knowledge base can be created, a Perso
 - `apps/api/tests/test_knowledge_retrieval.py`: tenant scoping, disabled knowledge bases, citation formatting, not-ready fail-closed behavior, and untrusted-content escaping.
 
 A successful live Staging search and Persona chat are still required to mark end-to-end RAG acceptance complete.
+
+## Manual Staging evidence — 2026-11-22
+
+A live Console search was performed against the uploaded TXT knowledge document.
+
+- Query: `多少钱`
+- Source document: `新建 文本文档 (3).txt`
+- Retrieved passage: `产品售价：129元`
+- Displayed match score: `38%`
+- Vector rank: `1`
+- Lexical rank: no match displayed
+
+Result: **vector retrieval passed**. The result points to the expected source document and the source passage contains the expected price.
+
+Acceptance boundary:
+- This observation confirms an actual query embedding + vector retrieval + source snippet return in Staging.
+- It does not independently prove a lexical retrieval hit; the lexical rank was absent for this query.
+- Persona end-to-end answer grounding/citation and the cross-tenant live negative test remain separate acceptance checks.
