@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     runtime_memory_limit: str = "512m"
     runtime_cpu_limit: float = 1.0
     runtime_pids_limit: int = 128
+    runtime_disk_limit_bytes: int = 2 * 1024 * 1024 * 1024
     runtime_worker_poll_seconds: float = 2.0
     runtime_worker_lease_seconds: int = 180
     runtime_heartbeat_timeout_seconds: int = 90
@@ -99,6 +100,8 @@ class Settings(BaseSettings):
             raise ValueError("SUPERNOVA_RUNTIME_CPU_LIMIT must be greater than 0 and at most 8")
         if not 16 <= self.runtime_pids_limit <= 4096:
             raise ValueError("SUPERNOVA_RUNTIME_PIDS_LIMIT must be between 16 and 4096")
+        if not 64 * 1024 * 1024 <= self.runtime_disk_limit_bytes <= 100 * 1024**3:
+            raise ValueError("SUPERNOVA_RUNTIME_DISK_LIMIT_BYTES must be between 64 MiB and 100 GiB")
         if self.access_token_ttl_minutes < 5 or self.access_token_ttl_minutes > 60:
             raise ValueError("SUPERNOVA_ACCESS_TOKEN_TTL_MINUTES must be between 5 and 60")
         if self.knowledge_max_upload_bytes < 1024 or self.knowledge_max_url_bytes < 1024:
