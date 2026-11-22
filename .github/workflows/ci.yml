@@ -175,6 +175,12 @@ jobs:
     name: Transfer and deploy staging images
     if: github.ref == 'refs/heads/feat/phase-6-knowledge-base-rag' && vars.STAGING_DEPLOY_ENABLED == 'true'
     needs: [console, api, compose-smoke]
+    # Serialize every workflow run that targets the single shared Staging host.
+    # Keep the active deployment running; newer pending runs may supersede older pending runs.
+    concurrency:
+      group: supernova-staging-deploy
+      cancel-in-progress: false
+    timeout-minutes: 45
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -261,8 +267,24 @@ jobs:
             echo "ready=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Deploy immutable image tag
+      - name: Verify commit is still the latest Staging branch revision
+        id: latest
         if: steps.bootstrap.outputs.ready == 'true'
+        run: |
+          latest_sha="$(git ls-remote origin refs/heads/feat/phase-6-knowledge-base-rag | awk '{print $1}')"
+          if [ -z "$latest_sha" ]; then
+            echo "Unable to resolve the latest Staging branch revision."
+            exit 1
+          fi
+          if [ "$latest_sha" != "$GITHUB_SHA" ]; then
+            echo "Skipping stale deployment $GITHUB_SHA; branch now points to $latest_sha."
+            echo "is_current=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_current=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Deploy immutable image tag
+        if: steps.bootstrap.outputs.ready == 'true' && steps.latest.outputs.is_current == 'true'
         run: |
           ssh -p "$STAGING_SSH_PORT" "$STAGING_USER@$STAGING_HOST" \
             "set -eu
