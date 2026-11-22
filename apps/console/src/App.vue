@@ -604,6 +604,19 @@ const newKnowledgeBaseForm = () => ({
   enabled: true,
 })
 const kbForm = ref(newKnowledgeBaseForm())
+async function refreshEmbeddingModels() {
+  try {
+    embeddingModels.value = await request<PlatformEmbeddingModel[]>('/platform/embedding-models')
+    if (!embeddingModels.value.some(model => model.id === kbForm.value.platform_embedding_model_id)) {
+      kbForm.value.platform_embedding_model_id = embeddingModels.value[0]?.id ?? ''
+    }
+    notify(embeddingModels.value.length
+      ? '已刷新平台 Embedding 模型'
+      : '暂无可用模型，请管理员检查凭据引用和模型启用状态')
+  } catch (error) {
+    notify(error instanceof Error ? error.message : '刷新 Embedding 模型失败')
+  }
+}
 async function createKb() {
   if (!kbForm.value.name.trim()) {
     notify('请填写知识库名称')
@@ -933,7 +946,7 @@ async function revokeKey(key: ApiKey) {
      </article>
      <button class="kb-create" @click="kbModal=true"><span><Plus :size="22"/></span><b>创建知识库</b><small>配置 Embedding 与检索参数</small></button>
     </section>
-    <div v-if="!embeddingModels.length" class="info"><AlertCircle :size="17"/><div><b>平台 Embedding 尚未配置</b><small>管理员需要先在 /admin/platform/embedding-models 配置 1536 维度的 Embedding 模型；也可以在创建知识库时使用支持 Embedding 的 BYOK 供应商。</small></div></div>
+    <div v-if="!embeddingModels.length" class="info"><AlertCircle :size="17"/><div><b>暂无可用的平台 Embedding 模型</b><small>模型必须启用、配置有效的服务器凭据引用，并能通过 OpenAI 兼容 Embeddings 接口返回 1536 维向量。管理员完成配置后可刷新页面或在创建窗口点击「刷新可用模型」。</small></div></div>
    </template>
 
    <template v-else-if="page==='knowledgeDetail'">
@@ -1119,7 +1132,7 @@ async function revokeKey(key: ApiKey) {
    <label class="full">知识库名称 <b>*</b><input v-model="kbForm.name" maxlength="100" placeholder="例如：产品资料库"></label>
    <label class="full">知识库描述<textarea v-model="kbForm.description" rows="2" maxlength="500" placeholder="说明知识库包含哪些内容..."></textarea></label>
    <label class="full">Embedding 来源<select v-model="kbForm.embedding_source"><option value="platform">使用 SuperNova 平台 Embedding</option><option value="byok">使用自己的供应商 API Key（BYOK）</option></select></label>
-   <label v-if="kbForm.embedding_source==='platform'" class="full">平台 Embedding 模型<select v-model="kbForm.platform_embedding_model_id"><option value="">请选择模型</option><option v-for="model in embeddingModels" :key="model.id" :value="model.id">{{model.display_name}}（{{model.model_name}} · {{model.dimensions}} 维）</option></select><small v-if="!embeddingModels.length">管理员尚未发布可用的平台 Embedding 模型。</small></label>
+   <label v-if="kbForm.embedding_source==='platform'" class="full">平台 Embedding 模型<select v-model="kbForm.platform_embedding_model_id"><option value="">请选择模型</option><option v-for="model in embeddingModels" :key="model.id" :value="model.id">{{model.display_name}}（{{model.model_name}} · {{model.dimensions}} 维）</option></select><small v-if="!embeddingModels.length">当前没有可用模型。管理员需启用模型，并确保 credential_ref 对应的 API Key 已配置在 API 与 Knowledge Worker 的 SUPERNOVA_PLATFORM_CREDENTIALS_JSON 中；配置更新后重启服务，再刷新模型。</small><button type="button" class="btn secondary" @click="refreshEmbeddingModels">刷新可用模型</button></label>
    <template v-else>
     <label class="full">模型供应商<select v-model="kbForm.embedding_provider_id"><option value="">请选择已配置 API Key 的供应商</option><option v-for="provider in providers" :key="provider.id" :value="provider.id" :disabled="!provider.enabled || !provider.has_api_key || provider.provider_type==='anthropic'">{{provider.name}}（{{provider.provider_type}}）</option></select></label>
     <label class="full">Embedding 模型名称<input v-model="kbForm.embedding_model_name" maxlength="120" placeholder="例如：text-embedding-3-small"><small>供应商必须兼容 OpenAI /embeddings 接口，并返回 1536 维向量。</small></label>
