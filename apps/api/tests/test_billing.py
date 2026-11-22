@@ -444,6 +444,17 @@ def test_platform_rbac_grant_revoke_and_audit(client: TestClient) -> None:
     assert "finance" in customer_access.json()["roles"]
     assert "platform.billing.read" in customer_access.json()["permissions"]
 
+    denied_model_admin = client.get(
+        "/admin/platform/models", headers=headers(customer)
+    )
+    assert denied_model_admin.status_code == 403
+    denied_billing_write = client.post(
+        "/admin/billing/plans",
+        headers=headers(customer),
+        json={},
+    )
+    assert denied_billing_write.status_code == 403
+
     revoked = client.request(
         "DELETE",
         f"/admin/platform/users/{customer['user']['id']}/roles/finance",
@@ -471,6 +482,18 @@ def test_platform_rbac_grant_revoke_and_audit(client: TestClient) -> None:
             next(generator)
         except StopIteration:
             pass
+
+
+def test_last_super_admin_cannot_revoke_own_role(client: TestClient) -> None:
+    admin = register(client)
+    response = client.request(
+        "DELETE",
+        f"/admin/platform/users/{admin['user']['id']}/roles/super_admin",
+        headers=headers(admin),
+        json={"reason": "测试最后管理员保护"},
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "last_super_admin"
 
 
 def test_non_admin_cannot_grant_platform_roles(client: TestClient) -> None:
