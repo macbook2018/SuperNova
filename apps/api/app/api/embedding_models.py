@@ -290,7 +290,9 @@ def test_embedding_model_connection(
             status_code=502,
             detail={
                 "code": reason if reason in messages else "embedding_provider_test_failed",
-                "message": messages.get(reason, "Embedding 服务测试失败，请检查模型名称和服务商配置"),
+                "message": messages.get(
+                    reason, "Embedding 服务测试失败，请检查模型名称和服务商配置"
+                ),
             },
         ) from None
 
