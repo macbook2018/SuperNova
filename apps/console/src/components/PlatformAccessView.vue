@@ -2,6 +2,27 @@
 import { onMounted, ref } from 'vue'
 import { apiRequest } from '../lib/api'
 
+interface PlatformAnalytics {
+  period: { days: number; start: string; end: string }
+  accounts: {
+    users: number
+    active_users: number
+    tenants: number
+    active_tenants: number
+    active_memberships: number
+  }
+  usage: {
+    requests: number
+    successful_requests: number
+    failed_requests: number
+    prompt_tokens: number
+    completion_tokens: number
+    total_tokens: number
+  }
+  by_model_source: Array<{ model_source: string; requests: number; total_tokens: number }>
+  daily: Array<{ date: string; requests: number; successful_requests: number; total_tokens: number }>
+  top_models: Array<{ provider_type: string; model_name: string; requests: number; total_tokens: number }>
+}
 interface PlatformRole {
   code: string
   name: string
@@ -73,6 +94,7 @@ const props = defineProps<{
   canReadUsers: boolean
   canReadTenants: boolean
   canManageTenants: boolean
+  canReadAnalytics: boolean
 }>()
 
 const roles = ref<PlatformRole[]>([])
@@ -91,6 +113,9 @@ const tenantPageSize = 30
 const tenantDetail = ref<PlatformTenantDetail | null>(null)
 const tenantsLoading = ref(false)
 const tenantSaving = ref(false)
+const analytics = ref<PlatformAnalytics | null>(null)
+const analyticsDays = ref(30)
+const analyticsLoading = ref(false)
 const userId = ref('')
 const userRoles = ref<UserRole[]>([])
 const auditLogs = ref<AuditLog[]>([])
@@ -113,6 +138,23 @@ function message(value: unknown): string {
 function notify(value: string) {
   notice.value = value
   window.setTimeout(() => { if (notice.value === value) notice.value = '' }, 3000)
+}
+async function loadAnalytics() {
+  if (!props.canReadAnalytics) return
+  analyticsLoading.value = true
+  error.value = ''
+  try {
+    analytics.value = await apiRequest<PlatformAnalytics>(
+      `/admin/platform/analytics/overview?days=${analyticsDays.value}`,
+    )
+  } catch (value) {
+    error.value = message(value)
+  } finally {
+    analyticsLoading.value = false
+  }
+}
+function formatNumber(value: number): string {
+  return new Intl.NumberFormat('zh-CN').format(value)
 }
 async function loadRoles() {
   if (!props.canManage) return
@@ -297,6 +339,7 @@ async function refresh() {
     if (props.canManage) await loadRoles()
     if (props.canReadUsers) await searchUsers()
     if (props.canReadTenants) await searchTenants()
+    if (props.canReadAnalytics && activeTab.value === 'analytics') await loadAnalytics()
     if (props.canAudit && activeTab.value === 'audit') await loadAudit()
     if (userId.value.trim()) await loadUserRoles()
   } catch (value) {
@@ -319,6 +362,7 @@ onMounted(() => { void refresh() })
     <div class="rbac-tabs">
       <button v-if="canReadUsers" :class="{active:activeTab==='users'}" @click="activeTab='users';searchUsers()">平台用户</button>
       <button v-if="canReadTenants" :class="{active:activeTab==='tenants'}" @click="activeTab='tenants';searchTenants()">工作空间</button>
+      <button v-if="canReadAnalytics" :class="{active:activeTab==='analytics'}" @click="activeTab='analytics';loadAnalytics()">运营统计</button>
       <button v-if="canManage" :class="{active:activeTab==='assignments'}" @click="activeTab='assignments'">角色授权</button>
       <button v-if="canAudit" :class="{active:activeTab==='audit'}" @click="activeTab='audit';loadAudit()">操作审计</button>
     </div>
@@ -346,6 +390,23 @@ onMounted(() => { void refresh() })
       </table></div>
       <div class="rbac-pagination"><button class="rbac-button secondary" :disabled="tenantsLoading || tenantOffset===0" @click="tenantOffset=Math.max(0,tenantOffset-tenantPageSize);searchTenants()">上一页</button><span>{{ tenantTotal ? Math.floor(tenantOffset/tenantPageSize)+1 : 0 }} / {{ Math.max(1,Math.ceil(tenantTotal/tenantPageSize)) }} 页</span><button class="rbac-button secondary" :disabled="tenantsLoading || tenantOffset+tenantPageSize>=tenantTotal" @click="tenantOffset+=tenantPageSize;searchTenants()">下一页</button></div>
       <div v-if="tenantDetail" class="rbac-selected-user"><b>{{ tenantDetail.name }}</b><span>{{ tenantDetail.id }}</span><span>状态：{{ tenantDetail.status==='active'?'正常':'已停用' }}</span><div v-if="canReadUsers"><b>工作空间成员（最多展示 100 人）</b><span v-for="member in tenantDetail.members" :key="member.user_id">{{ member.display_name }} · {{ member.email }} · {{ member.membership_role }} · {{ member.membership_status }}</span><span v-if="!tenantDetail.members.length">暂无成员记录</span></div><div v-else>当前角色没有查看成员资料的权限</div></div>
+    </section>
+    <section v-if="canReadAnalytics && activeTab==='analytics'" class="rbac-panel">
+      <header><div><b>平台运营统计</b><small>全平台聚合数据，不展示客户邮箱、消息内容或个人明细。</small></div><select v-model.number="analyticsDays" class="rbac-range" @change="loadAnalytics"><option :value="7">最近 7 天</option><option :value="30">最近 30 天</option><option :value="90">最近 90 天</option></select></header>
+      <div v-if="analyticsLoading" class="rbac-empty">正在汇总平台数据…</div>
+      <template v-else-if="analytics">
+        <div class="rbac-metrics">
+          <div><small>注册用户</small><b>{{ formatNumber(analytics.accounts.users) }}</b><span>活跃 {{ formatNumber(analytics.accounts.active_users) }}</span></div>
+          <div><small>工作空间</small><b>{{ formatNumber(analytics.accounts.tenants) }}</b><span>正常 {{ formatNumber(analytics.accounts.active_tenants) }}</span></div>
+          <div><small>模型请求</small><b>{{ formatNumber(analytics.usage.requests) }}</b><span>成功 {{ formatNumber(analytics.usage.successful_requests) }} · 失败 {{ formatNumber(analytics.usage.failed_requests) }}</span></div>
+          <div><small>总 Token</small><b>{{ formatNumber(analytics.usage.total_tokens) }}</b><span>输入 {{ formatNumber(analytics.usage.prompt_tokens) }} · 输出 {{ formatNumber(analytics.usage.completion_tokens) }}</span></div>
+        </div>
+        <div class="rbac-analytics-grid">
+          <div class="rbac-analytics-block"><b>模型来源</b><table class="rbac-table"><thead><tr><th>来源</th><th>请求数</th><th>Token</th></tr></thead><tbody><tr v-for="item in analytics.by_model_source" :key="item.model_source"><td>{{ item.model_source==='platform'?'平台模型':'BYOK' }}</td><td>{{ formatNumber(item.requests) }}</td><td>{{ formatNumber(item.total_tokens) }}</td></tr></tbody></table></div>
+          <div class="rbac-analytics-block"><b>热门模型 Top 10</b><table class="rbac-table"><thead><tr><th>模型</th><th>请求数</th><th>Token</th></tr></thead><tbody><tr v-for="item in analytics.top_models" :key="item.provider_type+'-'+item.model_name"><td><b>{{ item.model_name }}</b><small>{{ item.provider_type }}</small></td><td>{{ formatNumber(item.requests) }}</td><td>{{ formatNumber(item.total_tokens) }}</td></tr></tbody></table><div v-if="!analytics.top_models.length" class="rbac-empty">暂无模型调用记录</div></div>
+        </div>
+        <div class="rbac-analytics-block"><b>每日调用趋势</b><div class="rbac-table-wrap"><table class="rbac-table"><thead><tr><th>日期</th><th>请求数</th><th>成功数</th><th>Token</th></tr></thead><tbody><tr v-for="item in analytics.daily" :key="item.date"><td>{{ item.date }}</td><td>{{ formatNumber(item.requests) }}</td><td>{{ formatNumber(item.successful_requests) }}</td><td>{{ formatNumber(item.total_tokens) }}</td></tr></tbody></table><div v-if="!analytics.daily.length" class="rbac-empty">所选周期暂无调用记录</div></div></div>
+      </template>
     </section>
     <template v-if="canManage && activeTab==='assignments'">
       <section class="rbac-panel">
@@ -409,7 +470,7 @@ onMounted(() => { void refresh() })
 .rbac-panel header div{display:flex;flex-direction:column;gap:5px}
 .rbac-panel header b{font-size:13px}
 .rbac-panel header small{font-size:10px;color:#9aa5b5}
-.rbac-pagination{display:flex;align-items:center;justify-content:flex-end;gap:12px;margin-top:13px;font-size:10px;color:#8795aa}.rbac-directory-meta{margin-top:12px;font-size:10px;color:#94a1b3}.rbac-selected-user{display:flex;flex-direction:column;gap:5px;padding:12px;margin-bottom:12px;background:#f7faff;border:1px solid #e5edfb;border-radius:8px;font-size:11px}.rbac-selected-user span,.rbac-selected-user small{color:#8492a8}.rbac-selected-user small{font-size:9px;word-break:break-all}.rbac-selected-user div{margin-top:4px;color:#667791}.rbac-search{display:flex;align-items:flex-end;gap:10px;max-width:680px}
+.rbac-pagination{display:flex;align-items:center;justify-content:flex-end;gap:12px;margin-top:13px;font-size:10px;color:#8795aa}.rbac-range{height:34px;border:1px solid #e5eaf2;border-radius:7px;padding:0 9px;background:white;color:#62728a;font-size:10px}.rbac-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:14px 0}.rbac-metrics>div{border:1px solid #edf0f5;border-radius:9px;padding:13px;display:flex;flex-direction:column;gap:6px}.rbac-metrics small,.rbac-metrics span{font-size:9px;color:#8c9aaf}.rbac-metrics b{font-size:22px;color:#30415a}.rbac-analytics-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-bottom:14px}.rbac-analytics-block{border:1px solid #edf0f5;border-radius:9px;padding:13px;margin-top:12px}.rbac-analytics-block>b{font-size:11px;color:#43536b}.rbac-analytics-block .rbac-table{margin-top:9px}.rbac-directory-meta{margin-top:12px;font-size:10px;color:#94a1b3}.rbac-selected-user{display:flex;flex-direction:column;gap:5px;padding:12px;margin-bottom:12px;background:#f7faff;border:1px solid #e5edfb;border-radius:8px;font-size:11px}.rbac-selected-user span,.rbac-selected-user small{color:#8492a8}.rbac-selected-user small{font-size:9px;word-break:break-all}.rbac-selected-user div{margin-top:4px;color:#667791}.rbac-search{display:flex;align-items:flex-end;gap:10px;max-width:680px}
 .rbac-search label,.rbac-form label{display:flex;flex-direction:column;gap:6px;font-size:10px;color:#75839a;flex:1}
 .rbac-search input,.rbac-form input,.rbac-form select{height:37px;box-sizing:border-box;border:1px solid #e7ecf3;border-radius:7px;padding:0 10px;font-size:11px;color:#43536b;background:#fbfcfe;outline:none;width:100%}
 .rbac-search input:focus,.rbac-form input:focus,.rbac-form select:focus{border-color:#8db5fa;background:white}
@@ -433,5 +494,5 @@ onMounted(() => { void refresh() })
 .rbac-link{border:0;background:transparent;font-size:10px;cursor:pointer}.rbac-link.danger{color:#c45e58}
 .rbac-empty{min-height:65px;display:grid;place-items:center;color:#9aa5b5;font-size:10px}
 .rbac-security-note{padding:12px 14px;background:#f3f7ff;border:1px solid #e3edff;border-radius:8px;color:#7188ad;font-size:10px;line-height:1.7}
-@media(max-width:760px){.rbac-intro{align-items:flex-start}.rbac-search{align-items:stretch;flex-direction:column}.rbac-form{grid-template-columns:1fr}.rbac-form label.wide{grid-column:auto}.rbac-panel{padding:14px}}
+@media(max-width:760px){.rbac-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.rbac-analytics-grid{grid-template-columns:1fr}.rbac-intro{align-items:flex-start}.rbac-search{align-items:stretch;flex-direction:column}.rbac-form{grid-template-columns:1fr}.rbac-form label.wide{grid-column:auto}.rbac-panel{padding:14px}}
 </style>
