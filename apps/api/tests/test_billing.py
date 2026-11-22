@@ -1,15 +1,21 @@
 from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
-from uuid import UUID, uuid4
 from types import SimpleNamespace
+from uuid import UUID, uuid4
 
 import pytest
+
 from app.billing import credentials
 from app.billing.money import currency_minor_unit_exponent
 from app.db.base import Base
 from app.db.session import get_db
-from app.models.platform_rbac import PlatformPermission, PlatformRole, PlatformRolePermission, PlatformUserRole
 from app.main import app
+from app.models.platform_rbac import (
+    PlatformPermission,
+    PlatformRole,
+    PlatformRolePermission,
+    PlatformUserRole,
+)
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
