@@ -96,7 +96,7 @@ fi
 echo "Applying Alembic migrations for ${TAG}..."
 "${COMPOSE[@]}" run --rm --no-deps api alembic upgrade head
 
-"${COMPOSE[@]}" up -d --remove-orphans api knowledge-worker chat-import-worker console
+"${COMPOSE[@]}" up -d --remove-orphans api knowledge-worker chat-import-worker runtime-manager console
 
 if ! wait_for_service_health api; then
   echo "Deployment failed. Previous application tag: ${PREVIOUS_TAG:-none}"
@@ -115,6 +115,11 @@ if ! wait_for_service_health knowledge-worker; then
 fi
 if ! wait_for_service_health chat-import-worker; then
   echo "Chat Import Worker failed its health check."
+  echo "Database backup retained at: ${BACKUP_FILE}"
+  exit 1
+fi
+if ! wait_for_service_health runtime-manager; then
+  echo "Runtime Manager failed its health check."
   echo "Database backup retained at: ${BACKUP_FILE}"
   exit 1
 fi
