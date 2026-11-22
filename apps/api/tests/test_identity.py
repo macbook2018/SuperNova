@@ -1,6 +1,8 @@
 from collections.abc import Generator
+from types import SimpleNamespace
 
 import pytest
+from app.api import auth
 from app.api.auth import _is_email_unique_violation
 from app.db.base import Base
 from app.db.session import get_db
@@ -286,9 +288,6 @@ def test_register_does_not_misreport_other_integrity_errors(
 def test_public_registration_cannot_claim_reserved_platform_admin_email(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from types import SimpleNamespace
-    from app.api import auth
-
     monkeypatch.setattr(
         auth,
         "get_settings",
