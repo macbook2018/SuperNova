@@ -4,7 +4,6 @@ from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
-
 from app.billing import credentials
 from app.billing.money import currency_minor_unit_exponent
 from app.db.base import Base
@@ -76,7 +75,9 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient, None, None]
             PlatformRolePermission(role_id=admin_role.id, permission_id=item.id)
             for item in admin_permissions
         ])
-        finance_permission = next(item for item in admin_permissions if item.code == "platform.billing.read")
+        finance_permission = next(
+            item for item in admin_permissions if item.code == "platform.billing.read"
+        )
         session.add(
             PlatformRolePermission(role_id=finance_role.id, permission_id=finance_permission.id)
         )
