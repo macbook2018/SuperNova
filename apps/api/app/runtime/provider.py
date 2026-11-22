@@ -89,6 +89,17 @@ class DockerRuntimeProvider:
                 network_name, driver="bridge", labels=labels, check_duplicate=True
             )
 
+        api_candidates = self.client.containers.list(
+            filters={"label": "com.docker.compose.service=api"}
+        )
+        if len(api_candidates) != 1:
+            raise RuntimeError("runtime_gateway_container_not_unique")
+        api_container = api_candidates[0]
+        network.reload()
+        connected_ids = set((network.attrs.get("Containers") or {}).keys())
+        if api_container.id not in connected_ids:
+            network.connect(api_container, aliases=["api"])
+
         volume = self._volume_name(bot_instance_id)
         try:
             self.client.volumes.get(volume)
@@ -102,7 +113,6 @@ class DockerRuntimeProvider:
             labels=labels,
             network=network.name,
             environment={"SUPERNOVA_RUNTIME_CONFIG": "/etc/supernova/runtime.json"},
-            extra_hosts={"host.docker.internal": "host-gateway"},
             volumes={
                 str(config_dir): {"bind": "/etc/supernova", "mode": "ro"},
                 volume: {"bind": "/var/lib/astrbot", "mode": "rw"},
