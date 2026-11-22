@@ -121,6 +121,7 @@ const platformAuditRead = ref(false)
 const platformUsersRead = ref(false)
 const platformTenantsRead = ref(false)
 const platformTenantsManage = ref(false)
+const platformAnalyticsRead = ref(false)
 const visibleNav = computed(() => nav.map(group => ({
   ...group,
   items: group.items.filter(item => {
@@ -240,8 +241,10 @@ async function loadPlatformAdminAccess() {
     platformUsersRead.value = access.permissions.includes('platform.users.read')
     platformTenantsRead.value = access.permissions.includes('platform.tenants.read')
     platformTenantsManage.value = access.permissions.includes('platform.tenants.manage')
+    platformAnalyticsRead.value = access.permissions.includes('platform.analytics.read')
     platformRbacAccess.value = platformRbacManage.value || platformAuditRead.value
       || platformUsersRead.value || platformTenantsRead.value || platformTenantsManage.value
+      || platformAnalyticsRead.value
     if (!platformAdminAccess.value && page.value === 'platformAdmin') page.value = 'overview'
     if (!platformRbacAccess.value && page.value === 'platformAccess') page.value = 'overview'
   } catch {
@@ -252,6 +255,7 @@ async function loadPlatformAdminAccess() {
     platformUsersRead.value = false
     platformTenantsRead.value = false
     platformTenantsManage.value = false
+    platformAnalyticsRead.value = false
     if (page.value === 'platformAdmin' || page.value === 'platformAccess') page.value = 'overview'
   }
 }
@@ -386,6 +390,7 @@ async function logout() {
   platformUsersRead.value = false
   platformTenantsRead.value = false
   platformTenantsManage.value = false
+  platformAnalyticsRead.value = false
   personas.value = []
   providers.value = []
   kbs.value = []
@@ -977,7 +982,7 @@ async function revokeKey(key: ApiKey) {
    </template>
 
    <PlatformAdminView v-else-if="page==='platformAdmin'" />
-   <PlatformAccessView v-else-if="page==='platformAccess'" :can-manage="platformRbacManage" :can-audit="platformAuditRead" :can-read-users="platformUsersRead" :can-read-tenants="platformTenantsRead" :can-manage-tenants="platformTenantsManage" />
+   <PlatformAccessView v-else-if="page==='platformAccess'" :can-manage="platformRbacManage" :can-audit="platformAuditRead" :can-read-users="platformUsersRead" :can-read-tenants="platformTenantsRead" :can-manage-tenants="platformTenantsManage" :can-read-analytics="platformAnalyticsRead" />
 
    <template v-else-if="page==='knowledge'">
     <section class="kb-summary">
