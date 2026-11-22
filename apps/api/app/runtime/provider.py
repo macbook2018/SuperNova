@@ -46,10 +46,6 @@ class DockerRuntimeProvider:
     def _network_name(bot_instance_id: UUID) -> str:
         return f"snv-runtime-{bot_instance_id.hex[:20]}"
 
-    @staticmethod
-    def _volume_name(bot_instance_id: UUID) -> str:
-        return f"snv-data-{bot_instance_id.hex}"
-
     def provision(self, *, tenant_id: UUID, bot_instance_id: UUID, runtime_config: dict) -> str:
         name = self._name(bot_instance_id)
         instance_root = self.runtime_root / tenant_id.hex / bot_instance_id.hex
@@ -108,11 +104,6 @@ class DockerRuntimeProvider:
         if api_container.id not in connected_ids:
             network.connect(api_container, aliases=["api"])
 
-        volume = self._volume_name(bot_instance_id)
-        try:
-            self.client.volumes.get(volume)
-        except NotFound:
-            self.client.volumes.create(name=volume, labels=labels)
         self.client.containers.create(
             image=self.image,
             name=name,
@@ -123,7 +114,7 @@ class DockerRuntimeProvider:
             environment={"SUPERNOVA_RUNTIME_CONFIG": "/etc/supernova/runtime.json"},
             volumes={
                 str(config_dir): {"bind": "/etc/supernova", "mode": "ro"},
-                volume: {"bind": "/var/lib/astrbot", "mode": "rw"},
+                str(instance_root / "data"): {"bind": "/var/lib/astrbot", "mode": "rw"},
             },
             mem_limit=self.memory_limit,
             nano_cpus=int(self.cpu_limit * 1_000_000_000),
@@ -178,11 +169,6 @@ class DockerRuntimeProvider:
             self.client.networks.get(f"snv-runtime-{bot_hex[:20]}").remove()
         except NotFound:
             pass
-        if delete_volumes:
-            try:
-                self.client.volumes.get(f"snv-data-{bot_hex}").remove(force=True)
-            except NotFound:
-                pass
 
     def inspect(self, resource_id: str) -> dict:
         container = self._container(resource_id)
