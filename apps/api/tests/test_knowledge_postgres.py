@@ -7,7 +7,8 @@ from uuid import uuid4
 
 import pytest
 from app.db.base import Base
-from app.knowledge import retrieval, worker as knowledge_worker
+from app.knowledge import retrieval
+from app.knowledge import worker as knowledge_worker
 from app.knowledge.embeddings import EmbeddingBatch, EmbeddingConfig
 from app.models import __all__ as MODEL_EXPORTS
 from app.models.catalog import KnowledgeBase, Persona, PersonaKnowledgeBase
