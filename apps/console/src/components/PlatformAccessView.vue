@@ -2,6 +2,16 @@
 import { onMounted, ref } from 'vue'
 import { apiRequest } from '../lib/api'
 
+interface PlatformOperations {
+  checked_at: string
+  overall: 'healthy' | 'attention'
+  dependencies: Record<string, string>
+  queues: Record<string, {
+    total: number
+    status_counts: Record<string, number>
+    stale_leases: number
+  }>
+}
 interface PlatformAnalytics {
   period: { days: number; start: string; end: string }
   accounts: {
@@ -95,6 +105,7 @@ const props = defineProps<{
   canReadTenants: boolean
   canManageTenants: boolean
   canReadAnalytics: boolean
+  canReadOperations: boolean
 }>()
 
 const roles = ref<PlatformRole[]>([])
@@ -116,6 +127,8 @@ const tenantSaving = ref(false)
 const analytics = ref<PlatformAnalytics | null>(null)
 const analyticsDays = ref(30)
 const analyticsLoading = ref(false)
+const operations = ref<PlatformOperations | null>(null)
+const operationsLoading = ref(false)
 const userId = ref('')
 const userRoles = ref<UserRole[]>([])
 const auditLogs = ref<AuditLog[]>([])
@@ -126,7 +139,7 @@ const loading = ref(false)
 const saving = ref(false)
 const error = ref('')
 const notice = ref('')
-const activeTab = ref<'users' | 'tenants' | 'analytics' | 'assignments' | 'audit'>(
+const activeTab = ref<'users' | 'tenants' | 'analytics' | 'operations' | 'assignments' | 'audit'>(
   props.canReadUsers ? 'users'
     : props.canReadTenants ? 'tenants'
       : props.canManage ? 'assignments' : 'audit',
@@ -138,6 +151,20 @@ function message(value: unknown): string {
 function notify(value: string) {
   notice.value = value
   window.setTimeout(() => { if (notice.value === value) notice.value = '' }, 3000)
+}
+async function loadOperations() {
+  if (!props.canReadOperations) return
+  operationsLoading.value = true
+  error.value = ''
+  try {
+    operations.value = await apiRequest<PlatformOperations>(
+      '/admin/platform/operations/overview',
+    )
+  } catch (value) {
+    error.value = message(value)
+  } finally {
+    operationsLoading.value = false
+  }
 }
 async function loadAnalytics() {
   if (!props.canReadAnalytics) return
@@ -340,6 +367,7 @@ async function refresh() {
     if (props.canReadUsers) await searchUsers()
     if (props.canReadTenants) await searchTenants()
     if (props.canReadAnalytics && activeTab.value === 'analytics') await loadAnalytics()
+    if (props.canReadOperations && activeTab.value === 'operations') await loadOperations()
     if (props.canAudit && activeTab.value === 'audit') await loadAudit()
     if (userId.value.trim()) await loadUserRoles()
   } catch (value) {
@@ -363,6 +391,7 @@ onMounted(() => { void refresh() })
       <button v-if="canReadUsers" :class="{active:activeTab==='users'}" @click="activeTab='users';searchUsers()">平台用户</button>
       <button v-if="canReadTenants" :class="{active:activeTab==='tenants'}" @click="activeTab='tenants';searchTenants()">工作空间</button>
       <button v-if="canReadAnalytics" :class="{active:activeTab==='analytics'}" @click="activeTab='analytics';loadAnalytics()">运营统计</button>
+      <button v-if="canReadOperations" :class="{active:activeTab==='operations'}" @click="activeTab='operations';loadOperations()">系统监控</button>
       <button v-if="canManage" :class="{active:activeTab==='assignments'}" @click="activeTab='assignments'">角色授权</button>
       <button v-if="canAudit" :class="{active:activeTab==='audit'}" @click="activeTab='audit';loadAudit()">操作审计</button>
     </div>
@@ -406,6 +435,20 @@ onMounted(() => { void refresh() })
           <div class="rbac-analytics-block"><b>热门模型 Top 10</b><table class="rbac-table"><thead><tr><th>模型</th><th>请求数</th><th>Token</th></tr></thead><tbody><tr v-for="item in analytics.top_models" :key="item.provider_type+'-'+item.model_name"><td><b>{{ item.model_name }}</b><small>{{ item.provider_type }}</small></td><td>{{ formatNumber(item.requests) }}</td><td>{{ formatNumber(item.total_tokens) }}</td></tr></tbody></table><div v-if="!analytics.top_models.length" class="rbac-empty">暂无模型调用记录</div></div>
         </div>
         <div class="rbac-analytics-block"><b>每日调用趋势</b><div class="rbac-table-wrap"><table class="rbac-table"><thead><tr><th>日期</th><th>请求数</th><th>成功数</th><th>Token</th></tr></thead><tbody><tr v-for="item in analytics.daily" :key="item.date"><td>{{ item.date }}</td><td>{{ formatNumber(item.requests) }}</td><td>{{ formatNumber(item.successful_requests) }}</td><td>{{ formatNumber(item.total_tokens) }}</td></tr></tbody></table><div v-if="!analytics.daily.length" class="rbac-empty">所选周期暂无调用记录</div></div></div>
+      </template>
+    </section>
+    <section v-if="canReadOperations && activeTab==='operations'" class="rbac-panel">
+      <header><div><b>系统与 Worker 监控</b><small>检查 PostgreSQL、Redis 连接，并汇总知识库、聊天导入和人格/FAQ 分析队列。</small></div><button class="rbac-button secondary" :disabled="operationsLoading" @click="loadOperations">刷新状态</button></header>
+      <div v-if="operationsLoading" class="rbac-empty">正在检查依赖服务与任务队列…</div>
+      <template v-else-if="operations">
+        <div class="rbac-ops-summary"><span :class="operations.overall==='healthy'?'rbac-on':'rbac-off'">{{ operations.overall==='healthy'?'运行正常':'需要关注' }}</span><small>检查时间：{{ new Date(operations.checked_at).toLocaleString() }}</small></div>
+        <div class="rbac-ops-grid">
+          <div v-for="(status,name) in operations.dependencies" :key="name"><small>{{ name==='postgres'?'PostgreSQL':name==='redis'?'Redis':name }}</small><b :class="status==='ok'?'ops-ok':'ops-error'">{{ status==='ok'?'连接正常':'连接异常' }}</b></div>
+        </div>
+        <div class="rbac-analytics-block"><b>任务队列状态</b><div class="rbac-table-wrap"><table class="rbac-table"><thead><tr><th>队列</th><th>任务总数</th><th>状态分布</th><th>过期租约</th></tr></thead><tbody>
+          <tr v-for="(queue,name) in operations.queues" :key="name"><td><b>{{ name==='knowledge_ingestion'?'知识库索引':name==='chat_import'?'聊天记录导入':name==='chat_analysis'?'人格与 FAQ 分析':name }}</b></td><td>{{ formatNumber(queue.total) }}</td><td><span v-for="(count,status) in queue.status_counts" :key="status" class="ops-status">{{ status }}：{{ count }}</span><span v-if="!Object.keys(queue.status_counts).length">暂无任务</span></td><td><span :class="queue.stale_leases?'ops-error':'ops-ok'">{{ queue.stale_leases }}</span></td></tr>
+        </tbody></table></div></div>
+        <div class="rbac-security-note">说明：过期租约表示任务仍处于运行状态，但 Worker 的执行租约已过期；本页展示队列和依赖连接状态，不将数据库任务状态误认为 Worker 进程心跳。</div>
       </template>
     </section>
     <template v-if="canManage && activeTab==='assignments'">
@@ -470,7 +513,7 @@ onMounted(() => { void refresh() })
 .rbac-panel header div{display:flex;flex-direction:column;gap:5px}
 .rbac-panel header b{font-size:13px}
 .rbac-panel header small{font-size:10px;color:#9aa5b5}
-.rbac-pagination{display:flex;align-items:center;justify-content:flex-end;gap:12px;margin-top:13px;font-size:10px;color:#8795aa}.rbac-range{height:34px;border:1px solid #e5eaf2;border-radius:7px;padding:0 9px;background:white;color:#62728a;font-size:10px}.rbac-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:14px 0}.rbac-metrics>div{border:1px solid #edf0f5;border-radius:9px;padding:13px;display:flex;flex-direction:column;gap:6px}.rbac-metrics small,.rbac-metrics span{font-size:9px;color:#8c9aaf}.rbac-metrics b{font-size:22px;color:#30415a}.rbac-analytics-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-bottom:14px}.rbac-analytics-block{border:1px solid #edf0f5;border-radius:9px;padding:13px;margin-top:12px}.rbac-analytics-block>b{font-size:11px;color:#43536b}.rbac-analytics-block .rbac-table{margin-top:9px}.rbac-directory-meta{margin-top:12px;font-size:10px;color:#94a1b3}.rbac-selected-user{display:flex;flex-direction:column;gap:5px;padding:12px;margin-bottom:12px;background:#f7faff;border:1px solid #e5edfb;border-radius:8px;font-size:11px}.rbac-selected-user span,.rbac-selected-user small{color:#8492a8}.rbac-selected-user small{font-size:9px;word-break:break-all}.rbac-selected-user div{margin-top:4px;color:#667791}.rbac-search{display:flex;align-items:flex-end;gap:10px;max-width:680px}
+.rbac-pagination{display:flex;align-items:center;justify-content:flex-end;gap:12px;margin-top:13px;font-size:10px;color:#8795aa}.rbac-ops-summary{display:flex;align-items:center;gap:12px;margin:14px 0}.rbac-ops-summary small{font-size:10px;color:#8c9aaf}.rbac-ops-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.rbac-ops-grid>div{display:flex;align-items:center;justify-content:space-between;border:1px solid #edf0f5;border-radius:9px;padding:12px}.rbac-ops-grid small{font-size:10px;color:#7d8aa0}.rbac-ops-grid b{font-size:10px}.ops-ok{color:#1c9d77}.ops-error{color:#c45e58}.ops-status{display:inline-block;margin:2px 5px 2px 0;padding:3px 6px;border-radius:5px;background:#f3f6fa;color:#75839a;font-size:9px}.rbac-range{height:34px;border:1px solid #e5eaf2;border-radius:7px;padding:0 9px;background:white;color:#62728a;font-size:10px}.rbac-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:14px 0}.rbac-metrics>div{border:1px solid #edf0f5;border-radius:9px;padding:13px;display:flex;flex-direction:column;gap:6px}.rbac-metrics small,.rbac-metrics span{font-size:9px;color:#8c9aaf}.rbac-metrics b{font-size:22px;color:#30415a}.rbac-analytics-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-bottom:14px}.rbac-analytics-block{border:1px solid #edf0f5;border-radius:9px;padding:13px;margin-top:12px}.rbac-analytics-block>b{font-size:11px;color:#43536b}.rbac-analytics-block .rbac-table{margin-top:9px}.rbac-directory-meta{margin-top:12px;font-size:10px;color:#94a1b3}.rbac-selected-user{display:flex;flex-direction:column;gap:5px;padding:12px;margin-bottom:12px;background:#f7faff;border:1px solid #e5edfb;border-radius:8px;font-size:11px}.rbac-selected-user span,.rbac-selected-user small{color:#8492a8}.rbac-selected-user small{font-size:9px;word-break:break-all}.rbac-selected-user div{margin-top:4px;color:#667791}.rbac-search{display:flex;align-items:flex-end;gap:10px;max-width:680px}
 .rbac-search label,.rbac-form label{display:flex;flex-direction:column;gap:6px;font-size:10px;color:#75839a;flex:1}
 .rbac-search input,.rbac-form input,.rbac-form select{height:37px;box-sizing:border-box;border:1px solid #e7ecf3;border-radius:7px;padding:0 10px;font-size:11px;color:#43536b;background:#fbfcfe;outline:none;width:100%}
 .rbac-search input:focus,.rbac-form input:focus,.rbac-form select:focus{border-color:#8db5fa;background:white}
@@ -494,5 +537,5 @@ onMounted(() => { void refresh() })
 .rbac-link{border:0;background:transparent;font-size:10px;cursor:pointer}.rbac-link.danger{color:#c45e58}
 .rbac-empty{min-height:65px;display:grid;place-items:center;color:#9aa5b5;font-size:10px}
 .rbac-security-note{padding:12px 14px;background:#f3f7ff;border:1px solid #e3edff;border-radius:8px;color:#7188ad;font-size:10px;line-height:1.7}
-@media(max-width:760px){.rbac-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.rbac-analytics-grid{grid-template-columns:1fr}.rbac-intro{align-items:flex-start}.rbac-search{align-items:stretch;flex-direction:column}.rbac-form{grid-template-columns:1fr}.rbac-form label.wide{grid-column:auto}.rbac-panel{padding:14px}}
+@media(max-width:760px){.rbac-ops-grid{grid-template-columns:1fr}.rbac-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.rbac-analytics-grid{grid-template-columns:1fr}.rbac-intro{align-items:flex-start}.rbac-search{align-items:stretch;flex-direction:column}.rbac-form{grid-template-columns:1fr}.rbac-form label.wide{grid-column:auto}.rbac-panel{padding:14px}}
 </style>
