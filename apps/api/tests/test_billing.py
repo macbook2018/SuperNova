@@ -451,7 +451,21 @@ def test_platform_rbac_grant_revoke_and_audit(client: TestClient) -> None:
     denied_billing_write = client.post(
         "/admin/billing/plans",
         headers=headers(customer),
-        json={},
+        json={
+            "code": "finance-forbidden",
+            "revision": 1,
+            "name": "无权创建",
+            "billing_interval": "month",
+            "currency": "CNY",
+            "subscription_price_minor": 100,
+            "status": "active",
+            "entitlements": [{
+                "resource_code": "api_requests",
+                "unit": "requests",
+                "included_units": 10,
+                "overage_rate_minor_per_unit": "0",
+            }],
+        },
     )
     assert denied_billing_write.status_code == 403
 
