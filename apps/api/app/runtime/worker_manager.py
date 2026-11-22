@@ -11,7 +11,12 @@ from sqlalchemy import or_, select
 
 from app.core.config import get_settings
 from app.db.session import SessionLocal
-from app.models.bot_runtime import BotInstance, BotRuntimeCommand, BotRuntimeCredential, BotRuntimeEvent
+from app.models.bot_runtime import (
+    BotInstance,
+    BotRuntimeCommand,
+    BotRuntimeCredential,
+    BotRuntimeEvent,
+)
 from app.models.catalog import Persona
 from app.runtime.provider import DockerRuntimeProvider
 
