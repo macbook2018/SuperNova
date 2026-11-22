@@ -9,7 +9,4 @@ COPY apps/api/pyproject.toml ./pyproject.toml
 COPY apps/api/migrations ./migrations
 COPY apps/api/app ./app
 RUN pip install .
-RUN useradd --create-home --uid 10001 appuser
-USER appuser
-
 CMD ["python", "-m", "app.runtime.worker_manager"]
