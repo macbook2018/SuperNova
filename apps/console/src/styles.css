@@ -146,3 +146,4 @@
 .chat-faq-edit-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:9px}
 @media(max-width:900px){.chat-analysis-model-grid{grid-template-columns:1fr 1fr}.chat-persona-apply{grid-template-columns:1fr 1fr}.chat-persona-apply .btn{grid-column:1/-1}}
 @media(max-width:600px){.chat-analysis-model-grid,.chat-faq-edit-grid,.chat-persona-apply{grid-template-columns:1fr}.chat-persona-apply .btn{grid-column:auto}.chat-review-heading{align-items:flex-start;flex-direction:column}.chat-faq-publish-bar{justify-content:stretch}.chat-faq-publish-bar label{width:100%}}
+.auth-brand img,.brand img,.hero-art img{border-radius:20%;}
