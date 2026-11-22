@@ -77,21 +77,23 @@ def _issue_runtime_config(db, bot: BotInstance, persona: Persona) -> dict:
         for scope in ("chat.completions", "runtime.heartbeat", "runtime.events")
     }
     db.flush()
-    db.commit()
     return {
-        "schema_version": 1,
+        "config": {
+            "schema_version": 1,
         "tenant_id": str(bot.tenant_id),
         "bot_instance_id": str(bot.id),
         "persona_id": str(persona.id),
         "runtime_version": bot.runtime_version,
         "config_version": bot.config_version,
-        "gateway": {
-            "base_url": settings.runtime_gateway_base_url.rstrip("/"),
-            "model": persona.slug,
-            "credentials": credentials,
+            "gateway": {
+                "base_url": settings.runtime_gateway_base_url.rstrip("/"),
+                "model": persona.slug,
+                "credential_ref": "/etc/supernova/runtime-credentials.json",
+            },
+            "platforms": [],
+            "storage": {"data_dir": "/var/lib/astrbot", "session_retention_days": 0},
         },
-        "platforms": [],
-        "storage": {"data_dir": "/var/lib/astrbot", "session_retention_days": 0},
+        "credentials": credentials,
     }
 
 
