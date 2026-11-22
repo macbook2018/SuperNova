@@ -107,8 +107,7 @@ class SenderProfile(BaseModel):
     @classmethod
     def clean_profile_text(cls, value: str) -> str:
         if isinstance(value, str):
-            field_name = "昵称" if cls.__name__ == "SenderProfile" else "联系人资料"
-            return _clean_text(value, max_utf16_units=256, field_name=field_name)
+            return _clean_text(value, max_utf16_units=256, field_name="联系人昵称或备注")
         return value
 
     @field_validator("labels")
