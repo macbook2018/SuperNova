@@ -200,7 +200,9 @@ def get_platform_user(
             for membership, tenant in memberships
         ],
     }
-\n\n@router.post(
+
+
+@router.post(
     "/admin/platform/users/{user_id}/roles/{role_code}",
     status_code=status.HTTP_201_CREATED,
 )
