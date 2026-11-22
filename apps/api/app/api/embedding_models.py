@@ -171,7 +171,9 @@ def update_embedding_model(
                 "message": "平台 Embedding 模型字段不允许设置为 null",
             },
         )
-    connection_fields = {"provider_type", "upstream_model_name", "base_url", "credential_ref", "dimensions"}
+    connection_fields = {
+        "provider_type", "upstream_model_name", "base_url", "credential_ref", "dimensions"
+    }
     connection_changed = any(
         getattr(model, field) != updates[field]
         for field in connection_fields.intersection(updates)
