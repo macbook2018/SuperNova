@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import os
+import shutil
 import socket
 import time
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from uuid import UUID, uuid4
 
 import structlog
@@ -182,6 +185,8 @@ def _process(command_id: UUID, provider: DockerRuntimeProvider) -> None:
             elif action == "delete":
                 if bot.runtime_resource_id:
                     provider.delete(bot.runtime_resource_id, delete_volumes=True)
+                runtime_root = Path(get_settings().runtime_data_root)
+                shutil.rmtree(runtime_root / bot.tenant_id.hex / bot.id.hex, ignore_errors=True)
                 _revoke_credentials(db, bot)
                 command.status = "succeeded"
                 command.completed_at = datetime.now(UTC)
@@ -282,6 +287,57 @@ def _refresh_due_credentials(provider: DockerRuntimeProvider) -> None:
                 )
 
 
+def _directory_size(path: Path) -> int:
+    total = 0
+    if not path.exists():
+        return total
+    for root, directories, filenames in os.walk(path, followlinks=False):
+        directories[:] = [
+            name for name in directories if not (Path(root) / name).is_symlink()
+        ]
+        for filename in filenames:
+            target = Path(root) / filename
+            try:
+                total += target.lstat().st_size
+            except OSError:
+                continue
+    return total
+
+
+def _enforce_disk_quotas(provider: DockerRuntimeProvider) -> None:
+    settings = get_settings()
+    with SessionLocal() as db:
+        bots = db.scalars(select(BotInstance).where(
+            BotInstance.desired_state == "running",
+            BotInstance.actual_state.in_(("starting", "running", "unhealthy")),
+            BotInstance.runtime_resource_id.is_not(None),
+        )).all()
+        for bot in bots:
+            data_dir = (
+                Path(settings.runtime_data_root)
+                / bot.tenant_id.hex
+                / bot.id.hex
+                / "data"
+            )
+            used_bytes = _directory_size(data_dir)
+            if used_bytes <= settings.runtime_disk_limit_bytes:
+                continue
+            try:
+                provider.stop(bot.runtime_resource_id)
+                error_code = "runtime_disk_quota_exceeded"
+            except Exception:
+                error_code = "runtime_disk_quota_stop_failed"
+            _revoke_credentials(db, bot)
+            bot.actual_state = "unhealthy"
+            bot.last_error_code = error_code
+            _write_event(db, bot, "runtime.error", {
+                "level": "error",
+                "component": "disk-quota-monitor",
+                "error_code": error_code,
+            })
+        db.commit()
+
+
 def _mark_heartbeat_timeouts() -> None:
     settings = get_settings()
     cutoff = datetime.now(UTC) - timedelta(
@@ -318,6 +374,7 @@ def run_forever() -> None:
         if now >= next_maintenance:
             _refresh_due_credentials(provider)
             _mark_heartbeat_timeouts()
+            _enforce_disk_quotas(provider)
             next_maintenance = now + 30.0
         command_id = claim_command()
         if command_id is None:
