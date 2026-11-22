@@ -41,6 +41,7 @@ interface EmbeddingModel {
   credential_ref: string
   dimensions: number
   enabled: boolean
+  verified_at: string | null
   created_at: string
 }
 
@@ -294,7 +295,8 @@ async function testEmbedding(model: EmbeddingModel) {
     const result = await apiRequest<{ success: boolean; dimensions: number; expected_dimensions: number; input_tokens: number | null }>(
       '/admin/platform/embedding-models/' + model.id + '/test', { method: 'POST' },
     )
-    notify('连接成功：返回 ' + result.dimensions + ' 维向量，符合知识库 1536 维要求')
+    await loadAll()
+    notify('连接成功：返回 ' + result.dimensions + ' 维向量，符合知识库 1536 维要求；现在可以启用模型')
   } catch (value) {
     notify(errorMessage(value))
   } finally {
@@ -457,10 +459,10 @@ onMounted(() => { void loadAll() })
         </div>
         <div v-else class="admin-table-wrap">
           <table class="admin-table">
-            <thead><tr><th>模型名称</th><th>供应商</th><th>上游模型</th><th>维度</th><th>凭据引用</th><th>状态</th><th>操作</th></tr></thead>
+            <thead><tr><th>模型名称</th><th>供应商</th><th>上游模型</th><th>维度</th><th>凭据引用</th><th>连接验证</th><th>启用状态</th><th>操作</th></tr></thead>
             <tbody><tr v-for="model in embeddingModels" :key="model.id">
-              <td><b>{{model.display_name}}</b><small>{{model.code}}</small></td><td>{{providerLabel(model.provider_type)}}</td><td><code>{{model.upstream_model_name}}</code><small>{{model.base_url}}</small></td><td>{{model.dimensions}}</td><td><code>{{model.credential_ref}}</code></td><td><span :class="model.enabled?'status-on':'status-off'">{{model.enabled?'已启用':'已停用'}}</span></td>
-              <td><div class="admin-actions"><button :disabled="testingEmbeddingId===model.id" @click="testEmbedding(model)" title="测试连接和 1536 维输出"><Activity :size="14"/></button><button @click="editEmbedding(model)" title="编辑"><Pencil :size="14"/></button><button @click="toggleEmbedding(model)" :title="model.enabled?'停用':'启用'"><ToggleLeft :size="15"/></button></div></td>
+              <td><b>{{model.display_name}}</b><small>{{model.code}}</small></td><td>{{providerLabel(model.provider_type)}}</td><td><code>{{model.upstream_model_name}}</code><small>{{model.base_url}}</small></td><td>{{model.dimensions}}</td><td><code>{{model.credential_ref}}</code></td><td><span :class="model.verified_at?'status-on':'status-off'">{{model.verified_at?'已验证':'待验证'}}</span></td><td><span :class="model.enabled?'status-on':'status-off'">{{model.enabled?'已启用':'已停用'}}</span></td>
+              <td><div class="admin-actions"><button :disabled="testingEmbeddingId===model.id" @click="testEmbedding(model)" title="测试连接和 1536 维输出"><Activity :size="14"/></button><button @click="editEmbedding(model)" title="编辑"><Pencil :size="14"/></button><button :disabled="!model.verified_at && !model.enabled" @click="toggleEmbedding(model)" :title="!model.verified_at && !model.enabled?'请先测试连接':model.enabled?'停用':'启用'"><ToggleLeft :size="15"/></button></div></td>
             </tr></tbody>
           </table>
         </div>
@@ -509,7 +511,7 @@ onMounted(() => { void loadAll() })
           <label class="wide">OpenAI 兼容 Base URL <input v-model="embeddingForm.base_url" maxlength="2048" placeholder="https://api.provider.cn/v1"><small>填写服务商提供 Embeddings API 的根地址；系统会请求 /embeddings。仅支持 HTTPS 公网服务。</small></label>
           <label class="wide">凭据引用 <input v-model="embeddingForm.credential_ref" maxlength="255" placeholder="例如 siliconflow-embedding-primary"><small>需在 API 和 Knowledge Worker 的 SUPERNOVA_PLATFORM_CREDENTIALS_JSON 中配置同名键。</small></label>
           <label>向量维度 <input value="1536（固定）" disabled><small>服务商实际返回维度必须为 1536；保存后请执行连接测试。</small></label>
-          <label class="admin-switch"><span>创建后启用模型</span><input v-model="embeddingForm.enabled" type="checkbox"></label>
+          <label class="admin-switch"><span>创建后启用模型</span><input v-model="embeddingForm.enabled" type="checkbox" disabled></label><p class="admin-modal-hint">为避免不可用模型进入客户知识库，模型必须先保存并通过真实 Embeddings 调用测试（返回 1536 维），之后才能启用。</p>
         </div>
         <footer><button class="admin-button secondary" @click="embeddingModal=false">取消</button><button class="admin-button primary" :disabled="saving" @click="saveEmbedding"><Check :size="15"/>保存模型</button></footer>
       </section>
