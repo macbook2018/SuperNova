@@ -15,6 +15,12 @@ from app.models.billing import (
     TenantBillingPolicy,
     TenantSubscription,
 )
+from app.models.bot_runtime import (
+    BotInstance,
+    BotRuntimeCommand,
+    BotRuntimeCredential,
+    BotRuntimeEvent,
+)
 from app.models.catalog import KnowledgeBase, ModelProvider, Persona, PersonaKnowledgeBase
 from app.models.chat_analysis import (
     ChatAnalysisJob,
@@ -40,6 +46,10 @@ from app.models.usage import UsageRecord
 
 __all__ = [
     "ApiKey",
+    "BotInstance",
+    "BotRuntimeCommand",
+    "BotRuntimeCredential",
+    "BotRuntimeEvent",
     "BillingLedgerAccount",
     "BillingLedgerPosting",
     "BillingLedgerTransaction",

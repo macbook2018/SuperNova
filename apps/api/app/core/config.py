@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     )
     redis_url: str = "redis://:change-me-local-only@localhost:6379/0"
     jwt_secret: str = _DEFAULT_JWT_SECRET
+    runtime_jwt_secret: str | None = None
+    astrbot_runtime_version: str = "4.29.4"
+    astrbot_runtime_commit: str = "61335414433db721b3f7ecc93f90deafe0a59d78"
     encryption_key: str | None = _DEFAULT_ENCRYPTION_KEY
     access_token_ttl_minutes: int = 15
     refresh_token_ttl_days: int = 30
