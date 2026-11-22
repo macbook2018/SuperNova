@@ -113,16 +113,30 @@ def grant_platform_role(
 ) -> dict:
     require_platform_permission(principal, "platform.rbac.manage")
     target = db.get(User, user_id)
-    role = db.scalar(select(PlatformRole).where(PlatformRole.code == role_code))
+    role = db.scalar(
+        select(PlatformRole).where(PlatformRole.code == role_code)
+    )
     if target is None:
-        raise HTTPException(status_code=404, detail={"code": "user_not_found", "message": "用户不存在"})
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "user_not_found", "message": "用户不存在"},
+        )
     if target.status != "active":
-        raise HTTPException(status_code=409, detail={"code": "user_inactive", "message": "不能向已禁用账户授予平台角色"})
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "user_inactive", "message": "不能向已禁用账户授予平台角色"},
+        )
     if role is None:
-        raise HTTPException(status_code=404, detail={"code": "platform_role_not_found", "message": "平台角色不存在"})
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "platform_role_not_found", "message": "平台角色不存在"},
+        )
     now = datetime.now(UTC)
     if payload.expires_at is not None and payload.expires_at <= now:
-        raise HTTPException(status_code=422, detail={"code": "invalid_role_expiry", "message": "角色到期时间必须晚于当前时间"})
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "invalid_role_expiry", "message": "角色到期时间必须晚于当前时间"},
+        )
     existing = db.scalar(
         select(PlatformUserRole).where(
             PlatformUserRole.user_id == user_id,
@@ -132,7 +146,13 @@ def grant_platform_role(
         )
     )
     if existing is not None:
-        raise HTTPException(status_code=409, detail={"code": "platform_role_already_granted", "message": "用户已拥有该平台角色"})
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "platform_role_already_granted",
+                "message": "用户已拥有该平台角色",
+            },
+        )
     assignment = PlatformUserRole(
         id=uuid4(),
         user_id=user_id,
@@ -150,7 +170,10 @@ def grant_platform_role(
         resource_id=role.code,
         reason=payload.reason,
         request_id=request_id,
-        details={"role_code": role.code, "expires_at": payload.expires_at.isoformat() if payload.expires_at else None},
+        details={
+            "role_code": role.code,
+            "expires_at": payload.expires_at.isoformat() if payload.expires_at else None,
+        },
     )
     db.commit()
     return {
@@ -184,7 +207,13 @@ def revoke_platform_role(
         )
     )
     if assignment is None:
-        raise HTTPException(status_code=404, detail={"code": "platform_role_assignment_not_found", "message": "有效的平台角色授权不存在"})
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "platform_role_assignment_not_found",
+                "message": "有效的平台角色授权不存在",
+            },
+        )
     if role_code == "super_admin":
         active_admins = db.scalar(
             select(func.count(PlatformUserRole.id))
@@ -198,9 +227,15 @@ def revoke_platform_role(
             )
         ) or 0
         if active_admins <= 1:
-            raise HTTPException(status_code=409, detail={"code": "last_super_admin", "message": "不能撤销最后一个有效超级管理员"})
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "last_super_admin",
+                    "message": "不能撤销最后一个有效超级管理员",
+                },
+            )
     assignment.revoked_at = now
-    _audit(
+    record_platform_audit(
         db,
         actor_user_id=principal.user.id,
         target_user_id=user_id,
