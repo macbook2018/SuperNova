@@ -210,10 +210,13 @@ async function loadWorkspace() {
 
 async function loadPlatformAdminAccess() {
   try {
-    await request<PlatformModel[]>('/admin/platform/models')
-    platformAdminAccess.value = true
+    const access = await request<{ permissions: string[] }>('/admin/platform/access')
+    platformAdminAccess.value = access.permissions.includes('platform.models.read')
+      || access.permissions.includes('platform.models.manage')
+    if (!platformAdminAccess.value && page.value === 'platformAdmin') page.value = 'overview'
   } catch {
     platformAdminAccess.value = false
+    if (page.value === 'platformAdmin') page.value = 'overview'
   }
 }
 
