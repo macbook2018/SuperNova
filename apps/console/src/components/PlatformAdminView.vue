@@ -7,7 +7,7 @@ import {
 import { apiRequest } from '../lib/api'
 
 type ProviderType = 'openai_compatible' | 'openai' | 'deepseek' | 'qwen' | 'anthropic'
-type EmbeddingProviderType = 'openai_compatible' | 'openai' | 'qwen' | 'deepseek'
+type EmbeddingProviderType = 'openai_compatible' | 'openai' | 'qwen'
 
 interface PlatformModel {
   id: string
@@ -285,7 +285,6 @@ function embeddingPresetChanged() {
     openai_compatible: '',
     openai: 'https://api.openai.com/v1',
     qwen: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-    deepseek: '',
   }
   embeddingForm.value.base_url = presets[embeddingForm.value.provider_type]
 }
