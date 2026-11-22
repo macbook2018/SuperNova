@@ -27,7 +27,7 @@ if [[ ! "$TAG" =~ ^[0-9a-f]{40}$ ]]; then
 fi
 
 COMPOSE=(docker compose --project-name supernova-staging --env-file .env -f compose.staging.yaml)
-for service in api console knowledge-worker chat-import-worker; do
+for service in postgres redis api console knowledge-worker chat-import-worker; do
   container_id="$("${COMPOSE[@]}" ps -q "$service")"
   if [[ -z "$container_id" ]]; then
     echo "No running container found for $service."
@@ -41,8 +41,11 @@ for service in api console knowledge-worker chat-import-worker; do
     console)
       expected="macbook201808/supernova:console-${TAG}"
       ;;
+    postgres|redis)
+      expected=""
+      ;;
   esac
-  if [[ "$image" != "$expected" ]]; then
+  if [[ -n "$expected" && "$image" != "$expected" ]]; then
     echo "$service is running $image, expected $expected."
     exit 1
   fi
@@ -55,6 +58,10 @@ done
 
 curl -fsS http://127.0.0.1:18082/health/ready >/dev/null
 curl -fsS http://127.0.0.1:18083/healthz >/dev/null
+STAGING_API_BASE_URL="${STAGING_API_BASE_URL:-https://api.wet001.com}"
+STAGING_CONSOLE_BASE_URL="${STAGING_CONSOLE_BASE_URL:-https://bot.wet001.com}"
+curl -fsS "${STAGING_API_BASE_URL%/}/health/ready" >/dev/null
+curl -fsS "${STAGING_CONSOLE_BASE_URL%/}/" | grep -q "SuperNova"
 
 python3 - "$TAG" .last_successful_deployment.json <<'PY'
 import json
