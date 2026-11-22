@@ -242,7 +242,10 @@ def update_platform_tenant_status(
     if tenant.status not in {"active", "disabled"}:
         raise HTTPException(
             status_code=409,
-            detail={"code": "tenant_status_not_supported", "message": "当前工作空间状态不能通过此操作修改"},
+            detail={
+                "code": "tenant_status_not_supported",
+                "message": "当前工作空间状态不能通过此操作修改",
+            },
         )
     next_status = payload.status
     if next_status == tenant.status:
