@@ -203,6 +203,9 @@ async function loadWorkspace() {
   providers.value = providerData
   platformModels.value = platformData
   embeddingModels.value = embeddingData
+  if (!kbForm.value.platform_embedding_model_id && embeddingData.length) {
+    kbForm.value.platform_embedding_model_id = embeddingData[0].id
+  }
   kbs.value = knowledgeData.map((kb, index) => ({ ...kb, color: colorFor(index), docs: [] }))
   apiKeys.value = keyData
   if (!kbs.value.some(kb => kb.id === selectedId.value)) selectedId.value = kbs.value[0]?.id ?? ''
@@ -617,6 +620,11 @@ async function refreshEmbeddingModels() {
     notify(error instanceof Error ? error.message : '刷新 Embedding 模型失败')
   }
 }
+async function openKbModal() {
+  await refreshEmbeddingModels()
+  kbForm.value = newKnowledgeBaseForm()
+  kbModal.value = true
+}
 async function createKb() {
   if (!kbForm.value.name.trim()) {
     notify('请填写知识库名称')
@@ -944,7 +952,7 @@ async function revokeKey(key: ApiKey) {
       <div class="kb-meta"><span><FileText :size="13"/> {{k.documents_count}} 份文档</span><span>{{k.embedding_source==='platform'?'平台 Embedding':'BYOK Embedding'}}</span></div>
       <footer><small><i></i>知识库已配置</small><a @click="openKb(k)">管理知识库 →</a></footer>
      </article>
-     <button class="kb-create" @click="kbModal=true"><span><Plus :size="22"/></span><b>创建知识库</b><small>配置 Embedding 与检索参数</small></button>
+     <button class="kb-create" @click="openKbModal"><span><Plus :size="22"/></span><b>创建知识库</b><small>配置 Embedding 与检索参数</small></button>
     </section>
     <div v-if="!embeddingModels.length" class="info"><AlertCircle :size="17"/><div><b>暂无可用的平台 Embedding 模型</b><small>模型必须启用、配置有效的服务器凭据引用，并能通过 OpenAI 兼容 Embeddings 接口返回 1536 维向量。管理员完成配置后可刷新页面或在创建窗口点击「刷新可用模型」。</small></div></div>
    </template>
