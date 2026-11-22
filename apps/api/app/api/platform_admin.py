@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from typing import Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Header, HTTPException, Query, status
@@ -20,8 +21,11 @@ router = APIRouter(tags=["平台权限"])
 
 
 class TenantStatusChangeRequest(BaseModel):
+    status: Literal["active", "disabled"]
     reason: str = Field(min_length=3, max_length=500)
-\n\nclass PlatformRoleChangeRequest(BaseModel):
+
+
+class PlatformRoleChangeRequest(BaseModel):
     reason: str = Field(min_length=3, max_length=500)
     expires_at: datetime | None = None
 
@@ -240,7 +244,7 @@ def update_platform_tenant_status(
             status_code=409,
             detail={"code": "tenant_status_not_supported", "message": "当前工作空间状态不能通过此操作修改"},
         )
-    next_status = "disabled" if tenant.status == "active" else "active"
+    next_status = payload.status
     if next_status == tenant.status:
         raise HTTPException(
             status_code=409,
@@ -281,7 +285,11 @@ def update_platform_tenant_status(
         db,
         actor_user_id=principal.user.id,
         target_user_id=None,
-        action="platform.tenant.disable" if next_status == "disabled" else "platform.tenant.enable",
+        action=(
+            "platform.tenant.disable"
+            if next_status == "disabled"
+            else "platform.tenant.enable"
+        ),
         resource_type="tenant",
         resource_id=str(tenant.id),
         reason=payload.reason,
@@ -295,7 +303,9 @@ def update_platform_tenant_status(
         "status": tenant.status,
         "updated": True,
     }
-\n\n@router.get("/admin/platform/users")
+
+
+@router.get("/admin/platform/users")
 def list_platform_users(
     principal: CurrentPrincipal,
     db: DatabaseSession,
