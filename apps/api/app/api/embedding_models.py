@@ -272,12 +272,17 @@ def test_embedding_model_connection(
     except ValueError:
         raise HTTPException(
             status_code=422,
-            detail={"code": "embedding_provider_url_invalid", "message": "Embedding 服务地址不符合安全要求"},
+            detail={
+                "code": "embedding_provider_url_invalid",
+                "message": "Embedding 服务地址不符合安全要求",
+            },
         ) from None
     except RuntimeError as exc:
         reason = str(exc)
         messages = {
-            "embedding_provider_dimension_mismatch": "服务返回的向量维度不是 1536，不能用于当前知识库索引",
+            "embedding_provider_dimension_mismatch": (
+                "服务返回的向量维度不是 1536，不能用于当前知识库索引"
+            ),
             "embedding_provider_response_count_mismatch": "Embedding 服务返回的向量数量不正确",
             "embedding_provider_invalid_json": "Embedding 服务返回了无效 JSON",
             "embedding_provider_invalid_vector": "Embedding 服务返回了无效向量",
