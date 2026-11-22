@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.schemas.catalog import _normalize_base_url, _trim_required
 
-EmbeddingProviderType = Literal["openai_compatible", "openai", "qwen", "deepseek"]
+EmbeddingProviderType = Literal["openai_compatible", "openai", "qwen"]
 
 
 class PlatformEmbeddingModelCreate(BaseModel):
