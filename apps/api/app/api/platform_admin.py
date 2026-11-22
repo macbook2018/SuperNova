@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Header, HTTPException, status
+from fastapi import APIRouter, Header, HTTPException, Query, status
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select
 
@@ -248,3 +248,35 @@ def revoke_platform_role(
     )
     db.commit()
     return {"user_id": str(user_id), "role": role.code, "revoked": True}
+
+
+@router.get("/admin/platform/audit-logs")
+def list_platform_audit_logs(
+    principal: CurrentPrincipal,
+    db: DatabaseSession,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> list[dict]:
+    require_platform_permission(principal, "platform.audit.read")
+    rows = db.scalars(
+        select(PlatformAdminAuditLog)
+        .order_by(PlatformAdminAuditLog.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+    ).all()
+    return [
+        {
+            "id": str(item.id),
+            "actor_user_id": str(item.actor_user_id) if item.actor_user_id else None,
+            "target_user_id": str(item.target_user_id) if item.target_user_id else None,
+            "action": item.action,
+            "resource_type": item.resource_type,
+            "resource_id": item.resource_id,
+            "result": item.result,
+            "reason": item.reason,
+            "request_id": item.request_id,
+            "details": item.details,
+            "created_at": item.created_at.isoformat(),
+        }
+        for item in rows
+    ]
