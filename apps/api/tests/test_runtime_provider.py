@@ -5,7 +5,6 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
-
 from app.runtime import provider as runtime_provider
 from docker.errors import NotFound
 
