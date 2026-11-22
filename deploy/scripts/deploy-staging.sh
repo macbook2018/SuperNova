@@ -44,7 +44,7 @@ DEPLOYMENT_COMPLETED=0
 trap '
   status=$?
   if [[ "$DEPLOYMENT_COMPLETED" != "1" ]]; then
-    printf "failed_at_utc=%s\\ncommit_sha=%s\\nrun_id=%s\\nrun_attempt=%s\\n" \
+    printf "failed_at_utc=%s\ncommit_sha=%s\nrun_id=%s\nrun_attempt=%s\n" \
       "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$TAG" "$RUN_ID" "$RUN_ATTEMPT" \
       > .staging-deployment-blocked
     echo "Staging deployment marked BLOCKED. No subsequent deployment may proceed until health is verified."
