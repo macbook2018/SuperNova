@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     runtime_pids_limit: int = 128
     runtime_worker_poll_seconds: float = 2.0
     runtime_worker_lease_seconds: int = 180
+    runtime_heartbeat_timeout_seconds: int = 90
     astrbot_runtime_version: str = "4.29.4"
     astrbot_runtime_commit: str = "61335414433db721b3f7ecc93f90deafe0a59d78"
     encryption_key: str | None = _DEFAULT_ENCRYPTION_KEY
@@ -90,6 +91,8 @@ class Settings(BaseSettings):
             raise ValueError("SUPERNOVA_RUNTIME_WORKER_POLL_SECONDS must be between 0.2 and 60")
         if not 30 <= self.runtime_worker_lease_seconds <= 3600:
             raise ValueError("SUPERNOVA_RUNTIME_WORKER_LEASE_SECONDS must be between 30 and 3600")
+        if not 30 <= self.runtime_heartbeat_timeout_seconds <= 900:
+            raise ValueError("SUPERNOVA_RUNTIME_HEARTBEAT_TIMEOUT_SECONDS must be between 30 and 900")
         if self.runtime_cpu_limit <= 0 or self.runtime_cpu_limit > 8:
             raise ValueError("SUPERNOVA_RUNTIME_CPU_LIMIT must be greater than 0 and at most 8")
         if not 16 <= self.runtime_pids_limit <= 4096:
