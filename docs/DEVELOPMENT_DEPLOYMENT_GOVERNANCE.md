@@ -172,11 +172,22 @@ concurrency:
 
 ## 10. 服务器二次互斥与失败熔断
 
-服务器部署和回滚脚本共享：
+服务器部署、回滚和健康确认脚本共享：
 
 `.staging-deploy.lock`
 
 使用 `flock` 防止 GitHub Actions 之外的操作与部署并发。
+
+每次部署通过内部健康检查后，会写入：
+
+`.staging-deployment-awaiting-acceptance`
+
+在 GitHub Environment `staging-acceptance` 审核完成前：
+
+- 下一次部署脚本拒绝启动。
+- 普通回滚脚本拒绝在验收期间改变当前版本。
+- 验收 Job 必须调用 `acknowledge-staging-health.sh --accept`，再次核验容器 SHA、服务健康和公网 API/Console，然后清除等待标记。
+- 如果验收被拒绝或工作流中断，等待标记会保留，后续部署不能覆盖当前版本。
 
 如果部署过程或部署后公网健康检查失败：
 
@@ -184,9 +195,8 @@ concurrency:
 - 后续部署必须停止。
 - 不得仅因下一个 GitHub Actions 任务已排队就继续发布。
 - 必须检查日志、容器状态和当前 SHA。
-- 可以执行经过验证的回滚。
-- 回滚成功后才解除阻断。
-- 如需人工恢复，只有在所有容器镜像 SHA、容器健康状态、API readiness、Console health 和部署记录均一致时，才可执行 `acknowledge-staging-health.sh`。
+- 可以执行经过验证的回滚；回滚成功后清除等待验收标记并解除阻断。
+- 如需人工恢复，只有在所有容器镜像 SHA、PostgreSQL/Redis 与应用容器健康状态、API readiness、Console health、公网 API/Console 和部署记录均一致时，才可执行 `acknowledge-staging-health.sh`（默认恢复模式）。
 
 数据库迁移不随应用镜像回滚自动回退，回滚前必须确认 Schema 向后兼容。
 
