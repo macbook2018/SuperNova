@@ -106,7 +106,9 @@ def list_platform_users(
     principal: CurrentPrincipal,
     db: DatabaseSession,
     q: str | None = Query(default=None, min_length=1, max_length=160),
-    user_status: str | None = Query(default=None, alias="status", pattern="^(active|disabled)$"),
+    user_status: str | None = Query(
+        default=None, alias="status", pattern="^(active|disabled)$"
+    ),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
 ) -> dict:
@@ -145,7 +147,11 @@ def list_platform_users(
                 "display_name": item.display_name,
                 "status": item.status,
                 "created_at": item.created_at.isoformat(),
-                "tenant_count": membership_counts.get(item.id, 0),
+                "tenant_count": (
+                    membership_counts.get(item.id, 0)
+                    if "platform.tenants.read" in principal.platform_permissions
+                    else None
+                ),
             }
             for item in rows
         ],
@@ -168,12 +174,14 @@ def get_platform_user(
             status_code=404,
             detail={"code": "user_not_found", "message": "用户不存在"},
         )
-    memberships = db.execute(
-        select(TenantMembership, Tenant)
-        .join(Tenant, Tenant.id == TenantMembership.tenant_id)
-        .where(TenantMembership.user_id == user_id)
-        .order_by(TenantMembership.created_at.desc())
-    ).all()
+    memberships = []
+    if "platform.tenants.read" in principal.platform_permissions:
+        memberships = db.execute(
+            select(TenantMembership, Tenant)
+            .join(Tenant, Tenant.id == TenantMembership.tenant_id)
+            .where(TenantMembership.user_id == user_id)
+            .order_by(TenantMembership.created_at.desc())
+        ).all()
     return {
         "id": str(user.id),
         "email": user.email,
