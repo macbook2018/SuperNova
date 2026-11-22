@@ -439,7 +439,7 @@ def test_platform_tenant_cannot_disable_workspace_containing_active_super_admin(
             db,
             code="tenant_lockout_operator",
             name="租户管理员",
-            permissions=("platform.tenants.manage",),
+            permissions=("platform.tenants.read", "platform.tenants.manage"),
         )
         super_admin = _seed_role(
             db,
@@ -462,4 +462,5 @@ def test_platform_tenant_cannot_disable_workspace_containing_active_super_admin(
         f"/admin/platform/tenants/{admin['tenant']['id']}",
         headers=_headers(actor),
     )
-    assert current.status_code == 403
+    assert current.status_code == 200
+    assert current.json()["status"] == "active"
