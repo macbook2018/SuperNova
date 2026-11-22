@@ -5,20 +5,20 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, event, select
+from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
+
+from app.db.base import Base
 from app.db.session import get_db
 from app.main import app, asgi_app
 from app.models.platform_rbac import (
-    PlatformAdminAuditLog,
     PlatformPermission,
     PlatformRole,
     PlatformRolePermission,
     PlatformUserRole,
 )
-from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, event, select
-from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy.pool import StaticPool
-from app.db.base import Base
 
 
 @pytest.fixture
