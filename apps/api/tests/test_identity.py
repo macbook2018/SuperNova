@@ -303,3 +303,29 @@ def test_public_registration_cannot_claim_reserved_platform_admin_email(
     )
     assert response.status_code == 409
     assert response.json()["detail"]["code"] == "reserved_platform_admin_email"
+
+def test_tenant_owner_does_not_receive_platform_permissions_or_manage_platform_roles(
+    client: TestClient,
+) -> None:
+    tokens = register(client, "tenant-owner@example.com")
+    headers = auth_headers(tokens)
+
+    access = client.get("/admin/platform/access", headers=headers)
+    assert access.status_code == 200
+    assert access.json() == {
+        "is_platform_admin": False,
+        "roles": [],
+        "permissions": [],
+    }
+
+    roles = client.get("/admin/platform/roles", headers=headers)
+    assert roles.status_code == 403
+    assert roles.json()["detail"]["code"] == "platform_permission_required"
+
+    grant = client.post(
+        f"/admin/platform/users/{tokens['user']['id']}/roles/super_admin",
+        headers=headers,
+        json={"reason": "尝试自行提升平台权限"},
+    )
+    assert grant.status_code == 403
+    assert grant.json()["detail"]["code"] == "platform_permission_required"
