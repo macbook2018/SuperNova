@@ -439,7 +439,7 @@ def create_billing_reconciliation(
     db: DatabaseSession,
     request_id: str | None = Header(default=None, alias="X-Request-ID"),
 ) -> BillingReconciliationRunRead:
-    require_platform_admin(principal)
+    require_platform_permission(principal, "platform.billing.manage")
     run = run_billing_reconciliation(
         db,
         actor_user_id=principal.user.id,
@@ -465,7 +465,7 @@ def list_billing_reconciliation_runs(
     db: DatabaseSession,
     limit: int = Query(default=20, ge=1, le=100),
 ) -> list[BillingReconciliationRunRead]:
-    require_platform_admin(principal)
+    require_platform_permission(principal, "platform.billing.read")
     rows = db.scalars(
         select(BillingReconciliationRun)
         .order_by(BillingReconciliationRun.created_at.desc())
@@ -479,7 +479,7 @@ def mark_expired_billing_reservations(
     principal: CurrentPrincipal,
     db: DatabaseSession,
 ) -> dict[str, int]:
-    require_platform_admin(principal)
+    require_platform_permission(principal, "platform.billing.manage")
     count = mark_stale_reservations_unknown(
         db,
         actor_user_id=principal.user.id,
@@ -493,7 +493,7 @@ def list_unknown_billing_reservations(
     db: DatabaseSession,
     limit: int = Query(default=50, ge=1, le=200),
 ) -> list[dict]:
-    require_platform_admin(principal)
+    require_platform_permission(principal, "platform.billing.read")
     reservations = db.scalars(
         select(BillingReservation)
         .where(BillingReservation.state == "unknown")
@@ -536,7 +536,7 @@ def settle_unknown_billing_reservation(
     principal: CurrentPrincipal,
     db: DatabaseSession,
 ) -> dict[str, str]:
-    require_platform_admin(principal)
+    require_platform_permission(principal, "platform.billing.manage")
     settle_unknown_reservation_with_usage(
         db,
         reservation_id=reservation_id,
@@ -555,7 +555,7 @@ def release_unknown_billing_reservation(
     principal: CurrentPrincipal,
     db: DatabaseSession,
 ) -> dict[str, str]:
-    require_platform_admin(principal)
+    require_platform_permission(principal, "platform.billing.manage")
     release_unknown_reservation(
         db,
         reservation_id=reservation_id,
