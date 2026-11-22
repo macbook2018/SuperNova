@@ -11,6 +11,11 @@ fi
 exec 9>"$APP_DIR/.staging-deploy.lock"
 flock 9
 
+if [[ -f .staging-deployment-awaiting-acceptance && ! -f .staging-deployment-blocked ]]; then
+  echo "The current Staging deployment is awaiting acceptance; do not change it during review."
+  exit 71
+fi
+
 TAG="${1:-}"
 if [[ -z "$TAG" && -f .previous_successful_tag ]]; then
   TAG="$(cat .previous_successful_tag)"
@@ -98,7 +103,7 @@ for attempt in $(seq 1 45); do
 }
 EOF
     mv .last_successful_deployment.json.tmp .last_successful_deployment.json
-    rm -f .staging-deployment-blocked
+    rm -f .staging-deployment-blocked .staging-deployment-awaiting-acceptance
     ROLLBACK_COMPLETED=1
     echo "Application containers rolled back to ${TAG}."
     echo "Database schema/data were NOT rolled back. Verify backward compatibility."
