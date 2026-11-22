@@ -36,6 +36,13 @@ from app.models.knowledge import (
     KnowledgeUsageRecord,
     PlatformEmbeddingModel,
 )
+from app.models.platform_rbac import (
+    PlatformAdminAuditLog,
+    PlatformPermission,
+    PlatformRole,
+    PlatformRolePermission,
+    PlatformUserRole,
+)
 from app.models.usage import UsageRecord
 
 __all__ = [
@@ -65,6 +72,11 @@ __all__ = [
     "KnowledgeIngestionJob",
     "KnowledgeUsageRecord",
     "PlatformEmbeddingModel",
+    "PlatformAdminAuditLog",
+    "PlatformPermission",
+    "PlatformRole",
+    "PlatformRolePermission",
+    "PlatformUserRole",
     "ModelProvider",
     "Persona",
     "PersonaKnowledgeBase",

@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Annotated
 from uuid import UUID
 
@@ -11,6 +12,12 @@ from sqlalchemy.orm import Session
 from app.core.security import decode_access_token
 from app.db.session import get_db
 from app.models.identity import Tenant, TenantMembership, User
+from app.models.platform_rbac import (
+    PlatformPermission,
+    PlatformRole,
+    PlatformRolePermission,
+    PlatformUserRole,
+)
 
 _bearer = HTTPBearer(auto_error=False)
 
@@ -20,6 +27,8 @@ class Principal:
     user: User
     tenant: Tenant
     membership: TenantMembership
+    platform_roles: frozenset[str] = frozenset()
+    platform_permissions: frozenset[str] = frozenset()
 
 
 DatabaseSession = Annotated[Session, Depends(get_db)]
@@ -56,7 +65,26 @@ def get_current_principal(
     if user is None or tenant is None or membership is None:
         raise unauthorized
 
-    return Principal(user=user, tenant=tenant, membership=membership)
+    now = datetime.now(UTC)
+    platform_access = db.execute(
+        select(PlatformRole.code, PlatformPermission.code)
+        .select_from(PlatformUserRole)
+        .join(PlatformRole, PlatformRole.id == PlatformUserRole.role_id)
+        .join(PlatformRolePermission, PlatformRolePermission.role_id == PlatformRole.id)
+        .join(PlatformPermission, PlatformPermission.id == PlatformRolePermission.permission_id)
+        .where(
+            PlatformUserRole.user_id == user_id,
+            PlatformUserRole.revoked_at.is_(None),
+            (PlatformUserRole.expires_at.is_(None) | (PlatformUserRole.expires_at > now)),
+        )
+    ).all()
+    return Principal(
+        user=user,
+        tenant=tenant,
+        membership=membership,
+        platform_roles=frozenset(role_code for role_code, _ in platform_access),
+        platform_permissions=frozenset(permission_code for _, permission_code in platform_access),
+    )
 
 
 CurrentPrincipal = Annotated[Principal, Depends(get_current_principal)]

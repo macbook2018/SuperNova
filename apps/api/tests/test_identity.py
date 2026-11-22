@@ -1,6 +1,8 @@
 from collections.abc import Generator
+from types import SimpleNamespace
 
 import pytest
+from app.api import auth
 from app.api.auth import _is_email_unique_violation
 from app.db.base import Base
 from app.db.session import get_db
@@ -280,3 +282,24 @@ def test_register_does_not_misreport_other_integrity_errors(
     assert response.json()["error"]["code"] == "internal_error"
     assert response.json()["error"]["request_id"]
     assert response.headers["access-control-allow-origin"] == "http://localhost:5173"
+
+
+
+def test_public_registration_cannot_claim_reserved_platform_admin_email(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        auth,
+        "get_settings",
+        lambda: SimpleNamespace(platform_admin_email_set=frozenset({"reserved@example.com"})),
+    )
+    response = client.post(
+        "/auth/register",
+        json={
+            "email": "RESERVED@example.com",
+            "password": "correct-horse-battery",
+            "display_name": "Reserved",
+        },
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "reserved_platform_admin_email"

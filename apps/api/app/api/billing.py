@@ -2,12 +2,12 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Header, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import CurrentPrincipal, DatabaseSession
-from app.api.platform_admin import require_platform_admin
+from app.api.platform_admin import record_platform_audit, require_platform_permission
 from app.billing.entitlements import (
     _subscription_read,
     build_entitlement_snapshot,
@@ -115,8 +115,9 @@ def create_billing_plan(
     payload: BillingPlanCreate,
     principal: CurrentPrincipal,
     db: DatabaseSession,
+    request_id: str | None = Header(default=None, alias="X-Request-ID"),
 ) -> BillingPlanRead:
-    require_platform_admin(principal)
+    require_platform_permission(principal, "platform.billing.manage")
     plan = BillingPlan(
         id=uuid4(),
         code=payload.code,
@@ -128,6 +129,17 @@ def create_billing_plan(
         status=payload.status,
     )
     db.add(plan)
+    record_platform_audit(
+        db, actor_user_id=principal.user.id, target_user_id=None,
+        action="platform.billing.plan.create", resource_type="billing_plan",
+        resource_id=f"{plan.code}:{plan.revision}",
+        reason="创建套餐版本",
+        request_id=request_id,
+        details={
+            "currency": plan.currency,
+            "subscription_price_minor": plan.subscription_price_minor,
+        },
+    )
     try:
         db.flush()
         db.add_all(
@@ -169,8 +181,9 @@ def assign_tenant_subscription(
     payload: TenantSubscriptionCreate,
     principal: CurrentPrincipal,
     db: DatabaseSession,
+    request_id: str | None = Header(default=None, alias="X-Request-ID"),
 ) -> TenantSubscriptionRead:
-    require_platform_admin(principal)
+    require_platform_permission(principal, "platform.billing.manage")
     tenant = db.get(Tenant, tenant_id)
     if tenant is None:
         raise HTTPException(
@@ -220,6 +233,13 @@ def assign_tenant_subscription(
         current_period_end=payload.current_period_end,
     )
     db.add(subscription)
+    record_platform_audit(
+        db, actor_user_id=principal.user.id, target_user_id=None,
+        action="platform.billing.subscription.assign", resource_type="tenant_subscription",
+        resource_id=str(subscription.id), reason="分配租户订阅",
+        request_id=request_id,
+        details={"tenant_id": str(tenant_id), "plan_id": str(plan.id), "status": payload.status},
+    )
     policy = db.get(TenantBillingPolicy, tenant_id)
     if policy is None:
         policy = TenantBillingPolicy(tenant_id=tenant_id)
@@ -421,14 +441,26 @@ def create_billing_reconciliation(
     payload: BillingReconciliationRunCreate,
     principal: CurrentPrincipal,
     db: DatabaseSession,
+    request_id: str | None = Header(default=None, alias="X-Request-ID"),
 ) -> BillingReconciliationRunRead:
-    require_platform_admin(principal)
+    require_platform_permission(principal, "platform.billing.manage")
     run = run_billing_reconciliation(
         db,
         actor_user_id=principal.user.id,
         period_start=payload.period_start,
         period_end=payload.period_end,
     )
+    record_platform_audit(
+        db, actor_user_id=principal.user.id, target_user_id=None,
+        action="platform.billing.reconciliation.run", resource_type="billing_reconciliation",
+        resource_id=str(run.id), reason="执行账务对账", request_id=request_id,
+        details={
+            "period_start": payload.period_start.isoformat(),
+            "period_end": payload.period_end.isoformat(),
+            "status": run.status,
+        },
+    )
+    db.commit()
     return BillingReconciliationRunRead.model_validate(run)
 
 
@@ -441,7 +473,7 @@ def list_billing_reconciliation_runs(
     db: DatabaseSession,
     limit: int = Query(default=20, ge=1, le=100),
 ) -> list[BillingReconciliationRunRead]:
-    require_platform_admin(principal)
+    require_platform_permission(principal, "platform.billing.read")
     rows = db.scalars(
         select(BillingReconciliationRun)
         .order_by(BillingReconciliationRun.created_at.desc())
@@ -455,7 +487,7 @@ def mark_expired_billing_reservations(
     principal: CurrentPrincipal,
     db: DatabaseSession,
 ) -> dict[str, int]:
-    require_platform_admin(principal)
+    require_platform_permission(principal, "platform.billing.manage")
     count = mark_stale_reservations_unknown(
         db,
         actor_user_id=principal.user.id,
@@ -469,7 +501,7 @@ def list_unknown_billing_reservations(
     db: DatabaseSession,
     limit: int = Query(default=50, ge=1, le=200),
 ) -> list[dict]:
-    require_platform_admin(principal)
+    require_platform_permission(principal, "platform.billing.read")
     reservations = db.scalars(
         select(BillingReservation)
         .where(BillingReservation.state == "unknown")
@@ -512,7 +544,7 @@ def settle_unknown_billing_reservation(
     principal: CurrentPrincipal,
     db: DatabaseSession,
 ) -> dict[str, str]:
-    require_platform_admin(principal)
+    require_platform_permission(principal, "platform.billing.manage")
     settle_unknown_reservation_with_usage(
         db,
         reservation_id=reservation_id,
@@ -531,7 +563,7 @@ def release_unknown_billing_reservation(
     principal: CurrentPrincipal,
     db: DatabaseSession,
 ) -> dict[str, str]:
-    require_platform_admin(principal)
+    require_platform_permission(principal, "platform.billing.manage")
     release_unknown_reservation(
         db,
         reservation_id=reservation_id,

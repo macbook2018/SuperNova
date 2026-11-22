@@ -92,6 +92,14 @@ def _unauthorized() -> HTTPException:
 @router.post("/register", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
 def register(payload: RegisterRequest, db: DatabaseSession) -> AuthResponse:
     email = str(payload.email).lower()
+    if email in get_settings().platform_admin_email_set:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "reserved_platform_admin_email",
+                "message": "该邮箱为平台管理员保留邮箱，请使用已授权账户登录",
+            },
+        )
     if db.scalar(select(User.id).where(User.email == email)) is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

@@ -1,11 +1,11 @@
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import CurrentPrincipal, DatabaseSession
-from app.api.platform_admin import require_platform_admin
+from app.api.platform_admin import record_platform_audit, require_platform_permission
 from app.billing.credentials import resolve_platform_api_key
 from app.models.knowledge import PlatformEmbeddingModel
 from app.schemas.knowledge import (
@@ -72,7 +72,7 @@ def list_admin_embedding_models(
     principal: CurrentPrincipal,
     db: DatabaseSession,
 ) -> list[PlatformEmbeddingModelAdminRead]:
-    require_platform_admin(principal)
+    require_platform_permission(principal, "platform.models.read")
     models = db.scalars(
         select(PlatformEmbeddingModel).order_by(PlatformEmbeddingModel.created_at.desc())
     ).all()
@@ -88,8 +88,9 @@ def create_embedding_model(
     payload: PlatformEmbeddingModelCreate,
     principal: CurrentPrincipal,
     db: DatabaseSession,
+    request_id: str | None = Header(default=None, alias="X-Request-ID"),
 ) -> PlatformEmbeddingModelAdminRead:
-    require_platform_admin(principal)
+    require_platform_permission(principal, "platform.models.manage")
     model = PlatformEmbeddingModel(
         id=uuid4(),
         code=payload.code,
@@ -102,6 +103,16 @@ def create_embedding_model(
         enabled=payload.enabled,
     )
     db.add(model)
+    record_platform_audit(
+        db, actor_user_id=principal.user.id, target_user_id=None,
+        action="platform.embedding_model.create", resource_type="embedding_model",
+        resource_id=model.code, reason="创建平台 Embedding 模型", request_id=request_id,
+        details={
+            "provider_type": model.provider_type,
+            "dimensions": model.dimensions,
+            "enabled": model.enabled,
+        },
+    )
     try:
         db.commit()
     except IntegrityError:
@@ -126,8 +137,9 @@ def update_embedding_model(
     payload: PlatformEmbeddingModelUpdate,
     principal: CurrentPrincipal,
     db: DatabaseSession,
+    request_id: str | None = Header(default=None, alias="X-Request-ID"),
 ) -> PlatformEmbeddingModelAdminRead:
-    require_platform_admin(principal)
+    require_platform_permission(principal, "platform.models.manage")
     model = db.get(PlatformEmbeddingModel, model_id)
     if model is None:
         raise HTTPException(
@@ -145,6 +157,12 @@ def update_embedding_model(
         )
     for field, value in updates.items():
         setattr(model, field, value)
+    record_platform_audit(
+        db, actor_user_id=principal.user.id, target_user_id=None,
+        action="platform.embedding_model.update", resource_type="embedding_model",
+        resource_id=str(model.id), reason="修改平台 Embedding 模型", request_id=request_id,
+        details={"changed_fields": sorted(updates)},
+    )
     db.commit()
     db.refresh(model)
     return _admin_read(model)
