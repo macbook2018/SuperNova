@@ -84,7 +84,7 @@ const embeddingForm = ref({
 
 const selectedModel = computed(() => models.value.find(item => item.id === selectedModelId.value) ?? null)
 const enabledModels = computed(() => models.value.filter(item => item.enabled).length)
-const enabledEmbeddings = computed(() => embeddingModels.value.filter(item => item.enabled).length)
+const enabledEmbeddings = computed(() => embeddingModels.value.filter(item => item.enabled && item.verified_at).length)
 
 function providerLabel(value: string): string {
   const labels: Record<string, string> = {
@@ -322,19 +322,20 @@ async function saveEmbedding() {
   saving.value = true
   try {
     if (editingEmbeddingId.value) {
+      const current = embeddingModels.value.find(item => item.id === editingEmbeddingId.value)
+      const updates: Record<string, string | number | boolean> = {
+        display_name: payload.display_name,
+      }
+      if (current?.provider_type !== payload.provider_type) updates.provider_type = payload.provider_type
+      if (current?.upstream_model_name !== payload.upstream_model_name) updates.upstream_model_name = payload.upstream_model_name
+      if (current?.base_url !== payload.base_url) updates.base_url = payload.base_url
+      if (current?.credential_ref !== payload.credential_ref) updates.credential_ref = payload.credential_ref
+      if (current?.dimensions !== 1536) updates.dimensions = 1536
       await apiRequest<EmbeddingModel>(`/admin/platform/embedding-models/${editingEmbeddingId.value}`, {
         method: 'PATCH',
-        body: JSON.stringify({
-          display_name: payload.display_name,
-          provider_type: payload.provider_type,
-          upstream_model_name: payload.upstream_model_name,
-          base_url: payload.base_url,
-          credential_ref: payload.credential_ref,
-          dimensions: 1536,
-          enabled: payload.enabled,
-        }),
+        body: JSON.stringify(updates),
       })
-      notify('平台 Embedding 模型已更新')
+      notify('平台 Embedding 模型已更新；如修改了连接配置，需要重新测试后启用')
     } else {
       await apiRequest<EmbeddingModel>('/admin/platform/embedding-models', {
         method: 'POST',
