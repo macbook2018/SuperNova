@@ -53,18 +53,23 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient, None, None]
             description="测试财务管理员", is_system=True,
         )
         admin_permissions = [
-            PlatformPermission(id=uuid4(), code="platform.admin", description="完整平台管理权限"),
-            PlatformPermission(id=uuid4(), code="platform.rbac.manage", description="管理平台角色"),
+            PlatformPermission(id=uuid4(), code=code, description=code)
+            for code in (
+                "platform.admin",
+                "platform.rbac.manage",
+                "platform.models.read",
+                "platform.models.manage",
+                "platform.billing.read",
+                "platform.billing.manage",
+            )
         ]
-        finance_permission = PlatformPermission(
-            id=uuid4(), code="platform.billing.read", description="查看财务数据",
-        )
-        session.add_all([admin_role, finance_role, *admin_permissions, finance_permission])
+        session.add_all([admin_role, finance_role, *admin_permissions])
         session.flush()
         session.add_all([
             PlatformRolePermission(role_id=admin_role.id, permission_id=item.id)
             for item in admin_permissions
         ])
+        finance_permission = next(item for item in admin_permissions if item.code == "platform.billing.read")
         session.add(
             PlatformRolePermission(role_id=finance_role.id, permission_id=finance_permission.id)
         )
