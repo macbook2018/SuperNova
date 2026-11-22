@@ -103,13 +103,23 @@ PR Base 必须是：
 
 `.github/workflows/ci.yml` 调用 `.github/workflows/staging-deploy.yml`
 
-部署只允许由主开发分支的 push 事件触发。正常情况下，这个 push 应来自已通过 PR 合并的提交。
+部署只允许由以下 GitHub 事件触发：
+
+- `pull_request`。
+- `action == closed`。
+- `pull_request.merged == true`。
+- `pull_request.base.ref == feat/phase-6-knowledge-base-rag`。
+- 该次合并提交上的 Console、API、Docker Compose 三组 CI 全部成功。
+
+部署输入 SHA 使用该次 PR 合并后的 `github.sha`，并在部署工作流中再次校验 checkout HEAD。
 
 以下操作不允许触发部署：
 
 - 功能分支 push。
 - Bug 分支 push。
-- PR 检查事件。
+- 普通主开发分支 push（直接推送本身也应被 Branch protection 阻止）。
+- PR opened / synchronize 等检查事件。
+- 未合并的 PR close 事件。
 - 手动 workflow_dispatch。
 - 会话自行 SSH 登录服务器运行 deploy-staging.sh。
 
