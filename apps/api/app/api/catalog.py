@@ -403,6 +403,11 @@ def _validate_knowledge_embedding_config(
             model = db.get(PlatformEmbeddingModel, platform_embedding_model_id)
             if model is None or not model.enabled:
                 raise _not_found("platform_embedding_model")
+            if model.verified_at is None:
+                raise _conflict(
+                    "platform_embedding_model_unverified",
+                    "平台 Embedding 模型尚未通过真实连接及 1536 维输出验证",
+                )
     elif embedding_source == "byok":
         if platform_embedding_model_id is not None:
             raise HTTPException(
