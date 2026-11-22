@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     jwt_secret: str = _DEFAULT_JWT_SECRET
     runtime_jwt_secret: str | None = None
     runtime_gateway_base_url: str = "http://host.docker.internal:8001/internal/runtime/v1"
-    runtime_data_root: str = "/var/lib/supernova/runtime"
+    runtime_data_root: str = "/tmp/supernova-runtime"
     astrbot_runtime_image: str = "macbook201808/supernova-astrbot-runtime:4.29.4-6133541"
     runtime_memory_limit: str = "512m"
     runtime_cpu_limit: float = 1.0
