@@ -55,6 +55,8 @@ const roles = ref<PlatformRole[]>([])
 const users = ref<PlatformUser[]>([])
 const userSearch = ref('')
 const userTotal = ref(0)
+const userOffset = ref(0)
+const userPageSize = 30
 const userDetail = ref<PlatformUserDetail | null>(null)
 const usersLoading = ref(false)
 const userId = ref('')
@@ -83,12 +85,13 @@ async function loadRoles() {
     selectedRole.value = roles.value[0]?.code ?? ''
   }
 }
-async function searchUsers() {
+async function searchUsers(resetPage = false) {
+  if (resetPage) userOffset.value = 0
   if (!props.canReadUsers) return
   usersLoading.value = true
   error.value = ''
   try {
-    const params = new URLSearchParams({ limit: '30', offset: '0' })
+    const params = new URLSearchParams({ limit: String(userPageSize), offset: String(userOffset.value) })
     if (userSearch.value.trim()) params.set('q', userSearch.value.trim())
     const result = await apiRequest<{ items: PlatformUser[]; total: number }>(`/admin/platform/users?${params}`)
     users.value = result.items
@@ -225,6 +228,8 @@ onMounted(() => { void refresh() })
       <div v-else class="rbac-table-wrap"><table class="rbac-table"><thead><tr><th>账户</th><th>状态</th><th>工作空间</th><th>注册时间</th><th>操作</th></tr></thead>
         <tbody><tr v-for="user in users" :key="user.id"><td><b>{{ user.display_name }}</b><small>{{ user.email }}</small></td><td><span :class="user.status==='active'?'rbac-on':'rbac-off'">{{ user.status==='active'?'正常':'已禁用' }}</span></td><td>{{ user.tenant_count }}</td><td>{{ new Date(user.created_at).toLocaleString() }}</td><td><button class="rbac-link" @click="selectUser(user)">查看详情 / 授权</button></td></tr></tbody>
       </table></div>
+      <div class="rbac-pagination"><button class="rbac-button secondary" :disabled="usersLoading || userOffset===0" @click="userOffset=Math.max(0,userOffset-userPageSize);searchUsers()">上一页</button><span>{{ userTotal ? Math.floor(userOffset/userPageSize)+1 : 0 }} / {{ Math.max(1,Math.ceil(userTotal/userPageSize)) }} 页</span><button class="rbac-button secondary" :disabled="usersLoading || userOffset+userPageSize>=userTotal" @click="userOffset+=userPageSize;searchUsers()">下一页</button></div>
+      <div v-if="userDetail" class="rbac-selected-user"><b>{{ userDetail.display_name }}</b><span>{{ userDetail.email }}</span><small>{{ userDetail.id }}</small><div v-if="userDetail.tenants.length"><b>所属工作空间</b><span v-for="tenant in userDetail.tenants" :key="tenant.tenant_id">{{ tenant.tenant_name }} · {{ tenant.membership_role }} · {{ tenant.membership_status }}</span></div><div v-else>该用户尚未加入工作空间</div></div>
     </section>
     <template v-if="canManage && activeTab==='assignments'">
       <section class="rbac-panel">
@@ -288,7 +293,7 @@ onMounted(() => { void refresh() })
 .rbac-panel header div{display:flex;flex-direction:column;gap:5px}
 .rbac-panel header b{font-size:13px}
 .rbac-panel header small{font-size:10px;color:#9aa5b5}
-.rbac-directory-meta{margin-top:12px;font-size:10px;color:#94a1b3}.rbac-selected-user{display:flex;flex-direction:column;gap:5px;padding:12px;margin-bottom:12px;background:#f7faff;border:1px solid #e5edfb;border-radius:8px;font-size:11px}.rbac-selected-user span,.rbac-selected-user small{color:#8492a8}.rbac-selected-user small{font-size:9px;word-break:break-all}.rbac-selected-user div{margin-top:4px;color:#667791}.rbac-search{display:flex;align-items:flex-end;gap:10px;max-width:680px}
+.rbac-pagination{display:flex;align-items:center;justify-content:flex-end;gap:12px;margin-top:13px;font-size:10px;color:#8795aa}.rbac-directory-meta{margin-top:12px;font-size:10px;color:#94a1b3}.rbac-selected-user{display:flex;flex-direction:column;gap:5px;padding:12px;margin-bottom:12px;background:#f7faff;border:1px solid #e5edfb;border-radius:8px;font-size:11px}.rbac-selected-user span,.rbac-selected-user small{color:#8492a8}.rbac-selected-user small{font-size:9px;word-break:break-all}.rbac-selected-user div{margin-top:4px;color:#667791}.rbac-search{display:flex;align-items:flex-end;gap:10px;max-width:680px}
 .rbac-search label,.rbac-form label{display:flex;flex-direction:column;gap:6px;font-size:10px;color:#75839a;flex:1}
 .rbac-search input,.rbac-form input,.rbac-form select{height:37px;box-sizing:border-box;border:1px solid #e7ecf3;border-radius:7px;padding:0 10px;font-size:11px;color:#43536b;background:#fbfcfe;outline:none;width:100%}
 .rbac-search input:focus,.rbac-form input:focus,.rbac-form select:focus{border-color:#8db5fa;background:white}
