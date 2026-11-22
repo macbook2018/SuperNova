@@ -11,9 +11,18 @@ fi
 exec 9>"$APP_DIR/.staging-deploy.lock"
 flock 9
 
-if [[ ! -f .staging-deployment-blocked ]]; then
+MODE="${1:-recover}"
+if [[ "$MODE" != "recover" && "$MODE" != "--accept" ]]; then
+  echo "Usage: ./acknowledge-staging-health.sh [recover|--accept]"
+  exit 2
+fi
+if [[ "$MODE" == "recover" && ! -f .staging-deployment-blocked ]]; then
   echo "Staging deployment queue is not blocked."
   exit 0
+fi
+if [[ "$MODE" == "--accept" && ! -s .staging-deployment-awaiting-acceptance ]]; then
+  echo "There is no deployment awaiting acceptance."
+  exit 1
 fi
 if [[ ! -f .env || ! -s .last_successful_tag || ! -s .last_successful_deployment.json ]]; then
   echo "Cannot acknowledge health: deployment configuration or last successful record is missing."
@@ -21,6 +30,10 @@ if [[ ! -f .env || ! -s .last_successful_tag || ! -s .last_successful_deployment
 fi
 
 TAG="$(cat .last_successful_tag)"
+if [[ "$MODE" == "--accept" && "$(cat .staging-deployment-awaiting-acceptance)" != "$TAG" ]]; then
+  echo "Pending acceptance SHA does not match the active Staging SHA."
+  exit 1
+fi
 if [[ ! "$TAG" =~ ^[0-9a-f]{40}$ ]]; then
   echo "The last successful deployment SHA is invalid."
   exit 1
@@ -76,5 +89,9 @@ if record.get("status") != "healthy":
     raise SystemExit("Deployment record is not marked healthy.")
 PY
 
-rm -f .staging-deployment-blocked
-echo "Staging health acknowledged. Deployment queue unblocked at SHA $TAG."
+rm -f .staging-deployment-blocked .staging-deployment-awaiting-acceptance
+if [[ "$MODE" == "--accept" ]]; then
+  echo "Staging deployment accepted at SHA $TAG."
+else
+  echo "Staging health recovered and deployment queue unblocked at SHA $TAG."
+fi
