@@ -1,5 +1,6 @@
 from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 from types import SimpleNamespace
 
 import pytest
@@ -8,6 +9,7 @@ from app.billing import credentials
 from app.billing.money import currency_minor_unit_exponent
 from app.db.base import Base
 from app.db.session import get_db
+from app.models.platform_rbac import PlatformPermission, PlatformRole, PlatformRolePermission, PlatformUserRole
 from app.main import app
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, event
@@ -42,13 +44,18 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient, None, None]
             yield session
 
     app.dependency_overrides[get_db] = override_get_db
-    monkeypatch.setattr(
-        platform_admin,
-        "get_settings",
-        lambda: SimpleNamespace(
-            platform_admin_email_set=frozenset({"admin@example.com"})
-        ),
-    )
+    with testing_session() as session:
+        role = PlatformRole(
+            id=uuid4(), code="super_admin", name="超级管理员",
+            description="测试平台超级管理员", is_system=True,
+        )
+        permission = PlatformPermission(
+            id=uuid4(), code="platform.admin", description="完整平台管理权限",
+        )
+        session.add_all([role, permission])
+        session.flush()
+        session.add(PlatformRolePermission(role_id=role.id, permission_id=permission.id))
+        session.commit()
     monkeypatch.setattr(
         credentials,
         "get_settings",
@@ -73,7 +80,26 @@ def register(client: TestClient, email: str = "admin@example.com") -> dict:
         },
     )
     assert response.status_code == 201, response.text
-    return response.json()
+    tokens = response.json()
+    if email == "admin@example.com":
+        generator = app.dependency_overrides[get_db]()
+        session = next(generator)
+        try:
+            role = session.query(PlatformRole).filter_by(code="super_admin").one()
+            session.add(
+                PlatformUserRole(
+                    id=uuid4(),
+                    user_id=tokens["user"]["id"],
+                    role_id=role.id,
+                )
+            )
+            session.commit()
+        finally:
+            try:
+                next(generator)
+            except StopIteration:
+                pass
+    return tokens
 
 
 def headers(tokens: dict) -> dict[str, str]:
