@@ -218,7 +218,7 @@ def test_postgres_hybrid_retrieval_returns_only_persona_linked_citations(
         assert citations[0]["document_name"] == "退货政策.md"
         assert citations[0]["score"] >= 0.99
         assert "30 天内退货" in context
-        assert "不可信的引用数据" in context
+        assert "不可信数据" in context
         assert "其他人格内部信息" not in context
         assert db.scalar(select(func.count(KnowledgeUsageRecord.id))) == 1
 
