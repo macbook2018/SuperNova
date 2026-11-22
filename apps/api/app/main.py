@@ -18,6 +18,7 @@ from app.api.embedding_models import router as embedding_models_router
 from app.api.gateway import router as gateway_router
 from app.api.health import router as health_router
 from app.api.knowledge import router as knowledge_router
+from app.api.platform_admin import router as platform_admin_router
 from app.api.platform_models import router as platform_models_router
 from app.api.usage import router as usage_router
 from app.core.config import get_settings
@@ -40,6 +41,7 @@ app.include_router(chat_analysis_router)
 app.include_router(auth_router)
 app.include_router(api_keys_router)
 app.include_router(catalog_router)
+app.include_router(platform_admin_router)
 app.include_router(platform_models_router)
 app.include_router(billing_router)
 app.include_router(embedding_models_router)
