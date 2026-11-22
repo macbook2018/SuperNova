@@ -1,6 +1,7 @@
-import httpx
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
+
+import httpx
 from fastapi import APIRouter, Header, HTTPException
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -171,7 +172,10 @@ def update_embedding_model(
             },
         )
     connection_fields = {"provider_type", "upstream_model_name", "base_url", "credential_ref", "dimensions"}
-    connection_changed = bool(connection_fields.intersection(updates))
+    connection_changed = any(
+        getattr(model, field) != updates[field]
+        for field in connection_fields.intersection(updates)
+    )
     if connection_changed and updates.get("enabled") is True:
         raise HTTPException(
             status_code=409,
