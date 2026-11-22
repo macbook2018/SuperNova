@@ -111,7 +111,7 @@ PR Base 必须是：
 - `pull_request.base.ref == feat/phase-6-knowledge-base-rag`。
 - 该次合并提交上的 Console、API、Docker Compose 三组 CI 全部成功。
 
-部署输入 SHA 使用该次 PR 合并后的 `github.sha`，并在部署工作流中再次校验 checkout HEAD。
+部署输入 SHA 使用 `pull_request.merge_commit_sha`（缺失时才回退到 `github.sha`），并在部署工作流中再次校验 checkout HEAD。
 
 以下操作不允许触发部署：
 
