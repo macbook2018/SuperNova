@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import ChatImportsView from './components/ChatImportsView.vue'
 import PlatformAdminView from './components/PlatformAdminView.vue'
+import PlatformAccessView from './components/PlatformAccessView.vue'
 import {
   Activity, AlertCircle, ArrowRight, Bell, Bot, Check, CheckCircle2,
   ChevronDown, ChevronRight, CircleHelp, Copy, Cpu, Database, Download, FileText,
@@ -37,7 +38,7 @@ import {
   type UsageSummary,
 } from './lib/api'
 
-type Page = 'overview' | 'personas' | 'providers' | 'knowledge' | 'knowledgeDetail' | 'chatImports' | 'api' | 'billing' | 'usage' | 'settings' | 'platformAdmin'
+type Page = 'overview' | 'personas' | 'providers' | 'knowledge' | 'knowledgeDetail' | 'chatImports' | 'api' | 'billing' | 'usage' | 'settings' | 'platformAdmin' | 'platformAccess'
 type PersonaView = Persona & { color: string }
 type KnowledgeBaseView = KnowledgeBase & { color: string; docs: KnowledgeDocument[] }
 
@@ -67,6 +68,7 @@ const titles: Record<Page, string> = {
   usage: '用量与账单',
   settings: '账户设置',
   platformAdmin: '平台模型管理',
+  platformAccess: '平台权限管理',
 }
 const descriptions: Record<Page, string> = {
   overview: '查看工作空间中的人格、模型供应商和资源状态。',
@@ -80,6 +82,7 @@ const descriptions: Record<Page, string> = {
   usage: '查看真实模型调用次数、输入输出 Token、响应时间和未计量请求。',
   settings: '查看账户资料与安全设置。',
   platformAdmin: '管理平台统一对话模型、Embedding 模型、供应商凭据引用和模型价格。',
+  platformAccess: '管理平台角色授权、权限有效期和平台操作审计。',
 }
 const nav = [
   {
@@ -105,11 +108,24 @@ const nav = [
   },
   {
     label: '平台管理',
-    items: [{ key: 'platformAdmin' as Page, label: '平台模型管理', icon: Settings2 }],
+    items: [
+      { key: 'platformAdmin' as Page, label: '平台模型管理', icon: Settings2 },
+      { key: 'platformAccess' as Page, label: '平台权限管理', icon: ShieldCheck },
+    ],
   },
 ]
 const activeNav = computed(() => page.value === 'knowledgeDetail' ? 'knowledge' : page.value)
-const visibleNav = computed(() => nav.filter(group => group.label !== '平台管理' || platformAdminAccess.value))
+const platformRbacAccess = ref(false)
+const platformRbacManage = ref(false)
+const platformAuditRead = ref(false)
+const visibleNav = computed(() => nav.map(group => ({
+  ...group,
+  items: group.items.filter(item => {
+    if (item.key === 'platformAdmin') return platformAdminAccess.value
+    if (item.key === 'platformAccess') return platformRbacAccess.value
+    return true
+  }),
+})).filter(group => group.items.length > 0))
 
 const personas = ref<PersonaView[]>([])
 const providers = ref<ModelProvider[]>([])
@@ -216,10 +232,17 @@ async function loadPlatformAdminAccess() {
     const access = await request<{ permissions: string[] }>('/admin/platform/access')
     platformAdminAccess.value = access.permissions.includes('platform.models.read')
       || access.permissions.includes('platform.models.manage')
+    platformRbacManage.value = access.permissions.includes('platform.rbac.manage')
+    platformAuditRead.value = access.permissions.includes('platform.audit.read')
+    platformRbacAccess.value = platformRbacManage.value || platformAuditRead.value
     if (!platformAdminAccess.value && page.value === 'platformAdmin') page.value = 'overview'
+    if (!platformRbacAccess.value && page.value === 'platformAccess') page.value = 'overview'
   } catch {
     platformAdminAccess.value = false
-    if (page.value === 'platformAdmin') page.value = 'overview'
+    platformRbacAccess.value = false
+    platformRbacManage.value = false
+    platformAuditRead.value = false
+    if (page.value === 'platformAdmin' || page.value === 'platformAccess') page.value = 'overview'
   }
 }
 
@@ -347,6 +370,9 @@ async function logout() {
   currentUser.value = null
   currentTenant.value = null
   platformAdminAccess.value = false
+  platformRbacAccess.value = false
+  platformRbacManage.value = false
+  platformAuditRead.value = false
   personas.value = []
   providers.value = []
   kbs.value = []
@@ -938,6 +964,7 @@ async function revokeKey(key: ApiKey) {
    </template>
 
    <PlatformAdminView v-else-if="page==='platformAdmin'" />
+   <PlatformAccessView v-else-if="page==='platformAccess'" :can-manage="platformRbacManage" :can-audit="platformAuditRead" />
 
    <template v-else-if="page==='knowledge'">
     <section class="kb-summary">
