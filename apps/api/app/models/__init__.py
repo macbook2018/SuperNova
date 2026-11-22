@@ -36,7 +36,7 @@ from app.models.knowledge import (
     KnowledgeUsageRecord,
     PlatformEmbeddingModel,
 )
-from app.models.usage import UsageRecord
+from app.models.platform_rbac import (\n    PlatformAdminAuditLog,\n    PlatformPermission,\n    PlatformRole,\n    PlatformRolePermission,\n    PlatformUserRole,\n)\nfrom app.models.usage import UsageRecord
 
 __all__ = [
     "ApiKey",
@@ -64,7 +64,7 @@ __all__ = [
     "KnowledgeDocument",
     "KnowledgeIngestionJob",
     "KnowledgeUsageRecord",
-    "PlatformEmbeddingModel",
+    "PlatformEmbeddingModel",\n    "PlatformAdminAuditLog",\n    "PlatformPermission",\n    "PlatformRole",\n    "PlatformRolePermission",\n    "PlatformUserRole",
     "ModelProvider",
     "Persona",
     "PersonaKnowledgeBase",
