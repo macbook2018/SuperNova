@@ -49,7 +49,7 @@ def resolve_embedding_config(db: Session, knowledge_base) -> EmbeddingConfig:
         if knowledge_base.platform_embedding_model_id is None:
             raise ValueError("embedding_model_not_configured")
         model = db.get(PlatformEmbeddingModel, knowledge_base.platform_embedding_model_id)
-        if model is None or not model.enabled:
+        if model is None or not model.enabled or model.verified_at is None:
             raise ValueError("platform_embedding_model_unavailable")
         api_key = resolve_platform_api_key(model.credential_ref)
         config = EmbeddingConfig(
