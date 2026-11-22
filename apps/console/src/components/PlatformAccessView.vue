@@ -85,8 +85,7 @@ async function loadRoles() {
     selectedRole.value = roles.value[0]?.code ?? ''
   }
 }
-async function searchUsers(resetPage = false) {
-  if (resetPage) userOffset.value = 0
+async function searchUsers() {
   if (!props.canReadUsers) return
   usersLoading.value = true
   error.value = ''
@@ -102,6 +101,10 @@ async function searchUsers(resetPage = false) {
   } finally {
     usersLoading.value = false
   }
+}
+function startUserSearch() {
+  userOffset.value = 0
+  void searchUsers()
 }
 async function selectUser(user: PlatformUser) {
   userId.value = user.id
@@ -221,7 +224,7 @@ onMounted(() => { void refresh() })
 
     <section v-if="canReadUsers && activeTab==='users'" class="rbac-panel">
       <header><div><b>平台用户目录</b><small>按邮箱或账户名称搜索用户；仅展示账户基础信息和所属工作空间数量。</small></div><button class="rbac-button secondary" :disabled="usersLoading" @click="searchUsers">刷新</button></header>
-      <div class="rbac-search"><label>搜索用户<input v-model="userSearch" placeholder="输入邮箱或账户名称" @keydown.enter="searchUsers(true)"></label><button class="rbac-button primary" :disabled="usersLoading" @click="searchUsers(true)">搜索</button></div>
+      <div class="rbac-search"><label>搜索用户<input v-model="userSearch" placeholder="输入邮箱或账户名称" @keydown.enter="startUserSearch"></label><button class="rbac-button primary" :disabled="usersLoading" @click="startUserSearch">搜索</button></div>
       <div class="rbac-directory-meta">共 {{ userTotal }} 个用户，当前显示 {{ users.length }} 个</div>
       <div v-if="usersLoading" class="rbac-empty">正在读取用户…</div>
       <div v-else-if="!users.length" class="rbac-empty">没有找到匹配的用户</div>
