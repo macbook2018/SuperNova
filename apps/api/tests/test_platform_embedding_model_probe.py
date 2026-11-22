@@ -2,9 +2,11 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from pydantic import ValidationError
 
 from app.api import embedding_models
 from app.knowledge.embeddings import EmbeddingBatch
+from app.schemas.knowledge import PlatformEmbeddingModelCreate
 
 
 def _model(**overrides):
@@ -83,3 +85,23 @@ def test_platform_embedding_probe_rejects_non_1536_response(
 
     with pytest.raises(RuntimeError, match="embedding_provider_dimension_mismatch"):
         embedding_models._probe_embedding_model(_model())
+
+
+
+def test_platform_embedding_schema_requires_1536_and_rejects_chat_only_provider() -> None:
+    base = {
+        "code": "domestic-embedding",
+        "display_name": "国内 Embedding",
+        "provider_type": "openai_compatible",
+        "upstream_model_name": "provider-embedding-model",
+        "base_url": "https://embedding.example.cn/v1",
+        "credential_ref": "embedding-primary",
+        "enabled": False,
+    }
+    assert PlatformEmbeddingModelCreate(**base).dimensions == 1536
+
+    with pytest.raises(ValidationError):
+        PlatformEmbeddingModelCreate(**{**base, "dimensions": 1024})
+
+    with pytest.raises(ValidationError):
+        PlatformEmbeddingModelCreate(**{**base, "provider_type": "deepseek"})
