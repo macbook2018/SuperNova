@@ -8,6 +8,24 @@ interface PlatformRole {
   description: string
   is_system: boolean
 }
+interface PlatformUser {
+  id: string
+  email: string
+  display_name: string
+  status: string
+  created_at: string
+  tenant_count: number
+}
+interface PlatformUserDetail extends PlatformUser {
+  tenants: Array<{
+    tenant_id: string
+    tenant_name: string
+    tenant_status: string
+    membership_role: string
+    membership_status: string
+    joined_at: string
+  }>
+}
 interface UserRole {
   role: string
   name: string
@@ -31,9 +49,14 @@ interface AuditLog {
   created_at: string
 }
 
-const props = defineProps<{ canManage: boolean; canAudit: boolean }>()
+const props = defineProps<{ canManage: boolean; canAudit: boolean; canReadUsers: boolean }>()
 
 const roles = ref<PlatformRole[]>([])
+const users = ref<PlatformUser[]>([])
+const userSearch = ref('')
+const userTotal = ref(0)
+const userDetail = ref<PlatformUserDetail | null>(null)
+const usersLoading = ref(false)
 const userId = ref('')
 const userRoles = ref<UserRole[]>([])
 const auditLogs = ref<AuditLog[]>([])
@@ -44,7 +67,7 @@ const loading = ref(false)
 const saving = ref(false)
 const error = ref('')
 const notice = ref('')
-const activeTab = ref<'assignments' | 'audit'>(props.canManage ? 'assignments' : 'audit')
+const activeTab = ref<'users' | 'assignments' | 'audit'>(props.canReadUsers ? 'users' : props.canManage ? 'assignments' : 'audit')
 
 function message(value: unknown): string {
   return value instanceof Error ? value.message : '请求失败，请稍后重试'
@@ -58,6 +81,38 @@ async function loadRoles() {
   roles.value = await apiRequest<PlatformRole[]>('/admin/platform/roles')
   if (!roles.value.some(role => role.code === selectedRole.value)) {
     selectedRole.value = roles.value[0]?.code ?? ''
+  }
+}
+async function searchUsers() {
+  if (!props.canReadUsers) return
+  usersLoading.value = true
+  error.value = ''
+  try {
+    const params = new URLSearchParams({ limit: '30', offset: '0' })
+    if (userSearch.value.trim()) params.set('q', userSearch.value.trim())
+    const result = await apiRequest<{ items: PlatformUser[]; total: number }>(`/admin/platform/users?${params}`)
+    users.value = result.items
+    userTotal.value = result.total
+  } catch (value) {
+    error.value = message(value)
+    users.value = []
+  } finally {
+    usersLoading.value = false
+  }
+}
+async function selectUser(user: PlatformUser) {
+  userId.value = user.id
+  userDetail.value = null
+  if (props.canReadUsers) {
+    try {
+      userDetail.value = await apiRequest<PlatformUserDetail>(`/admin/platform/users/${encodeURIComponent(user.id)}`)
+    } catch (value) {
+      error.value = message(value)
+    }
+  }
+  if (props.canManage) {
+    await loadUserRoles()
+    activeTab.value = 'assignments'
   }
 }
 async function loadUserRoles() {
@@ -135,6 +190,7 @@ async function refresh() {
   error.value = ''
   try {
     if (props.canManage) await loadRoles()
+    if (props.canReadUsers) await searchUsers()
     if (props.canAudit && activeTab.value === 'audit') await loadAudit()
     if (userId.value.trim()) await loadUserRoles()
   } catch (value) {
@@ -155,15 +211,27 @@ onMounted(() => { void refresh() })
     <div v-if="error" class="rbac-alert error">{{ error }}</div>
     <div v-if="notice" class="rbac-alert success">{{ notice }}</div>
     <div class="rbac-tabs">
+      <button v-if="canReadUsers" :class="{active:activeTab==='users'}" @click="activeTab='users';searchUsers()">平台用户</button>
       <button v-if="canManage" :class="{active:activeTab==='assignments'}" @click="activeTab='assignments'">角色授权</button>
       <button v-if="canAudit" :class="{active:activeTab==='audit'}" @click="activeTab='audit';loadAudit()">操作审计</button>
     </div>
 
+    <section v-if="canReadUsers && activeTab==='users'" class="rbac-panel">
+      <header><div><b>平台用户目录</b><small>按邮箱或账户名称搜索用户；仅展示账户基础信息和所属工作空间数量。</small></div><button class="rbac-button secondary" :disabled="usersLoading" @click="searchUsers">刷新</button></header>
+      <div class="rbac-search"><label>搜索用户<input v-model="userSearch" placeholder="输入邮箱或账户名称" @keydown.enter="searchUsers"></label><button class="rbac-button primary" :disabled="usersLoading" @click="searchUsers">搜索</button></div>
+      <div class="rbac-directory-meta">共 {{ userTotal }} 个用户，当前显示 {{ users.length }} 个</div>
+      <div v-if="usersLoading" class="rbac-empty">正在读取用户…</div>
+      <div v-else-if="!users.length" class="rbac-empty">没有找到匹配的用户</div>
+      <div v-else class="rbac-table-wrap"><table class="rbac-table"><thead><tr><th>账户</th><th>状态</th><th>工作空间</th><th>注册时间</th><th>操作</th></tr></thead>
+        <tbody><tr v-for="user in users" :key="user.id"><td><b>{{ user.display_name }}</b><small>{{ user.email }}</small></td><td><span :class="user.status==='active'?'rbac-on':'rbac-off'">{{ user.status==='active'?'正常':'已禁用' }}</span></td><td>{{ user.tenant_count }}</td><td>{{ new Date(user.created_at).toLocaleString() }}</td><td><button class="rbac-link" @click="selectUser(user)">查看详情 / 授权</button></td></tr></tbody>
+      </table></div>
+    </section>
     <template v-if="canManage && activeTab==='assignments'">
       <section class="rbac-panel">
-        <header><div><b>用户平台角色</b><small>输入用户 ID 查询现有平台角色。租户角色不会在此处修改。</small></div></header>
+        <header><div><b>用户平台角色</b><small>从平台用户目录选择用户；平台角色与工作空间角色相互独立。</small></div></header>
+        <div v-if="userDetail" class="rbac-selected-user"><b>{{ userDetail.display_name }}</b><span>{{ userDetail.email }}</span><small>{{ userDetail.id }}</small><div>所属工作空间：{{ userDetail.tenants.map(item => item.tenant_name).join('、') || '无' }}</div></div>
         <div class="rbac-search">
-          <label>用户 ID<input v-model="userId" placeholder="粘贴用户 UUID" @keydown.enter="loadUserRoles"></label>
+          <label v-if="!canReadUsers">用户 ID<input v-model="userId" placeholder="粘贴用户 UUID" @keydown.enter="loadUserRoles"></label>
           <button class="rbac-button primary" :disabled="loading" @click="loadUserRoles">查询角色</button>
         </div>
         <div v-if="loading" class="rbac-empty">正在读取…</div>
@@ -220,7 +288,7 @@ onMounted(() => { void refresh() })
 .rbac-panel header div{display:flex;flex-direction:column;gap:5px}
 .rbac-panel header b{font-size:13px}
 .rbac-panel header small{font-size:10px;color:#9aa5b5}
-.rbac-search{display:flex;align-items:flex-end;gap:10px;max-width:680px}
+.rbac-directory-meta{margin-top:12px;font-size:10px;color:#94a1b3}.rbac-selected-user{display:flex;flex-direction:column;gap:5px;padding:12px;margin-bottom:12px;background:#f7faff;border:1px solid #e5edfb;border-radius:8px;font-size:11px}.rbac-selected-user span,.rbac-selected-user small{color:#8492a8}.rbac-selected-user small{font-size:9px;word-break:break-all}.rbac-selected-user div{margin-top:4px;color:#667791}.rbac-search{display:flex;align-items:flex-end;gap:10px;max-width:680px}
 .rbac-search label,.rbac-form label{display:flex;flex-direction:column;gap:6px;font-size:10px;color:#75839a;flex:1}
 .rbac-search input,.rbac-form input,.rbac-form select{height:37px;box-sizing:border-box;border:1px solid #e7ecf3;border-radius:7px;padding:0 10px;font-size:11px;color:#43536b;background:#fbfcfe;outline:none;width:100%}
 .rbac-search input:focus,.rbac-form input:focus,.rbac-form select:focus{border-color:#8db5fa;background:white}
