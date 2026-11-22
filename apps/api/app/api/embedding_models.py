@@ -1,6 +1,5 @@
-from uuid import UUID, uuid4
-
 import httpx
+from uuid import UUID, uuid4
 from fastapi import APIRouter, Header, HTTPException
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -225,7 +224,10 @@ def test_embedding_model_connection(
     except httpx.RequestError:
         raise HTTPException(
             status_code=502,
-            detail={"code": "embedding_provider_unreachable", "message": "无法连接 Embedding 服务，请检查 Base URL 和网络"},
+            detail={
+                "code": "embedding_provider_unreachable",
+                "message": "无法连接 Embedding 服务，请检查 Base URL 和网络",
+            },
         ) from None
     except ValueError:
         raise HTTPException(
@@ -239,6 +241,10 @@ def test_embedding_model_connection(
             "embedding_provider_response_count_mismatch": "Embedding 服务返回的向量数量不正确",
             "embedding_provider_invalid_json": "Embedding 服务返回了无效 JSON",
             "embedding_provider_invalid_vector": "Embedding 服务返回了无效向量",
+            "embedding_provider_http_401": "Embedding API Key 无效或已过期",
+            "embedding_provider_http_403": "当前 API Key 无权调用该 Embedding 模型",
+            "embedding_provider_http_404": "Embedding 接口或模型不存在，请检查 Base URL 和模型 ID",
+            "embedding_provider_http_429": "Embedding 服务请求过于频繁，请稍后重试",
         }
         raise HTTPException(
             status_code=502,
