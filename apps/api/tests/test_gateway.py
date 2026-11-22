@@ -1433,10 +1433,15 @@ def test_missing_platform_usage_keeps_token_reservation_unknown_and_never_estima
         ) == 1
 
 def test_sender_profile_wxid_must_match_top_level_user(client: TestClient) -> None:
+    owner = register(client)
+    provider = create_provider(client, owner)
+    persona = create_persona(client, owner, provider["id"])
+    key = create_api_key(client, owner)
     response = client.post(
         "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {key}"},
         json={
-            "model": "customer-support",
+            "model": persona["slug"],
             "messages": [{"role": "user", "content": "你好"}],
             "user": "wxid_account_a",
             "sender_profile": {
