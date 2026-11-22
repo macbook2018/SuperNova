@@ -14,7 +14,6 @@ from app.models.platform_rbac import (
     PlatformRolePermission,
     PlatformUserRole,
 )
-
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, event, select
 from sqlalchemy.orm import Session, sessionmaker
