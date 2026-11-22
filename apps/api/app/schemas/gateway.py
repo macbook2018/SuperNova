@@ -73,7 +73,7 @@ class ChatMessage(BaseModel):
     name: str | None = Field(default=None, max_length=64)
 
     @model_validator(mode="after")
-    def validate_content_parts(self) -> "ChatMessage":
+    def validate_content_parts(self) -> ChatMessage:
         if isinstance(self.content, list):
             if not self.content:
                 raise ValueError("消息 content 数组不能为空")
@@ -152,7 +152,7 @@ class ChatCompletionRequest(BaseModel):
         return value
 
     @model_validator(mode="after")
-    def validate_session_identity(self) -> "ChatCompletionRequest":
+    def validate_session_identity(self) -> ChatCompletionRequest:
         if (
             self.user is None
             and (
