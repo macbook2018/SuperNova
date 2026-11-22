@@ -80,11 +80,11 @@ def _issue_runtime_config(db, bot: BotInstance, persona: Persona) -> dict:
     return {
         "config": {
             "schema_version": 1,
-        "tenant_id": str(bot.tenant_id),
-        "bot_instance_id": str(bot.id),
-        "persona_id": str(persona.id),
-        "runtime_version": bot.runtime_version,
-        "config_version": bot.config_version,
+            "tenant_id": str(bot.tenant_id),
+            "bot_instance_id": str(bot.id),
+            "persona_id": str(persona.id),
+            "runtime_version": bot.runtime_version,
+            "config_version": bot.config_version,
             "gateway": {
                 "base_url": settings.runtime_gateway_base_url.rstrip("/"),
                 "model": persona.slug,
