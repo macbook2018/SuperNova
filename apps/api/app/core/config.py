@@ -92,7 +92,9 @@ class Settings(BaseSettings):
         if not 30 <= self.runtime_worker_lease_seconds <= 3600:
             raise ValueError("SUPERNOVA_RUNTIME_WORKER_LEASE_SECONDS must be between 30 and 3600")
         if not 30 <= self.runtime_heartbeat_timeout_seconds <= 900:
-            raise ValueError("SUPERNOVA_RUNTIME_HEARTBEAT_TIMEOUT_SECONDS must be between 30 and 900")
+            raise ValueError(
+                "SUPERNOVA_RUNTIME_HEARTBEAT_TIMEOUT_SECONDS must be between 30 and 900"
+            )
         if self.runtime_cpu_limit <= 0 or self.runtime_cpu_limit > 8:
             raise ValueError("SUPERNOVA_RUNTIME_CPU_LIMIT must be greater than 0 and at most 8")
         if not 16 <= self.runtime_pids_limit <= 4096:
