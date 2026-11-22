@@ -14,7 +14,7 @@ interface PlatformUser {
   display_name: string
   status: string
   created_at: string
-  tenant_count: number
+  tenant_count: number | null
 }
 interface PlatformUserDetail extends PlatformUser {
   tenants: Array<{
@@ -226,7 +226,7 @@ onMounted(() => { void refresh() })
       <div v-if="usersLoading" class="rbac-empty">正在读取用户…</div>
       <div v-else-if="!users.length" class="rbac-empty">没有找到匹配的用户</div>
       <div v-else class="rbac-table-wrap"><table class="rbac-table"><thead><tr><th>账户</th><th>状态</th><th>工作空间</th><th>注册时间</th><th>操作</th></tr></thead>
-        <tbody><tr v-for="user in users" :key="user.id"><td><b>{{ user.display_name }}</b><small>{{ user.email }}</small></td><td><span :class="user.status==='active'?'rbac-on':'rbac-off'">{{ user.status==='active'?'正常':'已禁用' }}</span></td><td>{{ user.tenant_count }}</td><td>{{ new Date(user.created_at).toLocaleString() }}</td><td><button class="rbac-link" @click="selectUser(user)">查看详情 / 授权</button></td></tr></tbody>
+        <tbody><tr v-for="user in users" :key="user.id"><td><b>{{ user.display_name }}</b><small>{{ user.email }}</small></td><td><span :class="user.status==='active'?'rbac-on':'rbac-off'">{{ user.status==='active'?'正常':'已禁用' }}</span></td><td>{{ user.tenant_count === null ? '无权限' : user.tenant_count }}</td><td>{{ new Date(user.created_at).toLocaleString() }}</td><td><button class="rbac-link" @click="selectUser(user)">查看详情 / 授权</button></td></tr></tbody>
       </table></div>
       <div class="rbac-pagination"><button class="rbac-button secondary" :disabled="usersLoading || userOffset===0" @click="userOffset=Math.max(0,userOffset-userPageSize);searchUsers()">上一页</button><span>{{ userTotal ? Math.floor(userOffset/userPageSize)+1 : 0 }} / {{ Math.max(1,Math.ceil(userTotal/userPageSize)) }} 页</span><button class="rbac-button secondary" :disabled="usersLoading || userOffset+userPageSize>=userTotal" @click="userOffset+=userPageSize;searchUsers()">下一页</button></div>
       <div v-if="userDetail" class="rbac-selected-user"><b>{{ userDetail.display_name }}</b><span>{{ userDetail.email }}</span><small>{{ userDetail.id }}</small><div v-if="userDetail.tenants.length"><b>所属工作空间</b><span v-for="tenant in userDetail.tenants" :key="tenant.tenant_id">{{ tenant.tenant_name }} · {{ tenant.membership_role }} · {{ tenant.membership_status }}</span></div><div v-else>该用户尚未加入工作空间</div></div>
