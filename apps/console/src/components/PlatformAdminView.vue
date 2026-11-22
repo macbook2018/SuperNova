@@ -512,7 +512,7 @@ onMounted(() => { void loadAll() })
           <label class="wide">OpenAI 兼容 Base URL <input v-model="embeddingForm.base_url" maxlength="2048" placeholder="https://api.provider.cn/v1"><small>填写服务商提供 Embeddings API 的根地址；系统会请求 /embeddings。仅支持 HTTPS 公网服务。</small></label>
           <label class="wide">凭据引用 <input v-model="embeddingForm.credential_ref" maxlength="255" placeholder="例如 siliconflow-embedding-primary"><small>需在 API 和 Knowledge Worker 的 SUPERNOVA_PLATFORM_CREDENTIALS_JSON 中配置同名键。</small></label>
           <label>向量维度 <input value="1536（固定）" disabled><small>服务商实际返回维度必须为 1536；保存后请执行连接测试。</small></label>
-          <label class="admin-switch"><span>创建后启用模型</span><input v-model="embeddingForm.enabled" type="checkbox" disabled></label><p class="admin-modal-hint">为避免不可用模型进入客户知识库，模型必须先保存并通过真实 Embeddings 调用测试（返回 1536 维），之后才能启用。</p>
+          <p class="admin-modal-hint">模型保存后默认停用。请先测试真实 Embeddings 调用并确认返回 1536 维，再从模型列表启用；修改服务商、模型 ID、Base URL 或凭据后需要重新测试。</p>
         </div>
         <footer><button class="admin-button secondary" @click="embeddingModal=false">取消</button><button class="admin-button primary" :disabled="saving" @click="saveEmbedding"><Check :size="15"/>保存模型</button></footer>
       </section>
