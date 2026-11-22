@@ -285,3 +285,48 @@ def list_platform_audit_logs(
         }
         for item in rows
     ]
+
+
+@router.get("/admin/platform/users/{user_id}/roles")
+def list_user_platform_roles(
+    user_id: UUID,
+    principal: CurrentPrincipal,
+    db: DatabaseSession,
+) -> list[dict]:
+    require_platform_permission(principal, "platform.rbac.manage")
+    if db.get(User, user_id) is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "user_not_found", "message": "用户不存在"},
+        )
+    rows = db.execute(
+        select(PlatformUserRole, PlatformRole)
+        .join(PlatformRole, PlatformRole.id == PlatformUserRole.role_id)
+        .where(PlatformUserRole.user_id == user_id)
+        .order_by(PlatformUserRole.created_at.desc())
+    ).all()
+    now = datetime.now(UTC)
+    return [
+        {
+            "role": role.code,
+            "name": role.name,
+            "granted_by_user_id": (
+                str(assignment.granted_by_user_id)
+                if assignment.granted_by_user_id else None
+            ),
+            "created_at": assignment.created_at.isoformat(),
+            "expires_at": (
+                assignment.expires_at.isoformat()
+                if assignment.expires_at else None
+            ),
+            "revoked_at": (
+                assignment.revoked_at.isoformat()
+                if assignment.revoked_at else None
+            ),
+            "active": (
+                assignment.revoked_at is None
+                and (assignment.expires_at is None or assignment.expires_at > now)
+            ),
+        }
+        for assignment, role in rows
+    ]
