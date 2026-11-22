@@ -179,7 +179,7 @@ def assign_tenant_subscription(
     db: DatabaseSession,
     request_id: str | None = Header(default=None, alias="X-Request-ID"),
 ) -> TenantSubscriptionRead:
-    require_platform_admin(principal)
+    require_platform_permission(principal, "platform.billing.manage")
     tenant = db.get(Tenant, tenant_id)
     if tenant is None:
         raise HTTPException(
