@@ -1,10 +1,9 @@
 from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
-from uuid import uuid4
+from uuid import UUID, uuid4
 from types import SimpleNamespace
 
 import pytest
-from app.api import platform_admin
 from app.billing import credentials
 from app.billing.money import currency_minor_unit_exponent
 from app.db.base import Base
@@ -89,7 +88,7 @@ def register(client: TestClient, email: str = "admin@example.com") -> dict:
             session.add(
                 PlatformUserRole(
                     id=uuid4(),
-                    user_id=tokens["user"]["id"],
+                    user_id=UUID(tokens["user"]["id"]),
                     role_id=role.id,
                 )
             )
