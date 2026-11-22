@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import structlog
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 
 from app.core.config import get_settings
 from app.db.session import SessionLocal
@@ -238,11 +238,87 @@ def _process(command_id: UUID, provider: DockerRuntimeProvider) -> None:
             )
 
 
+def _refresh_due_credentials(provider: DockerRuntimeProvider) -> None:
+    now = datetime.now(UTC)
+    refresh_before = now + timedelta(seconds=180)
+    with SessionLocal() as db:
+        bots = db.scalars(select(BotInstance).where(
+            BotInstance.desired_state == "running",
+            BotInstance.actual_state == "running",
+            BotInstance.runtime_resource_id.is_not(None),
+        )).all()
+        for bot in bots:
+            expires_at = db.scalar(select(func.min(BotRuntimeCredential.expires_at)).where(
+                BotRuntimeCredential.tenant_id == bot.tenant_id,
+                BotRuntimeCredential.bot_instance_id == bot.id,
+                BotRuntimeCredential.revoked_at.is_(None),
+            ))
+            if expires_at is not None:
+                if expires_at.tzinfo is None:
+                    expires_at = expires_at.replace(tzinfo=UTC)
+                if expires_at > refresh_before:
+                    continue
+            persona = db.scalar(select(Persona).where(
+                Persona.id == bot.persona_id,
+                Persona.tenant_id == bot.tenant_id,
+                Persona.enabled.is_(True),
+            ))
+            if persona is None:
+                continue
+            try:
+                config = _issue_runtime_config(db, bot, persona)
+                provider.provision(
+                    tenant_id=bot.tenant_id,
+                    bot_instance_id=bot.id,
+                    runtime_config=config,
+                )
+                db.commit()
+            except Exception as exc:
+                db.rollback()
+                logger.warning(
+                    "runtime_credential_refresh_failed",
+                    bot_instance_id=str(bot.id),
+                    error_type=exc.__class__.__name__,
+                )
+
+
+def _mark_heartbeat_timeouts() -> None:
+    settings = get_settings()
+    cutoff = datetime.now(UTC) - timedelta(
+        seconds=settings.runtime_heartbeat_timeout_seconds
+    )
+    with SessionLocal() as db:
+        bots = db.scalars(select(BotInstance).where(
+            BotInstance.desired_state == "running",
+            BotInstance.actual_state.in_(("starting", "running")),
+        )).all()
+        for bot in bots:
+            reference_time = bot.last_heartbeat_at or bot.updated_at
+            if reference_time.tzinfo is None:
+                reference_time = reference_time.replace(tzinfo=UTC)
+            if reference_time > cutoff:
+                continue
+            bot.actual_state = "unhealthy"
+            bot.last_error_code = "runtime_heartbeat_timeout"
+            _write_event(db, bot, "runtime.error", {
+                "level": "error",
+                "component": "heartbeat-monitor",
+                "error_code": "runtime_heartbeat_timeout",
+            })
+        db.commit()
+
+
 def run_forever() -> None:
     settings = get_settings()
     provider = _provider()
     logger.info("runtime_worker_manager_started", worker_id=WORKER_ID)
+    next_maintenance = 0.0
     while True:
+        now = time.monotonic()
+        if now >= next_maintenance:
+            _refresh_due_credentials(provider)
+            _mark_heartbeat_timeouts()
+            next_maintenance = now + 30.0
         command_id = claim_command()
         if command_id is None:
             time.sleep(settings.runtime_worker_poll_seconds)
