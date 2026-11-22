@@ -6,7 +6,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import CurrentPrincipal, DatabaseSession
-from app.api.platform_admin import record_platform_audit, require_platform_admin
+from app.api.platform_admin import record_platform_audit, require_platform_permission
 from app.billing.credentials import resolve_platform_api_key
 from app.models.billing import PlatformModel, PlatformModelPrice, TenantBillingPolicy
 from app.schemas.platform_models import (
@@ -96,7 +96,7 @@ def list_admin_platform_models(
     principal: CurrentPrincipal,
     db: DatabaseSession,
 ) -> list[PlatformModelAdminRead]:
-    require_platform_admin(principal)
+    require_platform_permission(principal, "platform.models.read")
     models = db.scalars(
         select(PlatformModel).order_by(PlatformModel.created_at.desc())
     ).all()
@@ -114,7 +114,7 @@ def create_platform_model(
     db: DatabaseSession,
     request_id: str | None = Header(default=None, alias="X-Request-ID"),
 ) -> PlatformModelAdminRead:
-    require_platform_admin(principal)
+    require_platform_permission(principal, "platform.models.manage")
     model = PlatformModel(
         id=uuid4(),
         code=payload.code,
@@ -155,7 +155,7 @@ def update_platform_model(
     db: DatabaseSession,
     request_id: str | None = Header(default=None, alias="X-Request-ID"),
 ) -> PlatformModelAdminRead:
-    require_platform_admin(principal)
+    require_platform_permission(principal, "platform.models.manage")
     model = db.get(PlatformModel, model_id)
     if model is None:
         raise _not_found()
@@ -187,7 +187,7 @@ def list_platform_model_prices(
     principal: CurrentPrincipal,
     db: DatabaseSession,
 ) -> list[PlatformModelPriceRead]:
-    require_platform_admin(principal)
+    require_platform_permission(principal, "platform.models.read")
     if db.get(PlatformModel, model_id) is None:
         raise _not_found()
     prices = db.scalars(
@@ -210,7 +210,7 @@ def create_platform_model_price(
     db: DatabaseSession,
     request_id: str | None = Header(default=None, alias="X-Request-ID"),
 ) -> PlatformModelPriceRead:
-    require_platform_admin(principal)
+    require_platform_permission(principal, "platform.models.manage")
     if db.get(PlatformModel, model_id) is None:
         raise _not_found()
 
