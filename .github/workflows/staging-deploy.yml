@@ -127,7 +127,7 @@ jobs:
         env:
           DEPLOY_SHA: ${{ steps.lock-sha.outputs.sha }}
         run: |
-          ssh -p "$STAGING_SSH_PORT" "$STAGING_USER@$STAGING_HOST" "set -eu; test \"\$(cat '$STAGING_DEPLOY_PATH/.last_successful_tag')\" = '$DEPLOY_SHA'; test -s '$STAGING_DEPLOY_PATH/.last_successful_deployment.json'"
+          ssh -p "$STAGING_SSH_PORT" "$STAGING_USER@$STAGING_HOST" "set -eu; test \"\$(cat '$STAGING_DEPLOY_PATH/.last_successful_tag')\" = '$DEPLOY_SHA'; python3 -c 'import json,sys; record=json.load(open(sys.argv[1])); assert record.get(\"commit_sha\") == sys.argv[2]; assert record.get(\"status\") == \"healthy\"' '$STAGING_DEPLOY_PATH/.last_successful_deployment.json' '$DEPLOY_SHA'"
 
           api_base="${STAGING_API_BASE_URL%/}"
           console_base="${STAGING_CONSOLE_BASE_URL%/}"
