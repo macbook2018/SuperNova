@@ -4,9 +4,28 @@ set -Eeuo pipefail
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$APP_DIR"
 
+if ! command -v flock >/dev/null 2>&1; then
+  echo "flock is required to serialize Staging deployment and rollback operations."
+  exit 1
+fi
+exec 9>"$APP_DIR/.staging-deploy.lock"
+flock 9
+
+if [[ -f .staging-deployment-blocked ]]; then
+  echo "Staging deployment queue is blocked after a failed deployment or health check."
+  echo "Inspect the server, perform a verified rollback or run acknowledge-staging-health.sh."
+  exit 70
+fi
+
 TAG="${1:-}"
+RUN_ID="${2:-manual}"
+RUN_ATTEMPT="${3:-1}"
 if [[ ! "$TAG" =~ ^[0-9a-f]{40}$ ]]; then
-  echo "Usage: ./deploy-staging.sh <40-character-git-commit-sha>"
+  echo "Usage: ./deploy-staging.sh <40-character-git-commit-sha> [github-run-id] [github-run-attempt]"
+  exit 2
+fi
+if [[ ! "$RUN_ID" =~ ^([0-9]+|manual)$ || ! "$RUN_ATTEMPT" =~ ^[0-9]+$ ]]; then
+  echo "Invalid deployment run metadata."
   exit 2
 fi
 if [[ ! -f .env ]]; then
@@ -20,6 +39,18 @@ mkdir -p backups
 COMPOSE=(docker compose --project-name supernova-staging --env-file .env -f compose.staging.yaml)
 
 "${COMPOSE[@]}" config --quiet
+
+DEPLOYMENT_COMPLETED=0
+trap '
+  status=$?
+  if [[ "$DEPLOYMENT_COMPLETED" != "1" ]]; then
+    printf "failed_at_utc=%s\\ncommit_sha=%s\\nrun_id=%s\\nrun_attempt=%s\\n" \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$TAG" "$RUN_ID" "$RUN_ATTEMPT" \
+      > .staging-deployment-blocked
+    echo "Staging deployment marked BLOCKED. No subsequent deployment may proceed until health is verified."
+  fi
+  exit "$status"
+' EXIT
 
 API_IMAGE="macbook201808/supernova:api-${TAG}"
 CONSOLE_IMAGE="macbook201808/supernova:console-${TAG}"
@@ -122,8 +153,24 @@ fi
 wait_for_url "http://127.0.0.1:18082/health/ready" "API"
 wait_for_url "http://127.0.0.1:18083/healthz" "Console"
 
+DEPLOYED_AT_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 printf '%s\n' "$TAG" > .last_successful_tag.tmp
 mv .last_successful_tag.tmp .last_successful_tag
+cat > .last_successful_deployment.json.tmp <<EOF
+{
+  "commit_sha": "$TAG",
+  "image_tag": "$TAG",
+  "deployed_at_utc": "$DEPLOYED_AT_UTC",
+  "github_run_id": "$RUN_ID",
+  "github_run_attempt": "$RUN_ATTEMPT",
+  "status": "healthy",
+  "event_type": "deploy"
+}
+EOF
+mv .last_successful_deployment.json.tmp .last_successful_deployment.json
+rm -f .staging-deployment-blocked
+DEPLOYMENT_COMPLETED=1
 
 echo "Deployment successful: ${TAG}"
+echo "Deployment record: ${APP_DIR}/.last_successful_deployment.json"
 echo "Database backup: ${BACKUP_FILE}"
