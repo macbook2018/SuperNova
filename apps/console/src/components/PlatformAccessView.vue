@@ -31,6 +31,8 @@ interface AuditLog {
   created_at: string
 }
 
+const props = defineProps<{ canManage: boolean; canAudit: boolean }>()
+
 const roles = ref<PlatformRole[]>([])
 const userId = ref('')
 const userRoles = ref<UserRole[]>([])
@@ -42,7 +44,7 @@ const loading = ref(false)
 const saving = ref(false)
 const error = ref('')
 const notice = ref('')
-const activeTab = ref<'assignments' | 'audit'>('assignments')
+const activeTab = ref<'assignments' | 'audit'>(props.canManage ? 'assignments' : 'audit')
 
 function message(value: unknown): string {
   return value instanceof Error ? value.message : '请求失败，请稍后重试'
@@ -52,6 +54,7 @@ function notify(value: string) {
   window.setTimeout(() => { if (notice.value === value) notice.value = '' }, 3000)
 }
 async function loadRoles() {
+  if (!props.canManage) return
   roles.value = await apiRequest<PlatformRole[]>('/admin/platform/roles')
   if (!roles.value.some(role => role.code === selectedRole.value)) {
     selectedRole.value = roles.value[0]?.code ?? ''
@@ -124,14 +127,15 @@ async function revokeRole(role: UserRole) {
   }
 }
 async function loadAudit() {
+  if (!props.canAudit) return
   auditLogs.value = await apiRequest<AuditLog[]>('/admin/platform/audit-logs?limit=50')
 }
 async function refresh() {
   loading.value = true
   error.value = ''
   try {
-    await loadRoles()
-    if (activeTab.value === 'audit') await loadAudit()
+    if (props.canManage) await loadRoles()
+    if (props.canAudit && activeTab.value === 'audit') await loadAudit()
     if (userId.value.trim()) await loadUserRoles()
   } catch (value) {
     error.value = message(value)
@@ -151,11 +155,11 @@ onMounted(() => { void refresh() })
     <div v-if="error" class="rbac-alert error">{{ error }}</div>
     <div v-if="notice" class="rbac-alert success">{{ notice }}</div>
     <div class="rbac-tabs">
-      <button :class="{active:activeTab==='assignments'}" @click="activeTab='assignments'">角色授权</button>
-      <button :class="{active:activeTab==='audit'}" @click="activeTab='audit';loadAudit()">操作审计</button>
+      <button v-if="canManage" :class="{active:activeTab==='assignments'}" @click="activeTab='assignments'">角色授权</button>
+      <button v-if="canAudit" :class="{active:activeTab==='audit'}" @click="activeTab='audit';loadAudit()">操作审计</button>
     </div>
 
-    <template v-if="activeTab==='assignments'">
+    <template v-if="canManage && activeTab==='assignments'">
       <section class="rbac-panel">
         <header><div><b>用户平台角色</b><small>输入用户 ID 查询现有平台角色。租户角色不会在此处修改。</small></div></header>
         <div class="rbac-search">
@@ -184,11 +188,11 @@ onMounted(() => { void refresh() })
           <label class="wide">授权原因<input v-model="reason" maxlength="500" placeholder="例如：负责平台模型与用户支持运营"></label>
         </div>
         <div class="rbac-role-list"><div v-for="role in roles" :key="role.code"><b>{{ role.name }}</b><code>{{ role.code }}</code><small>{{ role.description || '暂无说明' }}</small></div></div>
-        <footer><button class="rbac-button primary" :disabled="saving || !userId.trim() || !selectedRole" @click="grantRole">{{ saving?'处理中…':'授予角色' }}</button></footer>
+        <footer><button class="rbac-button primary" :disabled="!canManage || saving || !userId.trim() || !selectedRole" @click="grantRole">{{ saving?'处理中…':'授予角色' }}</button></footer>
       </section>
     </template>
 
-    <section v-else class="rbac-panel">
+    <section v-else-if="canAudit && activeTab==='audit'" class="rbac-panel">
       <header><div><b>平台管理审计日志</b><small>最近 50 条授权与平台管理操作记录。</small></div><button class="rbac-button secondary" :disabled="loading" @click="loadAudit">刷新日志</button></header>
       <div v-if="!auditLogs.length" class="rbac-empty">暂无审计记录</div>
       <div v-else class="rbac-table-wrap"><table class="rbac-table"><thead><tr><th>时间</th><th>操作</th><th>操作者</th><th>目标用户</th><th>资源</th><th>原因</th></tr></thead>
