@@ -7,7 +7,6 @@ from sqlalchemy import func, select
 from app.api.deps import CurrentPrincipal, DatabaseSession
 from app.api.health import _check_database, _check_redis
 from app.api.platform_admin import require_platform_permission
-from app.core.config import get_settings
 from app.models.chat_analysis import ChatAnalysisJob
 from app.models.chat_import import ChatImportJob
 from app.models.knowledge import KnowledgeIngestionJob
