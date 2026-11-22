@@ -60,8 +60,8 @@ curl -fsS http://127.0.0.1:18082/health/ready >/dev/null
 curl -fsS http://127.0.0.1:18083/healthz >/dev/null
 STAGING_API_BASE_URL="${STAGING_API_BASE_URL:-https://api.wet001.com}"
 STAGING_CONSOLE_BASE_URL="${STAGING_CONSOLE_BASE_URL:-https://bot.wet001.com}"
-curl -fsS "${STAGING_API_BASE_URL%/}/health/ready" >/dev/null
-curl -fsS "${STAGING_CONSOLE_BASE_URL%/}/" | grep -q "SuperNova"
+curl --connect-timeout 5 --max-time 20 -fsS "${STAGING_API_BASE_URL%/}/health/ready" >/dev/null
+curl --connect-timeout 5 --max-time 20 -fsS "${STAGING_CONSOLE_BASE_URL%/}/" | grep -q "SuperNova"
 
 python3 - "$TAG" .last_successful_deployment.json <<'PY'
 import json
