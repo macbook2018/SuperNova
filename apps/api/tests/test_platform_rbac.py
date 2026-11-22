@@ -464,3 +464,14 @@ def test_platform_tenant_cannot_disable_workspace_containing_active_super_admin(
     )
     assert current.status_code == 200
     assert current.json()["status"] == "active"
+
+
+def test_platform_tenant_directory_requires_tenant_read_permission(
+    rbac_environment: tuple[TestClient, sessionmaker],
+) -> None:
+    client, _factory = rbac_environment
+    user = _register(client, "tenant-directory-forbidden@example.com")
+
+    response = client.get("/admin/platform/tenants", headers=_headers(user))
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "platform_permission_required"
