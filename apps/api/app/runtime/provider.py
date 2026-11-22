@@ -58,15 +58,21 @@ class DockerRuntimeProvider:
         config_dir = instance_root / "config"
         config_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         (instance_root / "data").mkdir(parents=True, exist_ok=True, mode=0o700)
-        config_path = config_dir / "runtime.json"
-        temporary_path = config_dir / ".runtime.json.tmp"
-        temporary_path.write_text(
-            json.dumps(runtime_config, ensure_ascii=False, separators=(",", ":")),
-            encoding="utf-8",
-        )
-        temporary_path.chmod(0o600)
-        temporary_path.replace(config_path)
-        config_path.chmod(0o600)
+        config_payload = runtime_config.get("config", runtime_config)
+        credentials_payload = runtime_config.get("credentials", {})
+        for filename, payload in (
+            ("runtime.json", config_payload),
+            ("runtime-credentials.json", credentials_payload),
+        ):
+            target = config_dir / filename
+            temporary = config_dir / f".{filename}.tmp"
+            temporary.write_text(
+                json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+                encoding="utf-8",
+            )
+            temporary.chmod(0o600)
+            temporary.replace(target)
+            target.chmod(0o600)
 
         labels = {
             "com.supernova.managed": "true",
