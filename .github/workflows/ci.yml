@@ -106,6 +106,7 @@ jobs:
           bash -n deploy/scripts/bootstrap-staging.sh
           bash -n deploy/scripts/deploy-staging.sh
           bash -n deploy/scripts/rollback-staging.sh
+          bash -n deploy/scripts/acknowledge-staging-health.sh
           docker compose --project-name supernova-staging -f deploy/docker/compose.staging.yaml config --quiet
 
       - name: Test bootstrap with punctuation in MinIO secret
@@ -265,6 +266,7 @@ jobs:
             deploy/scripts/bootstrap-staging.sh \
             deploy/scripts/deploy-staging.sh \
             deploy/scripts/rollback-staging.sh \
+            deploy/scripts/acknowledge-staging-health.sh \
             "$STAGING_USER@$STAGING_HOST:$STAGING_DEPLOY_PATH/"
           ssh -p "$STAGING_SSH_PORT" "$STAGING_USER@$STAGING_HOST" \
             "chmod 700 '$STAGING_DEPLOY_PATH/'*.sh"
