@@ -240,7 +240,7 @@ def test_platform_role_grant_rejects_expired_and_inactive_assignments(
         },
     )
     assert invalid_expiry.status_code == 422
-    assert invalid_expiry.json()["detail"][0]["loc"][-1] == "expires_at"
+    assert invalid_expiry.json()["detail"]["code"] == "invalid_role_expiry"
 
 
 def test_last_active_super_admin_cannot_revoke_own_final_assignment(
