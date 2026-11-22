@@ -291,12 +291,12 @@ def test_chat_completion_routes_persona_and_records_actual_usage(
             "model": persona["slug"],
             "messages": [{"role": "user", "content": "你好"}],
             "max_tokens": 4096,
-            "user": "wxid_xxx",
+            "user": "wxid_sender",
+            "account_wxid": "wxid_logged_in",
             "sender_profile": {
-                "wxid": "wxid_xxx",
+                "wxid": "wxid_sender",
                 "nickname": "张三",
                 "remark": "张总",
-                "avatar_url": "https://example.com/avatar.png",
                 "labels": ["意向客户", "已成交"],
             },
         },
@@ -315,8 +315,9 @@ def test_chat_completion_routes_persona_and_records_actual_usage(
     assert '"nickname":"张三"' in system_content
     assert '"remark":"张总"' in system_content
     assert '"labels":["意向客户","已成交"]' in system_content
-    assert "wxid_xxx" not in system_content
-    assert "avatar.png" not in system_content
+    assert "wxid_sender" not in system_content
+    assert "wxid_logged_in" not in system_content
+    assert "account_wxid" not in call["json"]
     assert "user" not in call["json"]
 
     summary = client.get("/usage/summary", headers=jwt_headers(owner))
@@ -1432,7 +1433,63 @@ def test_missing_platform_usage_keeps_token_reservation_unknown_and_never_estima
             )
         ) == 1
 
-def test_sender_profile_wxid_must_match_top_level_user(client: TestClient) -> None:
+def test_group_chat_session_id_is_not_the_sender_wxid(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner = register(client)
+    provider = create_provider(client, owner)
+    persona = create_persona(client, owner, provider["id"])
+    key = create_api_key(client, owner)
+    FakeClient.calls = []
+    FakeClient.response = FakeResponse(
+        {
+            "id": "chatcmpl-group",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "收到"},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 8, "completion_tokens": 2, "total_tokens": 10},
+        }
+    )
+    monkeypatch.setattr(gateway.httpx, "Client", FakeClient)
+
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {key}"},
+        json={
+            "model": persona["slug"],
+            "messages": [{"role": "user", "content": "今天下午三点开会"}],
+            "user": "123456789@chatroom",
+            "account_wxid": "wxid_logged_in",
+            "speaker": "wxid_group_member",
+            "sender_profile": {
+                "wxid": "wxid_group_member",
+                "nickname": "李四",
+                "remark": "",
+                "labels": [],
+            },
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    upstream = FakeClient.calls[0]["json"]
+    assert upstream["messages"][-1]["content"] == "今天下午三点开会"
+    system_content = upstream["messages"][0]["content"]
+    assert '"nickname":"李四"' in system_content
+    assert "123456789@chatroom" not in system_content
+    assert "wxid_logged_in" not in system_content
+    assert "wxid_group_member" not in system_content
+    assert "user" not in upstream
+    assert "account_wxid" not in upstream
+    assert "speaker" not in upstream
+
+
+def test_wechat_identity_metadata_requires_a_session_user(client: TestClient) -> None:
     owner = register(client)
     provider = create_provider(client, owner)
     persona = create_persona(client, owner, provider["id"])
@@ -1443,14 +1500,114 @@ def test_sender_profile_wxid_must_match_top_level_user(client: TestClient) -> No
         json={
             "model": persona["slug"],
             "messages": [{"role": "user", "content": "你好"}],
-            "user": "wxid_account_a",
-            "sender_profile": {
-                "wxid": "wxid_account_b",
-                "nickname": "张三",
-                "labels": ["意向客户"],
-            },
+            "account_wxid": "wxid_logged_in",
         },
     )
 
     assert response.status_code == 422
+
+
+def test_multimodal_image_content_is_forwarded_and_text_is_used_for_rag(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner = register(client)
+    provider = create_provider(client, owner)
+    persona = create_persona(client, owner, provider["id"])
+    key = create_api_key(client, owner)
+    FakeClient.calls = []
+    FakeClient.response = FakeResponse(
+        {
+            "id": "chatcmpl-image",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "这是一张图片"},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 12, "completion_tokens": 4, "total_tokens": 16},
+        }
+    )
+    retrieval_calls: list[str] = []
+
+    def fake_retrieve(_db, *, tenant_id, persona_id, query):
+        retrieval_calls.append(query)
+        return "", []
+
+    monkeypatch.setattr(gateway.httpx, "Client", FakeClient)
+    monkeypatch.setattr(gateway, "retrieve_persona_context", fake_retrieve)
+
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {key}"},
+        json={
+            "model": persona["slug"],
+            "user": "wxid_sender",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "请看一下这张图片"},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": "data:image/png;base64,aGVsbG8="},
+                        },
+                    ],
+                }
+            ],
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    upstream_content = FakeClient.calls[0]["json"]["messages"][-1]["content"]
+    assert upstream_content[0] == {"type": "text", "text": "请看一下这张图片"}
+    assert upstream_content[1]["type"] == "image_url"
+    assert upstream_content[1]["image_url"]["url"] == "data:image/png;base64,aGVsbG8="
+    assert retrieval_calls == ["请看一下这张图片"]
+
+
+def test_multimodal_rejects_more_than_one_image_in_a_message(client: TestClient) -> None:
+    owner = register(client)
+    provider = create_provider(client, owner)
+    persona = create_persona(client, owner, provider["id"])
+    key = create_api_key(client, owner)
+    image = {"type": "image_url", "image_url": {"url": "data:image/png;base64,aGVsbG8="}}
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {key}"},
+        json={
+            "model": persona["slug"],
+            "messages": [{"role": "user", "content": [image, image]}],
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_sender_profile_uses_documented_utf16_limits_and_removes_controls(
+    client: TestClient,
+) -> None:
+    owner = register(client)
+    provider = create_provider(client, owner)
+    persona = create_persona(client, owner, provider["id"])
+    key = create_api_key(client, owner)
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {key}"},
+        json={
+            "model": persona["slug"],
+            "user": "wxid_sender",
+            "sender_profile": {
+                "wxid": "wxid_sender",
+                "nickname": "张三\\u0000",
+                "remark": "",
+                "labels": ["意向客户", "意向客户", "已成交\\n"],
+            },
+            "messages": [{"role": "user", "content": "你好"}],
+        },
+    )
+
+    assert response.status_code == 200, response.text
 
