@@ -1,6 +1,21 @@
 # Phase 6：完整知识库与 RAG 检索实施规格
 
 - 开发分支：`feat/phase-6-knowledge-base-rag`
+
+## 当前实现状态（2026-11-22）
+
+本路线文档同时作为实施规格和验收基准。当前代码已实现以下主链路：
+
+- Phase 6A：文档上传/URL 导入、持久化摄取任务、对象存储、解析切片、幂等和 Worker 租约/重试。
+- Phase 6B：平台/BYOK Embedding、pgvector 索引及索引版本管理。
+- Phase 6C：向量与词法混合检索、RRF、Persona 关联知识库检索、Chat Completions RAG 上下文及 citations。
+- Phase 6D：Console 知识库与文档管理、导入任务状态、检索调试和用量展示。
+- 聊天文本分析增量：Persona 学习、FAQ 提取、人工审核及 FAQ 发布到知识库已实现；详见 `docs/phase-6-chat-import-design.md`。
+
+当前收尾重点是端到端验收：聊天 ZIP 导入 → 明确确认本人 → Persona/FAQ 分析 → 人工审核 → FAQ 发布 → Knowledge Worker 索引完成 → 检索 API 与 Persona Chat Completions 返回真实引用。单元/集成测试中使用 Mock 的模型、Embedding 或检索组件必须明确标记，不能据此宣称真实上游模型或生产环境已经验收。
+
+Phase 6 尚未最终关闭。最终关闭条件为全量 CI、PostgreSQL/pgvector 集成、Console 构建、Docker Worker 冒烟及 Staging 用户流程验收均通过，并生成 `docs/phase-6-final-acceptance-report.md`。
+
 - 基线：Phase 5C（`feat/phase-5c-idempotent-metering-settlement`）
 - 状态：6A/6B/6C 基础代码已开始落地；最终状态以 CI 和端到端验收为准
 - 商业化边界：不接支付、不扣余额、不产生真实 Embedding 费用
