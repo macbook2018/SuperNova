@@ -291,6 +291,14 @@ def test_chat_completion_routes_persona_and_records_actual_usage(
             "model": persona["slug"],
             "messages": [{"role": "user", "content": "你好"}],
             "max_tokens": 4096,
+            "user": "wxid_xxx",
+            "sender_profile": {
+                "wxid": "wxid_xxx",
+                "nickname": "张三",
+                "remark": "张总",
+                "avatar_url": "https://example.com/avatar.png",
+                "labels": ["意向客户", "已成交"],
+            },
         },
     )
 
@@ -302,10 +310,14 @@ def test_chat_completion_routes_persona_and_records_actual_usage(
     assert call["headers"]["Authorization"] == "Bearer sk-provider-secret-1234"
     assert call["json"]["model"] == "deepseek-flash"
     assert call["json"]["max_tokens"] == 1024
-    assert call["json"]["messages"][0] == {
-        "role": "system",
-        "content": "你是一名耐心、专业的客服。",
-    }
+    system_content = call["json"]["messages"][0]["content"]
+    assert system_content.startswith("你是一名耐心、专业的客服。")
+    assert '"nickname":"张三"' in system_content
+    assert '"remark":"张总"' in system_content
+    assert '"labels":["意向客户","已成交"]' in system_content
+    assert "wxid_xxx" not in system_content
+    assert "avatar.png" not in system_content
+    assert "user" not in call["json"]
 
     summary = client.get("/usage/summary", headers=jwt_headers(owner))
     assert summary.status_code == 200, summary.text
@@ -1419,3 +1431,21 @@ def test_missing_platform_usage_keeps_token_reservation_unknown_and_never_estima
                 BillingAuditEvent.subject_id == str(reservation.id),
             )
         ) == 1
+
+def test_sender_profile_wxid_must_match_top_level_user(client: TestClient) -> None:
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "customer-support",
+            "messages": [{"role": "user", "content": "你好"}],
+            "user": "wxid_account_a",
+            "sender_profile": {
+                "wxid": "wxid_account_b",
+                "nickname": "张三",
+                "labels": ["意向客户"],
+            },
+        },
+    )
+
+    assert response.status_code == 422
+
