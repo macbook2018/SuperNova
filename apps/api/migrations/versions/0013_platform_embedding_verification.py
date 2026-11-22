@@ -1,13 +1,13 @@
 """Track successful platform Embedding model verification.
 
-Revision ID: 0013_platform_embedding_verification
+Revision ID: 0013_embed_verify
 Revises: 0012_platform_rbac
 """
 
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0013_platform_embedding_verification"
+revision = "0013_embed_verify"
 down_revision = "0012_platform_rbac"
 branch_labels = None
 depends_on = None
