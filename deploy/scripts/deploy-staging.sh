@@ -14,6 +14,19 @@ if [[ ! -f .env ]]; then
   exit 1
 fi
 
+# Protect the shared Staging stack even when deployments are started outside GitHub Actions.
+# The lock is held for the entire deployment, including image pulls and database migrations.
+if ! command -v flock >/dev/null 2>&1; then
+  echo "Required command 'flock' is unavailable; refusing an unlocked deployment."
+  exit 1
+fi
+exec 9>"$APP_DIR/.deploy-staging.lock"
+if ! flock -w 1200 9; then
+  echo "Timed out waiting for the Staging deployment lock after 20 minutes."
+  exit 75
+fi
+echo "Acquired Staging deployment lock."
+
 chmod 600 .env
 export SUPERNOVA_IMAGE_TAG="$TAG"
 mkdir -p backups
