@@ -1588,11 +1588,27 @@ def test_multimodal_rejects_more_than_one_image_in_a_message(client: TestClient)
 
 def test_sender_profile_uses_documented_utf16_limits_and_removes_controls(
     client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     owner = register(client)
     provider = create_provider(client, owner)
     persona = create_persona(client, owner, provider["id"])
     key = create_api_key(client, owner)
+    FakeClient.calls = []
+    FakeClient.response = FakeResponse(
+        {
+            "id": "chatcmpl-profile",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "ok"},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4},
+        }
+    )
+    monkeypatch.setattr(gateway.httpx, "Client", FakeClient)
     response = client.post(
         "/v1/chat/completions",
         headers={"Authorization": f"Bearer {key}"},
@@ -1610,4 +1626,7 @@ def test_sender_profile_uses_documented_utf16_limits_and_removes_controls(
     )
 
     assert response.status_code == 200, response.text
-
+    system_content = FakeClient.calls[0]["json"]["messages"][0]["content"]
+    assert '"nickname":"张三"' in system_content
+    assert '"labels":["意向客户","已成交"]' in system_content
+    assert "\\u0000" not in system_content
