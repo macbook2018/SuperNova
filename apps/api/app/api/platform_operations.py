@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Request
@@ -41,7 +42,7 @@ async def platform_operations_overview(
 ) -> dict:
     require_platform_permission(principal, "platform.operations.read")
     settings = request.app.state.settings
-    database, redis = await __import__("asyncio").gather(
+    database, redis = await asyncio.gather(
         _check_database(settings.database_url),
         _check_redis(settings.redis_url),
     )
