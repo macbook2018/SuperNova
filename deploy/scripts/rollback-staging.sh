@@ -34,7 +34,7 @@ ROLLBACK_COMPLETED=0
 trap '
   status=$?
   if [[ "$ROLLBACK_COMPLETED" != "1" ]]; then
-    printf "rollback_failed_at_utc=%s\\nrequested_commit_sha=%s\\n" \
+    printf "rollback_failed_at_utc=%s\nrequested_commit_sha=%s\n" \
       "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$TAG" \
       > .staging-deployment-blocked
     echo "Staging deployment queue remains BLOCKED because rollback was not verified."
