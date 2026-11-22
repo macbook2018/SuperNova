@@ -114,7 +114,10 @@ def upgrade() -> None:
         ),
         sa.Column("expires_at", sa.DateTime(timezone=True)),
         sa.Column("revoked_at", sa.DateTime(timezone=True)),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True),
+            nullable=False, server_default=sa.func.now(),
+        )
     )
     op.create_index(
         "ix_platform_user_roles_user_active", "platform_user_roles",
@@ -144,7 +147,10 @@ def upgrade() -> None:
         sa.Column(
             "details", sa.JSON(), nullable=False, server_default=sa.text("'{}'"),
         )
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True),
+            nullable=False, server_default=sa.func.now(),
+        )
     )
     op.create_index("ix_platform_admin_audit_created", "platform_admin_audit_logs", ["created_at"])
     op.create_index(
