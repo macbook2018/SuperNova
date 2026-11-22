@@ -1,5 +1,6 @@
 from uuid import UUID, uuid4
 
+import httpx
 from fastapi import APIRouter, Header, HTTPException
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -7,6 +8,8 @@ from sqlalchemy.exc import IntegrityError
 from app.api.deps import CurrentPrincipal, DatabaseSession
 from app.api.platform_admin import record_platform_audit, require_platform_permission
 from app.billing.credentials import resolve_platform_api_key
+from app.knowledge.embeddings import EmbeddingConfig, embed_texts
+from app.knowledge.network import validate_public_service_url
 from app.models.knowledge import PlatformEmbeddingModel
 from app.schemas.knowledge import (
     PlatformEmbeddingModelAdminRead,
@@ -166,3 +169,95 @@ def update_embedding_model(
     db.commit()
     db.refresh(model)
     return _admin_read(model)
+
+
+
+def _probe_embedding_model(model: PlatformEmbeddingModel) -> dict:
+    api_key = resolve_platform_api_key(model.credential_ref)
+    validate_public_service_url(model.base_url)
+    result = embed_texts(
+        EmbeddingConfig(
+            base_url=model.base_url,
+            api_key=api_key,
+            provider_type=model.provider_type,
+            model_name=model.upstream_model_name,
+            dimensions=model.dimensions,
+        ),
+        ["SuperNova Embedding connectivity and 1536-dimensional vector validation."],
+    )
+    if len(result.vectors) != 1 or len(result.vectors[0]) != 1536:
+        raise RuntimeError("embedding_provider_dimension_mismatch")
+    return {
+        "success": True,
+        "model_id": str(model.id),
+        "model_name": model.upstream_model_name,
+        "dimensions": len(result.vectors[0]),
+        "expected_dimensions": 1536,
+        "input_tokens": result.input_tokens if result.usage_known else None,
+    }
+
+
+@router.post(
+    "/admin/platform/embedding-models/{model_id}/test",
+)
+def test_embedding_model_connection(
+    model_id: UUID,
+    principal: CurrentPrincipal,
+    db: DatabaseSession,
+    request_id: str | None = Header(default=None, alias="X-Request-ID"),
+) -> dict:
+    require_platform_permission(principal, "platform.models.manage")
+    model = db.get(PlatformEmbeddingModel, model_id)
+    if model is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "embedding_model_not_found", "message": "平台 Embedding 模型不存在"},
+        )
+    try:
+        result = _probe_embedding_model(model)
+    except HTTPException:
+        raise
+    except httpx.TimeoutException:
+        raise HTTPException(
+            status_code=504,
+            detail={"code": "embedding_provider_timeout", "message": "Embedding 服务连接超时"},
+        ) from None
+    except httpx.RequestError:
+        raise HTTPException(
+            status_code=502,
+            detail={"code": "embedding_provider_unreachable", "message": "无法连接 Embedding 服务，请检查 Base URL 和网络"},
+        ) from None
+    except ValueError:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "embedding_provider_url_invalid", "message": "Embedding 服务地址不符合安全要求"},
+        ) from None
+    except RuntimeError as exc:
+        reason = str(exc)
+        messages = {
+            "embedding_provider_dimension_mismatch": "服务返回的向量维度不是 1536，不能用于当前知识库索引",
+            "embedding_provider_response_count_mismatch": "Embedding 服务返回的向量数量不正确",
+            "embedding_provider_invalid_json": "Embedding 服务返回了无效 JSON",
+            "embedding_provider_invalid_vector": "Embedding 服务返回了无效向量",
+        }
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": reason if reason in messages else "embedding_provider_test_failed",
+                "message": messages.get(reason, "Embedding 服务测试失败，请检查模型名称和服务商配置"),
+            },
+        ) from None
+
+    record_platform_audit(
+        db,
+        actor_user_id=principal.user.id,
+        target_user_id=None,
+        action="platform.embedding_model.test",
+        resource_type="embedding_model",
+        resource_id=str(model.id),
+        reason="测试平台 Embedding 模型连接及向量维度",
+        request_id=request_id,
+        details={"dimensions": result["dimensions"], "success": True},
+    )
+    db.commit()
+    return result
