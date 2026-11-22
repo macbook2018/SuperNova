@@ -5,7 +5,6 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
-
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import app, asgi_app
