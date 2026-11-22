@@ -58,6 +58,8 @@ for image in "$API_IMAGE" "$CONSOLE_IMAGE"; do
 done
 
 "${COMPOSE[@]}" up -d api knowledge-worker chat-import-worker console
+STAGING_API_BASE_URL="${STAGING_API_BASE_URL:-https://api.wet001.com}"
+STAGING_CONSOLE_BASE_URL="${STAGING_CONSOLE_BASE_URL:-https://bot.wet001.com}"
 
 all_services_healthy() {
   local service container_id status image expected
@@ -84,7 +86,9 @@ all_services_healthy() {
 for attempt in $(seq 1 45); do
   if all_services_healthy \
     && python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:18082/health/ready', timeout=3)" >/dev/null 2>&1 \
-    && python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:18083/healthz', timeout=3)" >/dev/null 2>&1; then
+    && python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:18083/healthz', timeout=3)" >/dev/null 2>&1 \
+    && curl --connect-timeout 5 --max-time 20 -fsS "${STAGING_API_BASE_URL%/}/health/ready" >/dev/null \
+    && curl --connect-timeout 5 --max-time 20 -fsS "${STAGING_CONSOLE_BASE_URL%/}/" | grep -q "SuperNova"; then
     DEPLOYED_AT_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     if [[ -n "$CURRENT_TAG" ]]; then
       printf '%s\n' "$CURRENT_TAG" > .previous_successful_tag.tmp
