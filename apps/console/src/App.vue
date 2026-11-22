@@ -58,7 +58,7 @@ const authForm = ref({ email: '', password: '', display_name: '', workspace_name
 const titles: Record<Page, string> = {
   overview: '工作台总览',
   personas: '人格管理',
-  providers: '模型供应商',
+  providers: '我的模型供应商（BYOK）',
   knowledge: '知识库',
   knowledgeDetail: '知识库详情',
   chatImports: '聊天文本分析',
@@ -71,7 +71,7 @@ const titles: Record<Page, string> = {
 const descriptions: Record<Page, string> = {
   overview: '查看工作空间中的人格、模型供应商和资源状态。',
   personas: '创建和管理独立 AI 人格，为每个人格配置模型与行为方式。',
-  providers: '集中管理模型供应商、兼容接口地址和加密保存的 API Key。',
+  providers: '配置由你自己承担 API 费用的模型供应商和 API Key；与 SuperNova 平台模型池分开管理。',
   knowledge: '集中管理知识库资料空间，并关联到一个或多个 AI 人格。',
   knowledgeDetail: '管理文档导入、索引状态、混合检索与 RAG 来源。',
   chatImports: '导入历史聊天文本，提炼人格表达风格与业务知识；不保存聊天记录。',
@@ -93,7 +93,7 @@ const nav = [
   },
   {
     label: '模型配置',
-    items: [{ key: 'providers' as Page, label: '模型供应商', icon: Server }],
+    items: [{ key: 'providers' as Page, label: '我的供应商（BYOK）', icon: Server }],
   },
   {
     label: '开发者',
@@ -909,8 +909,8 @@ async function revokeKey(key: ApiKey) {
       <footer><small><i></i>{{provider.has_api_key?'凭据已加密保存':'未设置 API Key'}}</small><div class="row-actions"><button @click="toggleProvider(provider)" :aria-label="provider.enabled?'停用':'启用'"><Zap :size="15"/></button><button @click="editProvider(provider)" aria-label="编辑"><Pencil :size="15"/></button><button @click="deleteProvider(provider)" aria-label="删除"><Trash2 :size="15"/></button></div></footer>
      </article>
     </section>
-    <section v-else class="panel empty"><Server :size="30"/><b>还没有配置模型供应商</b><small>添加 DeepSeek、OpenAI、通义千问或任意 OpenAI 兼容服务。</small><button class="btn primary" @click="editProvider()"><Plus :size="15"/>添加第一个供应商</button></section>
-    <div class="info"><ShieldCheck :size="17"/><div><b>凭据安全</b><small>模型供应商 API Key 使用 Fernet 对称加密后存入数据库；接口只返回密钥末四位提示，不返回密文或明文。生产环境必须配置独立的 SUPERNOVA_ENCRYPTION_KEY。</small></div></div>
+    <section v-else class="panel empty"><Server :size="30"/><b>还没有配置自己的模型供应商</b><small>添加 DeepSeek、OpenAI、通义千问或任意 OpenAI 兼容服务。此处配置仅供 BYOK 使用，不会加入平台模型池。</small><button class="btn primary" @click="editProvider()"><Plus :size="15"/>添加第一个供应商</button></section>
+    <div class="info"><ShieldCheck :size="17"/><div><b>BYOK 凭据安全</b><small>此处 API Key 使用 Fernet 加密后存入当前工作空间。平台统一模型由平台管理员在「平台模型管理」中单独配置，两类密钥互不共享。</small></div></div>
    </template>
 
    <PlatformAdminView v-else-if="page==='platformAdmin'" />
