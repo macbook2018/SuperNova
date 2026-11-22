@@ -16,6 +16,10 @@ if [[ -f .staging-deployment-blocked ]]; then
   echo "Inspect the server, perform a verified rollback or run acknowledge-staging-health.sh."
   exit 70
 fi
+if [[ -f .staging-deployment-awaiting-acceptance ]]; then
+  echo "The previous Staging deployment is awaiting acceptance."
+  exit 71
+fi
 
 TAG="${1:-}"
 RUN_ID="${2:-manual}"
@@ -168,6 +172,8 @@ cat > .last_successful_deployment.json.tmp <<EOF
 }
 EOF
 mv .last_successful_deployment.json.tmp .last_successful_deployment.json
+printf '%s\n' "$TAG" > .staging-deployment-awaiting-acceptance.tmp
+mv .staging-deployment-awaiting-acceptance.tmp .staging-deployment-awaiting-acceptance
 rm -f .staging-deployment-blocked
 DEPLOYMENT_COMPLETED=1
 
