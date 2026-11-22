@@ -133,7 +133,7 @@ jobs:
           console_base="${STAGING_CONSOLE_BASE_URL%/}"
           healthy=false
           for attempt in $(seq 1 30); do
-            if curl -fsS "$api_base/health/ready" >/dev/null && curl -fsS "$console_base/" | grep -q "SuperNova"; then
+            if curl --connect-timeout 5 --max-time 15 -fsS "$api_base/health/ready" >/dev/null && curl --connect-timeout 5 --max-time 15 -fsS "$console_base/" | grep -q "SuperNova"; then
               healthy=true
               break
             fi
