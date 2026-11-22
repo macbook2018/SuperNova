@@ -194,9 +194,14 @@ def revoke_platform_role(
     request_id: str | None = Header(default=None, alias="X-Request-ID"),
 ) -> dict:
     require_platform_permission(principal, "platform.rbac.manage")
-    role = db.scalar(select(PlatformRole).where(PlatformRole.code == role_code))
+    role = db.scalar(
+        select(PlatformRole).where(PlatformRole.code == role_code)
+    )
     if role is None:
-        raise HTTPException(status_code=404, detail={"code": "platform_role_not_found", "message": "平台角色不存在"})
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "platform_role_not_found", "message": "平台角色不存在"},
+        )
     now = datetime.now(UTC)
     assignment = db.scalar(
         select(PlatformUserRole).where(
