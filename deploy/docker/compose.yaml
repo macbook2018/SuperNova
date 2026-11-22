@@ -88,6 +88,7 @@ services:
       SUPERNOVA_DATABASE_URL: postgresql://${POSTGRES_USER:-supernova}:${POSTGRES_PASSWORD:-change-me-local-only}@postgres:5432/${POSTGRES_DB:-supernova}
       SUPERNOVA_REDIS_URL: redis://:${REDIS_PASSWORD:-change-me-local-only}@redis:6379/0
       SUPERNOVA_JWT_SECRET: ${SUPERNOVA_JWT_SECRET:-local-development-only-secret-change-before-deploy-2026}
+      SUPERNOVA_RUNTIME_JWT_SECRET: ${SUPERNOVA_RUNTIME_JWT_SECRET:-local-runtime-secret-change-before-deploy-2026}
       SUPERNOVA_PLATFORM_CREDENTIALS_JSON: ${SUPERNOVA_PLATFORM_CREDENTIALS_JSON:-}
       SUPERNOVA_PLATFORM_ADMIN_EMAILS: ${SUPERNOVA_PLATFORM_ADMIN_EMAILS:-}
       SUPERNOVA_ENCRYPTION_KEY: ${SUPERNOVA_ENCRYPTION_KEY:-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=}
@@ -157,6 +158,38 @@ services:
       test: ["CMD", "python", "-m", "app.knowledge.worker", "--check"]
       interval: 30s
       timeout: 5s
+      retries: 5
+
+  runtime-manager:
+    build:
+      context: ../..
+      dockerfile: apps/worker-manager/Dockerfile
+    restart: unless-stopped
+    init: true
+    environment:
+      SUPERNOVA_ENVIRONMENT: development
+      SUPERNOVA_DATABASE_URL: postgresql://${POSTGRES_USER:-supernova}:${POSTGRES_PASSWORD:-change-me-local-only}@postgres:5432/${POSTGRES_DB:-supernova}
+      SUPERNOVA_RUNTIME_JWT_SECRET: ${SUPERNOVA_RUNTIME_JWT_SECRET:-local-runtime-secret-change-before-deploy-2026}
+      SUPERNOVA_RUNTIME_GATEWAY_BASE_URL: ${SUPERNOVA_RUNTIME_GATEWAY_BASE_URL:-http://api:8000/internal/runtime/v1}
+      SUPERNOVA_RUNTIME_DATA_ROOT: ${SUPERNOVA_RUNTIME_HOST_ROOT:-/tmp/supernova-runtime}
+      SUPERNOVA_ASTRBOT_RUNTIME_IMAGE: ${SUPERNOVA_ASTRBOT_RUNTIME_IMAGE:-macbook201808/supernova-astrbot-runtime:4.29.4-6133541}
+      SUPERNOVA_RUNTIME_WORKER_POLL_SECONDS: ${SUPERNOVA_RUNTIME_WORKER_POLL_SECONDS:-2}
+      SUPERNOVA_RUNTIME_WORKER_LEASE_SECONDS: ${SUPERNOVA_RUNTIME_WORKER_LEASE_SECONDS:-180}
+      SUPERNOVA_RUNTIME_MEMORY_LIMIT: ${SUPERNOVA_RUNTIME_MEMORY_LIMIT:-512m}
+      SUPERNOVA_RUNTIME_CPU_LIMIT: ${SUPERNOVA_RUNTIME_CPU_LIMIT:-1.0}
+      SUPERNOVA_RUNTIME_PIDS_LIMIT: ${SUPERNOVA_RUNTIME_PIDS_LIMIT:-128}
+      SUPERNOVA_RUNTIME_DISK_LIMIT_BYTES: ${SUPERNOVA_RUNTIME_DISK_LIMIT_BYTES:-2147483648}
+    user: "0:0"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${SUPERNOVA_RUNTIME_HOST_ROOT:-/tmp/supernova-runtime}:${SUPERNOVA_RUNTIME_HOST_ROOT:-/tmp/supernova-runtime}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.runtime.worker_manager", "--check"]
+      interval: 30s
+      timeout: 10s
       retries: 5
 
   chat-import-worker:

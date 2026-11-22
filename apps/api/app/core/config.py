@@ -23,6 +23,19 @@ class Settings(BaseSettings):
     )
     redis_url: str = "redis://:change-me-local-only@localhost:6379/0"
     jwt_secret: str = _DEFAULT_JWT_SECRET
+    runtime_jwt_secret: str | None = None
+    runtime_gateway_base_url: str = "http://api:8000/internal/runtime/v1"
+    runtime_data_root: str = "/tmp/supernova-runtime"
+    astrbot_runtime_image: str = "macbook201808/supernova-astrbot-runtime:4.29.4-6133541"
+    runtime_memory_limit: str = "512m"
+    runtime_cpu_limit: float = 1.0
+    runtime_pids_limit: int = 128
+    runtime_disk_limit_bytes: int = 2 * 1024 * 1024 * 1024
+    runtime_worker_poll_seconds: float = 2.0
+    runtime_worker_lease_seconds: int = 180
+    runtime_heartbeat_timeout_seconds: int = 90
+    astrbot_runtime_version: str = "4.29.4"
+    astrbot_runtime_commit: str = "61335414433db721b3f7ecc93f90deafe0a59d78"
     encryption_key: str | None = _DEFAULT_ENCRYPTION_KEY
     access_token_ttl_minutes: int = 15
     refresh_token_ttl_days: int = 30
@@ -75,6 +88,22 @@ class Settings(BaseSettings):
                 Fernet(self.encryption_key.encode("ascii"))
             except (ValueError, UnicodeEncodeError):
                 raise ValueError("SUPERNOVA_ENCRYPTION_KEY must be a valid Fernet key") from None
+        if not 0.2 <= self.runtime_worker_poll_seconds <= 60:
+            raise ValueError("SUPERNOVA_RUNTIME_WORKER_POLL_SECONDS must be between 0.2 and 60")
+        if not 30 <= self.runtime_worker_lease_seconds <= 3600:
+            raise ValueError("SUPERNOVA_RUNTIME_WORKER_LEASE_SECONDS must be between 30 and 3600")
+        if not 30 <= self.runtime_heartbeat_timeout_seconds <= 900:
+            raise ValueError(
+                "SUPERNOVA_RUNTIME_HEARTBEAT_TIMEOUT_SECONDS must be between 30 and 900"
+            )
+        if self.runtime_cpu_limit <= 0 or self.runtime_cpu_limit > 8:
+            raise ValueError("SUPERNOVA_RUNTIME_CPU_LIMIT must be greater than 0 and at most 8")
+        if not 16 <= self.runtime_pids_limit <= 4096:
+            raise ValueError("SUPERNOVA_RUNTIME_PIDS_LIMIT must be between 16 and 4096")
+        if not 64 * 1024 * 1024 <= self.runtime_disk_limit_bytes <= 100 * 1024**3:
+            raise ValueError(
+                "SUPERNOVA_RUNTIME_DISK_LIMIT_BYTES must be between 64 MiB and 100 GiB"
+            )
         if self.access_token_ttl_minutes < 5 or self.access_token_ttl_minutes > 60:
             raise ValueError("SUPERNOVA_ACCESS_TOKEN_TTL_MINUTES must be between 5 and 60")
         if self.knowledge_max_upload_bytes < 1024 or self.knowledge_max_url_bytes < 1024:

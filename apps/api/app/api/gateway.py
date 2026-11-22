@@ -43,9 +43,11 @@ logger = structlog.get_logger()
 
 @dataclass(frozen=True)
 class GatewayPrincipal:
-    api_key: ApiKey
+    api_key: ApiKey | None
     user: User
     tenant: Tenant
+    identity_id: UUID
+    bot_instance_id: UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -110,7 +112,13 @@ def get_gateway_principal(
 
     api_key.last_used_at = now
     db.commit()
-    return GatewayPrincipal(api_key=api_key, user=user, tenant=tenant)
+    return GatewayPrincipal(
+        api_key=api_key,
+        user=user,
+        tenant=tenant,
+        identity_id=api_key.id,
+        bot_instance_id=None,
+    )
 
 
 GatewayPrincipalDependency = Annotated[GatewayPrincipal, Depends(get_gateway_principal)]
@@ -404,7 +412,8 @@ def _record_usage(
         request_id=request_id,
         tenant_id=principal.tenant.id,
         user_id=principal.user.id,
-        api_key_id=principal.api_key.id,
+        api_key_id=principal.api_key.id if principal.api_key else None,
+        bot_instance_id=principal.bot_instance_id,
         persona_id=persona.id,
         provider_id=resolved.provider_id,
         platform_model_id=resolved.platform_model_id,
@@ -605,7 +614,7 @@ def create_chat_completion(
 
     request_hash = fingerprint_gateway_request(
         base_payload,
-        api_key_id=principal.api_key.id,
+        api_key_id=principal.identity_id,
         persona_id=persona.id,
         model_source=resolved.model_source,
         price_version_id=resolved.price_version_id,

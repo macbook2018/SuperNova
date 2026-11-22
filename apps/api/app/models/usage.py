@@ -18,6 +18,7 @@ class UsageRecord(Base):
         Index("ix_usage_records_user_created", "user_id", "created_at"),
         Index("ix_usage_records_request_id", "request_id"),
         Index("ix_usage_records_tenant_source_created", "tenant_id", "model_source", "created_at"),
+        Index("ix_usage_records_bot_created", "tenant_id", "bot_instance_id", "created_at"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
@@ -30,6 +31,9 @@ class UsageRecord(Base):
     )
     api_key_id: Mapped[UUID | None] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("api_keys.id", ondelete="SET NULL")
+    )
+    bot_instance_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("bot_instances.id", ondelete="SET NULL")
     )
     persona_id: Mapped[UUID | None] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("personas.id", ondelete="SET NULL")

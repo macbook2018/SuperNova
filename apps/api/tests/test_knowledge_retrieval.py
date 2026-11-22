@@ -145,7 +145,7 @@ def test_retrieve_persona_context_returns_grounded_citations(
     assert calls[0]["tenant_id"] == tenant_id
     assert calls[0]["knowledge_base"] is knowledge_base
     assert "安装程序后输入授权码即可完成激活。" in context
-    assert "不可信的引用数据" in context
+    assert "不可信数据" in context
     assert len(citations) == 1
     assert citations[0]["knowledge_base_id"] == str(knowledge_base_id)
     assert citations[0]["document_id"] == str(document_id)
