@@ -30,6 +30,18 @@ export SUPERNOVA_IMAGE_TAG="$TAG"
 COMPOSE=(docker compose --project-name supernova-staging --env-file .env -f compose.staging.yaml)
 CURRENT_TAG="$(cat .last_successful_tag 2>/dev/null || true)"
 
+ROLLBACK_COMPLETED=0
+trap '
+  status=$?
+  if [[ "$ROLLBACK_COMPLETED" != "1" ]]; then
+    printf "rollback_failed_at_utc=%s\\nrequested_commit_sha=%s\\n" \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$TAG" \
+      > .staging-deployment-blocked
+    echo "Staging deployment queue remains BLOCKED because rollback was not verified."
+  fi
+  exit "$status"
+' EXIT
+
 API_IMAGE="macbook201808/supernova:api-${TAG}"
 CONSOLE_IMAGE="macbook201808/supernova:console-${TAG}"
 for image in "$API_IMAGE" "$CONSOLE_IMAGE"; do
@@ -64,6 +76,7 @@ for attempt in $(seq 1 45); do
 EOF
     mv .last_successful_deployment.json.tmp .last_successful_deployment.json
     rm -f .staging-deployment-blocked
+    ROLLBACK_COMPLETED=1
     echo "Application containers rolled back to ${TAG}."
     echo "Database schema/data were NOT rolled back. Verify backward compatibility."
     echo "Deployment record updated to ${TAG}."
