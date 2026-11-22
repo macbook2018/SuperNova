@@ -379,6 +379,156 @@ def test_streaming_chat_completion_records_usage_and_openai_done_marker(
     assert summary.json()["all_time"]["total_tokens"] == 7
 
 
+def _sample_gateway_citations() -> list[dict]:
+    return [
+        {
+            "index": 1,
+            "knowledge_base_id": str(uuid4()),
+            "knowledge_base_name": "客服知识库",
+            "document_id": str(uuid4()),
+            "document_name": "退货政策.md",
+            "source_type": "upload",
+            "source_url": None,
+            "page_number": None,
+            "sheet_name": None,
+            "slide_number": None,
+            "chunk_id": str(uuid4()),
+            "chunk_index": 0,
+            "score": 0.93,
+            "snippet": "商品支持签收后 30 天内退货。",
+        }
+    ]
+
+
+def test_chat_completion_injects_retrieved_context_and_returns_citations(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner = register(client)
+    provider = create_provider(client, owner)
+    persona = create_persona(client, owner, provider["id"])
+    key = create_api_key(client, owner)
+    rag_context = "退货政策：商品支持签收后 30 天内退货。"
+    citations = _sample_gateway_citations()
+    retrieval_calls: list[dict] = []
+
+    def fake_retrieval(_db, **kwargs):
+        retrieval_calls.append(kwargs)
+        return rag_context, citations
+
+    monkeypatch.setattr(gateway, "retrieve_persona_context", fake_retrieval)
+    FakeClient.calls = []
+    FakeClient.response = FakeResponse(
+        {
+            "id": "chatcmpl-rag",
+            "object": "chat.completion",
+            "created": 1800000000,
+            "model": "deepseek-flash",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "支持签收后 30 天内退货。"},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 30, "completion_tokens": 12, "total_tokens": 42},
+        }
+    )
+    monkeypatch.setattr(gateway.httpx, "Client", FakeClient)
+
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {key}"},
+        json={
+            "model": persona["slug"],
+            "messages": [{"role": "user", "content": "退货期限是多久？"}],
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["supernova"]["citations"] == citations
+    assert retrieval_calls[0]["tenant_id"] == UUID(owner["tenant"]["id"])
+    assert retrieval_calls[0]["persona_id"] == UUID(persona["id"])
+    assert retrieval_calls[0]["query"] == "退货期限是多久？"
+    upstream_messages = FakeClient.calls[0]["json"]["messages"]
+    assert rag_context in upstream_messages[0]["content"]
+    assert "知识库检索参考资料" in upstream_messages[0]["content"]
+
+
+def test_streaming_chat_completion_attaches_retrieved_citations(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner = register(client)
+    provider = create_provider(client, owner)
+    persona = create_persona(client, owner, provider["id"])
+    key = create_api_key(client, owner)
+    rag_context = "退货政策：商品支持签收后 30 天内退货。"
+    citations = _sample_gateway_citations()
+    monkeypatch.setattr(
+        gateway,
+        "retrieve_persona_context",
+        lambda _db, **_kwargs: (rag_context, citations),
+    )
+    chunks = [
+        "data: " + json.dumps(
+            {
+                "id": "chatcmpl-rag-stream",
+                "object": "chat.completion.chunk",
+                "created": 1800000000,
+                "model": "deepseek-flash",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"content": "支持签收后 30 天内退货。"},
+                        "finish_reason": None,
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        "data: " + json.dumps(
+            {
+                "id": "chatcmpl-rag-stream",
+                "object": "chat.completion.chunk",
+                "created": 1800000000,
+                "model": "deepseek-flash",
+                "choices": [],
+                "usage": {"prompt_tokens": 30, "completion_tokens": 12, "total_tokens": 42},
+            },
+            ensure_ascii=False,
+        ),
+        "data: [DONE]",
+    ]
+    FakeClient.calls = []
+    FakeClient.response = FakeResponse({}, lines=chunks)
+    monkeypatch.setattr(gateway.httpx, "Client", FakeClient)
+
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {key}"},
+        json={
+            "model": persona["slug"],
+            "messages": [{"role": "user", "content": "退货期限是多久？"}],
+            "stream": True,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert "data: [DONE]" in response.text
+    events = [
+        json.loads(line[6:])
+        for line in response.text.splitlines()
+        if line.startswith("data: ") and line != "data: [DONE]"
+    ]
+    assert any(
+        event.get("supernova", {}).get("citations") == citations
+        for event in events
+    )
+    request_payload = FakeClient.calls[0]["request"]["json"]
+    assert rag_context in request_payload["messages"][0]["content"]
+
+
 def test_chat_completions_url_uses_provider_specific_base_url_rules() -> None:
     assert (
         gateway._chat_completions_url("https://api.deepseek.com", "deepseek")

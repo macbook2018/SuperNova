@@ -490,6 +490,18 @@ def test_chat_analysis_review_and_faq_publication_are_tenant_scoped(
     assert published.json()["published_document_id"]
     assert len(published_objects) == 1
 
+    duplicate_publish = client.post(
+        f"/faq-candidates/{candidate_id}/publish",
+        headers=headers(auth),
+        json={"knowledge_base_id": knowledge_base_id},
+    )
+    assert duplicate_publish.status_code == 200, duplicate_publish.text
+    assert (
+        duplicate_publish.json()["published_document_id"]
+        == published.json()["published_document_id"]
+    )
+    assert len(published_objects) == 1
+
     with session_factory() as db:
         document = db.get(
             KnowledgeDocument,
