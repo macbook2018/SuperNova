@@ -6,6 +6,7 @@ from uuid import uuid4
 
 import pytest
 from app.runtime import provider as runtime_provider
+from app.runtime.worker_manager import _directory_size
 from docker.errors import NotFound
 
 
@@ -123,3 +124,11 @@ def test_docker_provider_writes_credentials_outside_runtime_config(
     assert client.containers.created["volumes"][str(config_dir)]["mode"] == "ro"
     data_dir = tmp_path / tenant_id.hex / bot_id.hex / "data"
     assert client.containers.created["volumes"][str(data_dir)]["bind"] == "/var/lib/astrbot"
+
+
+def test_directory_size_counts_only_instance_files(tmp_path: Path) -> None:
+    (tmp_path / "nested").mkdir()
+    (tmp_path / "first.bin").write_bytes(b"abc")
+    (tmp_path / "nested" / "second.bin").write_bytes(b"12345")
+
+    assert _directory_size(tmp_path) == 8
