@@ -698,8 +698,8 @@ def create_audio_transcription(
     request: Request,
     principal: GatewayPrincipalDependency,
     db: DatabaseSession,
-    file: UploadFile = File(...),
-    model: str | None = Form(default=None, max_length=120),
+    file: Annotated[UploadFile, File()],
+    model: Annotated[str | None, Form(max_length=120)] = None,
     idempotency_key_header: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     request_id = _request_id(request)
