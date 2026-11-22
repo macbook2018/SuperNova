@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     redis_url: str = "redis://:change-me-local-only@localhost:6379/0"
     jwt_secret: str = _DEFAULT_JWT_SECRET
     runtime_jwt_secret: str | None = None
-    runtime_gateway_base_url: str = "http://host.docker.internal:8001/internal/runtime/v1"
+    runtime_gateway_base_url: str = "http://api:8000/internal/runtime/v1"
     runtime_data_root: str = "/tmp/supernova-runtime"
     astrbot_runtime_image: str = "macbook201808/supernova-astrbot-runtime:4.29.4-6133541"
     runtime_memory_limit: str = "512m"
