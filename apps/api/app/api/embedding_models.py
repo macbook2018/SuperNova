@@ -107,7 +107,11 @@ def create_embedding_model(
         db, actor_user_id=principal.user.id, target_user_id=None,
         action="platform.embedding_model.create", resource_type="embedding_model",
         resource_id=model.code, reason="创建平台 Embedding 模型", request_id=request_id,
-        details={"provider_type": model.provider_type, "dimensions": model.dimensions, "enabled": model.enabled},
+        details={
+            "provider_type": model.provider_type,
+            "dimensions": model.dimensions,
+            "enabled": model.enabled,
+        },
     )
     try:
         db.commit()
