@@ -166,13 +166,26 @@ jobs:
     environment:
       name: staging-acceptance
       url: ${{ vars.STAGING_CONSOLE_BASE_URL || 'https://bot.wet001.com' }}
+    env:
+      STAGING_HOST: ${{ secrets.STAGING_HOST }}
+      STAGING_USER: ${{ secrets.STAGING_USER }}
+      STAGING_SSH_PORT: ${{ secrets.STAGING_SSH_PORT || '22' }}
+      STAGING_SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+      STAGING_DEPLOY_PATH: ${{ vars.STAGING_DEPLOY_PATH || '/opt/supernova-staging' }}
+      DEPLOY_SHA: ${{ inputs.deploy_sha }}
     steps:
-      - name: Record accepted deployment SHA
-        env:
-          DEPLOY_SHA: ${{ inputs.deploy_sha }}
+      - name: Configure SSH for acceptance
         run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$STAGING_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -p "$STAGING_SSH_PORT" -H "$STAGING_HOST" >> ~/.ssh/known_hosts
+
+      - name: Verify and record Staging acceptance on the server
+        run: |
+          ssh -p "$STAGING_SSH_PORT" "$STAGING_USER@$STAGING_HOST" "set -eu; cd '$STAGING_DEPLOY_PATH'; ./acknowledge-staging-health.sh --accept"
           {
-            echo "## Staging acceptance approved"
-            echo "- Commit SHA: \`$DEPLOY_SHA\`"
-            echo "- Acceptance time (UTC): \`$(date -u +%Y-%m-%dT%H:%M:%SZ)\`"
+            echo "Staging acceptance approved"
+            echo "Commit SHA: $DEPLOY_SHA"
+            echo "Acceptance time (UTC): $(date -u +%Y-%m-%dT%H:%M:%SZ)"
           } >> "$GITHUB_STEP_SUMMARY"
