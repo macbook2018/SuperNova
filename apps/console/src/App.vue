@@ -116,6 +116,8 @@ const nav = [
 ]
 const activeNav = computed(() => page.value === 'knowledgeDetail' ? 'knowledge' : page.value)
 const platformRbacAccess = ref(false)
+const platformRbacManage = ref(false)
+const platformAuditRead = ref(false)
 const visibleNav = computed(() => nav.map(group => ({
   ...group,
   items: group.items.filter(item => {
@@ -230,13 +232,16 @@ async function loadPlatformAdminAccess() {
     const access = await request<{ permissions: string[] }>('/admin/platform/access')
     platformAdminAccess.value = access.permissions.includes('platform.models.read')
       || access.permissions.includes('platform.models.manage')
-    platformRbacAccess.value = access.permissions.includes('platform.rbac.manage')
-      || access.permissions.includes('platform.audit.read')
+    platformRbacManage.value = access.permissions.includes('platform.rbac.manage')
+    platformAuditRead.value = access.permissions.includes('platform.audit.read')
+    platformRbacAccess.value = platformRbacManage.value || platformAuditRead.value
     if (!platformAdminAccess.value && page.value === 'platformAdmin') page.value = 'overview'
     if (!platformRbacAccess.value && page.value === 'platformAccess') page.value = 'overview'
   } catch {
     platformAdminAccess.value = false
     platformRbacAccess.value = false
+    platformRbacManage.value = false
+    platformAuditRead.value = false
     if (page.value === 'platformAdmin' || page.value === 'platformAccess') page.value = 'overview'
   }
 }
@@ -366,6 +371,8 @@ async function logout() {
   currentTenant.value = null
   platformAdminAccess.value = false
   platformRbacAccess.value = false
+  platformRbacManage.value = false
+  platformAuditRead.value = false
   personas.value = []
   providers.value = []
   kbs.value = []
@@ -957,7 +964,7 @@ async function revokeKey(key: ApiKey) {
    </template>
 
    <PlatformAdminView v-else-if="page==='platformAdmin'" />
-   <PlatformAccessView v-else-if="page==='platformAccess'" />
+   <PlatformAccessView v-else-if="page==='platformAccess'" :can-manage="platformRbacManage" :can-audit="platformAuditRead" />
 
    <template v-else-if="page==='knowledge'">
     <section class="kb-summary">
