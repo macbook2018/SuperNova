@@ -135,7 +135,10 @@ def create_billing_plan(
         resource_id=f"{plan.code}:{plan.revision}",
         reason="创建套餐版本",
         request_id=request_id,
-        details={"currency": plan.currency, "subscription_price_minor": plan.subscription_price_minor},
+        details={
+            "currency": plan.currency,
+            "subscription_price_minor": plan.subscription_price_minor,
+        },
     )
     try:
         db.flush()
