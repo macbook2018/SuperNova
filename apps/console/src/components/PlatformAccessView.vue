@@ -139,7 +139,7 @@ const loading = ref(false)
 const saving = ref(false)
 const error = ref('')
 const notice = ref('')
-const activeTab = ref<'users' | 'tenants' | 'analytics' | 'assignments' | 'audit'>(
+const activeTab = ref<'users' | 'tenants' | 'analytics' | 'operations' | 'assignments' | 'audit'>(
   props.canReadUsers ? 'users'
     : props.canReadTenants ? 'tenants'
       : props.canManage ? 'assignments' : 'audit',
