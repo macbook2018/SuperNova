@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import {
-  AlertCircle, Check, CheckCircle2, Clock3, Database, KeyRound,
+  AlertCircle, Check, CheckCircle2, Clock3, Database, KeyRound, Activity,
   Pencil, Plus, RefreshCw, Server, ShieldCheck, ToggleLeft, X,
 } from 'lucide-vue-next'
 import { apiRequest } from '../lib/api'
 
 type ProviderType = 'openai_compatible' | 'openai' | 'deepseek' | 'qwen' | 'anthropic'
-type EmbeddingProviderType = 'openai_compatible' | 'openai' | 'qwen' | 'deepseek'
+type EmbeddingProviderType = 'openai_compatible' | 'openai' | 'qwen'
 
 interface PlatformModel {
   id: string
@@ -41,6 +41,7 @@ interface EmbeddingModel {
   credential_ref: string
   dimensions: number
   enabled: boolean
+  verified_at: string | null
   created_at: string
 }
 
@@ -58,6 +59,7 @@ const priceModal = ref(false)
 const embeddingModal = ref(false)
 const editingModelId = ref<string | null>(null)
 const editingEmbeddingId = ref<string | null>(null)
+const testingEmbeddingId = ref<string | null>(null)
 
 const modelForm = ref({
   code: '',
@@ -82,7 +84,7 @@ const embeddingForm = ref({
 
 const selectedModel = computed(() => models.value.find(item => item.id === selectedModelId.value) ?? null)
 const enabledModels = computed(() => models.value.filter(item => item.enabled).length)
-const enabledEmbeddings = computed(() => embeddingModels.value.filter(item => item.enabled).length)
+const enabledEmbeddings = computed(() => embeddingModels.value.filter(item => item.enabled && item.verified_at).length)
 
 function providerLabel(value: string): string {
   const labels: Record<string, string> = {
@@ -284,9 +286,22 @@ function embeddingPresetChanged() {
     openai_compatible: '',
     openai: 'https://api.openai.com/v1',
     qwen: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-    deepseek: 'https://api.deepseek.com',
   }
   embeddingForm.value.base_url = presets[embeddingForm.value.provider_type]
+}
+async function testEmbedding(model: EmbeddingModel) {
+  testingEmbeddingId.value = model.id
+  try {
+    const result = await apiRequest<{ success: boolean; dimensions: number; expected_dimensions: number; input_tokens: number | null }>(
+      '/admin/platform/embedding-models/' + model.id + '/test', { method: 'POST' },
+    )
+    await loadAll()
+    notify('连接成功：返回 ' + result.dimensions + ' 维向量，符合知识库 1536 维要求；现在可以启用模型')
+  } catch (value) {
+    notify(errorMessage(value))
+  } finally {
+    testingEmbeddingId.value = null
+  }
 }
 async function saveEmbedding() {
   const form = embeddingForm.value
@@ -307,19 +322,20 @@ async function saveEmbedding() {
   saving.value = true
   try {
     if (editingEmbeddingId.value) {
+      const current = embeddingModels.value.find(item => item.id === editingEmbeddingId.value)
+      const updates: Record<string, string | number | boolean> = {
+        display_name: payload.display_name,
+      }
+      if (current?.provider_type !== payload.provider_type) updates.provider_type = payload.provider_type
+      if (current?.upstream_model_name !== payload.upstream_model_name) updates.upstream_model_name = payload.upstream_model_name
+      if (current?.base_url !== payload.base_url) updates.base_url = payload.base_url
+      if (current?.credential_ref !== payload.credential_ref) updates.credential_ref = payload.credential_ref
+      if (current?.dimensions !== 1536) updates.dimensions = 1536
       await apiRequest<EmbeddingModel>(`/admin/platform/embedding-models/${editingEmbeddingId.value}`, {
         method: 'PATCH',
-        body: JSON.stringify({
-          display_name: payload.display_name,
-          provider_type: payload.provider_type,
-          upstream_model_name: payload.upstream_model_name,
-          base_url: payload.base_url,
-          credential_ref: payload.credential_ref,
-          dimensions: 1536,
-          enabled: payload.enabled,
-        }),
+        body: JSON.stringify(updates),
       })
-      notify('平台 Embedding 模型已更新')
+      notify('平台 Embedding 模型已更新；如修改了连接配置，需要重新测试后启用')
     } else {
       await apiRequest<EmbeddingModel>('/admin/platform/embedding-models', {
         method: 'POST',
@@ -367,7 +383,7 @@ onMounted(() => { void loadAll() })
       <div>
         <small>PLATFORM ADMINISTRATION</small>
         <h2>平台模型与供应商</h2>
-        <p>管理 SuperNova 统一模型池、Embedding 服务和模型价格。平台密钥只保存在服务器环境变量中。</p>
+        <p>对话模型与 Embedding 模型独立管理。Embedding 使用 OpenAI 兼容接口，必须通过真实调用验证 1536 维输出。</p>
       </div>
       <button class="admin-button secondary" :disabled="loading" @click="loadAll"><RefreshCw :size="15"/>刷新</button>
     </div>
@@ -376,7 +392,7 @@ onMounted(() => { void loadAll() })
       <ShieldCheck :size="18"/>
       <div>
         <b>平台凭据安全说明</b>
-        <p>这里仅填写凭据引用（credential_ref），不填写真实 API Key。真实密钥必须配置在服务器的 SUPERNOVA_PLATFORM_CREDENTIALS_JSON 中，不能提交到 GitHub 或聊天窗口。</p>
+        <p>这里仅填写凭据引用，不填写真实 API Key。API 与 Knowledge Worker 都必须配置 SUPERNOVA_PLATFORM_CREDENTIALS_JSON；Embedding 模型保存后应先测试连接及实际向量维度，再启用供租户选择。</p>
       </div>
     </div>
 
@@ -444,10 +460,10 @@ onMounted(() => { void loadAll() })
         </div>
         <div v-else class="admin-table-wrap">
           <table class="admin-table">
-            <thead><tr><th>模型名称</th><th>供应商</th><th>上游模型</th><th>维度</th><th>凭据引用</th><th>状态</th><th>操作</th></tr></thead>
+            <thead><tr><th>模型名称</th><th>供应商</th><th>上游模型</th><th>维度</th><th>凭据引用</th><th>连接验证</th><th>启用状态</th><th>操作</th></tr></thead>
             <tbody><tr v-for="model in embeddingModels" :key="model.id">
-              <td><b>{{model.display_name}}</b><small>{{model.code}}</small></td><td>{{providerLabel(model.provider_type)}}</td><td><code>{{model.upstream_model_name}}</code><small>{{model.base_url}}</small></td><td>{{model.dimensions}}</td><td><code>{{model.credential_ref}}</code></td><td><span :class="model.enabled?'status-on':'status-off'">{{model.enabled?'已启用':'已停用'}}</span></td>
-              <td><div class="admin-actions"><button @click="editEmbedding(model)" title="编辑"><Pencil :size="14"/></button><button @click="toggleEmbedding(model)" :title="model.enabled?'停用':'启用'"><ToggleLeft :size="15"/></button></div></td>
+              <td><b>{{model.display_name}}</b><small>{{model.code}}</small></td><td>{{providerLabel(model.provider_type)}}</td><td><code>{{model.upstream_model_name}}</code><small>{{model.base_url}}</small></td><td>{{model.dimensions}}</td><td><code>{{model.credential_ref}}</code></td><td><span :class="model.verified_at?'status-on':'status-off'">{{model.verified_at?'已验证':'待验证'}}</span></td><td><span :class="model.enabled?'status-on':'status-off'">{{model.enabled?'已启用':'已停用'}}</span></td>
+              <td><div class="admin-actions"><button :disabled="testingEmbeddingId===model.id" @click="testEmbedding(model)" title="测试连接和 1536 维输出"><Activity :size="14"/></button><button @click="editEmbedding(model)" title="编辑"><Pencil :size="14"/></button><button :disabled="!model.verified_at && !model.enabled" @click="toggleEmbedding(model)" :title="!model.verified_at && !model.enabled?'请先测试连接':model.enabled?'停用':'启用'"><ToggleLeft :size="15"/></button></div></td>
             </tr></tbody>
           </table>
         </div>
@@ -491,12 +507,12 @@ onMounted(() => { void loadAll() })
         <div class="admin-form">
           <label>模型编码 <input v-model="embeddingForm.code" :disabled="!!editingEmbeddingId" maxlength="80" placeholder="例如 qwen-embedding-v3"></label>
           <label>展示名称 <input v-model="embeddingForm.display_name" maxlength="100" placeholder="例如 Qwen Embedding V3"></label>
-          <label>供应商类型 <select v-model="embeddingForm.provider_type" @change="embeddingPresetChanged"><option value="openai_compatible">OpenAI 兼容</option><option value="openai">OpenAI</option><option value="qwen">通义千问</option><option value="deepseek">DeepSeek</option></select></label>
-          <label>上游模型名称 <input v-model="embeddingForm.upstream_model_name" maxlength="120" placeholder="供应商侧的真实模型 ID"></label>
-          <label class="wide">Base URL <input v-model="embeddingForm.base_url" maxlength="2048" placeholder="https://api.example.com/v1"></label>
-          <label class="wide">凭据引用 <input v-model="embeddingForm.credential_ref" maxlength="255" placeholder="例如 qwen-embedding-primary"></label>
-          <label>向量维度 <input value="1536" disabled></label>
-          <label class="admin-switch"><span>创建后启用模型</span><input v-model="embeddingForm.enabled" type="checkbox"></label>
+          <label>供应商类型 <select v-model="embeddingForm.provider_type" @change="embeddingPresetChanged"><option value="openai_compatible">OpenAI 兼容</option><option value="openai">OpenAI</option><option value="qwen">通义千问（兼容模式）</option></select></label>
+          <label>上游 Embedding 模型 ID <input v-model="embeddingForm.upstream_model_name" maxlength="120" placeholder="例如服务商提供的 embedding 模型 ID"><small>必须是 Embedding 模型，不能填写 DeepSeek-chat 等对话模型 ID。</small></label>
+          <label class="wide">OpenAI 兼容 Base URL <input v-model="embeddingForm.base_url" maxlength="2048" placeholder="https://api.provider.cn/v1"><small>填写服务商提供 Embeddings API 的根地址；系统会请求 /embeddings。仅支持 HTTPS 公网服务。</small></label>
+          <label class="wide">凭据引用 <input v-model="embeddingForm.credential_ref" maxlength="255" placeholder="例如 siliconflow-embedding-primary"><small>需在 API 和 Knowledge Worker 的 SUPERNOVA_PLATFORM_CREDENTIALS_JSON 中配置同名键。</small></label>
+          <label>向量维度 <input value="1536（固定）" disabled><small>服务商实际返回维度必须为 1536；保存后请执行连接测试。</small></label>
+          <p class="admin-modal-hint">模型保存后默认停用。请先测试真实 Embeddings 调用并确认返回 1536 维，再从模型列表启用；修改服务商、模型 ID、Base URL 或凭据后需要重新测试。</p>
         </div>
         <footer><button class="admin-button secondary" @click="embeddingModal=false">取消</button><button class="admin-button primary" :disabled="saving" @click="saveEmbedding"><Check :size="15"/>保存模型</button></footer>
       </section>
