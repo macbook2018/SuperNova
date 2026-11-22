@@ -6,7 +6,7 @@ import time
 from datetime import UTC, datetime, timedelta
 from pathlib import PurePosixPath
 from urllib.parse import unquote, urlparse
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import httpx
 import structlog
@@ -31,7 +31,7 @@ logger = structlog.get_logger()
 WORKER_ID = f"knowledge-{socket.gethostname()}-{uuid4().hex[:8]}"
 
 
-def _claim_job() -> str | None:
+def _claim_job() -> UUID | None:
     settings = get_settings()
     now = datetime.now(UTC)
     with SessionLocal() as db:
@@ -62,7 +62,7 @@ def _claim_job() -> str | None:
         job.worker_id = WORKER_ID
         job.last_error = None
         db.commit()
-        return str(job.id)
+        return job.id
 
 
 def _extend_job_lease(job_id) -> None:
@@ -278,7 +278,7 @@ def _process_ingest(
     db.commit()
 
 
-def _handle_failure(job_id: str, error: Exception) -> None:
+def _handle_failure(job_id: UUID, error: Exception) -> None:
     with SessionLocal() as db:
         job = db.get(KnowledgeIngestionJob, job_id)
         if job is None:
@@ -310,7 +310,7 @@ def _handle_failure(job_id: str, error: Exception) -> None:
         db.commit()
         logger.warning(
             "knowledge_ingestion_job_failed",
-            job_id=job_id,
+            job_id=str(job_id),
             tenant_id=str(job.tenant_id),
             knowledge_base_id=str(job.knowledge_base_id),
             attempts=job.attempts,
@@ -319,7 +319,7 @@ def _handle_failure(job_id: str, error: Exception) -> None:
         )
 
 
-def process_job(job_id: str) -> None:
+def process_job(job_id: UUID) -> None:
     try:
         with SessionLocal() as db:
             job = db.get(KnowledgeIngestionJob, job_id)

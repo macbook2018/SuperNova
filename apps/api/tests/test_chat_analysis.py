@@ -10,13 +10,15 @@ from app.chat_import.analysis import AnalysisModelConfig, ChatAnalysisResult
 from app.chat_import.parsers import NormalizedChatMessage
 from app.db.base import Base
 from app.db.session import get_db
+from app.knowledge import worker as knowledge_worker
+from app.knowledge.embeddings import EmbeddingBatch, EmbeddingConfig
 from app.main import app
 from app.models.catalog import ModelProvider, Persona
 from app.models.chat_analysis import (
     ChatAnalysisReviewEvent,
 )
 from app.models.chat_import import ChatImportFile, ChatImportJob, ChatSource
-from app.models.knowledge import KnowledgeDocument, KnowledgeIngestionJob
+from app.models.knowledge import KnowledgeChunk, KnowledgeDocument, KnowledgeIngestionJob
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, event, select
 from sqlalchemy.orm import sessionmaker
@@ -506,6 +508,75 @@ def test_chat_analysis_review_and_faq_publication_are_tenant_scoped(
             )
         ) is not None
         assert "客户A" not in document.original_filename
+
+    # Preserve UUID types across the worker claim/process boundary. SQLite's
+    # Uuid(as_uuid=True) binder rejects string primary keys.
+    monkeypatch.setattr(knowledge_worker, "SessionLocal", session_factory)
+    monkeypatch.setattr(knowledge_worker, "WORKER_ID", "knowledge-test-worker")
+    monkeypatch.setattr(
+        knowledge_worker,
+        "get_object",
+        lambda key, *_args, **_kwargs: published_objects[key],
+    )
+    monkeypatch.setattr(
+        knowledge_worker,
+        "resolve_embedding_config",
+        lambda *_args: EmbeddingConfig(
+            base_url="https://embedding.example.com/v1",
+            api_key="test-api-key",
+            provider_type="openai_compatible",
+            model_name="test-embedding",
+            dimensions=1536,
+        ),
+    )
+
+    def fake_embed_texts(_config, texts, on_batch=None):
+        if on_batch is not None:
+            on_batch()
+        return EmbeddingBatch(
+            vectors=[[0.1] * 1536 for _ in texts],
+            input_tokens=len(texts) * 8,
+            usage_known=True,
+            request_count=1,
+        )
+
+    monkeypatch.setattr(knowledge_worker, "embed_texts", fake_embed_texts)
+    ingestion_job_id = knowledge_worker._claim_job()
+    assert ingestion_job_id is not None
+    assert isinstance(ingestion_job_id, UUID)
+    knowledge_worker.process_job(ingestion_job_id)
+
+    with session_factory() as db:
+        document = db.get(
+            KnowledgeDocument,
+            UUID(published.json()["published_document_id"]),
+        )
+        assert document is not None
+        assert document.status == "ready"
+        assert document.active_index_version == 1
+        assert document.chunk_count > 0
+
+        ingestion_job = db.scalar(
+            select(KnowledgeIngestionJob).where(
+                KnowledgeIngestionJob.document_id == document.id
+            )
+        )
+        assert ingestion_job is not None
+        assert ingestion_job.status == "succeeded"
+
+        chunks = db.scalars(
+            select(KnowledgeChunk).where(
+                KnowledgeChunk.tenant_id == tenant_id,
+                KnowledgeChunk.knowledge_base_id == UUID(knowledge_base_id),
+                KnowledgeChunk.document_id == document.id,
+                KnowledgeChunk.index_version == document.active_index_version,
+            )
+        ).all()
+        assert chunks
+        assert any(
+            "标准价格是多少？" in chunk.content and "99 元" in chunk.content
+            for chunk in chunks
+        )
 
 
 def test_chat_analysis_bundle_is_hidden_from_other_tenants(

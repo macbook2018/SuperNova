@@ -1,4 +1,4 @@
-# Phase 6.1 — Text-only chat analysis import
+# Phase 6.1–6.4 — Text-only chat analysis, Persona learning and FAQ publication
 
 ## Product boundary
 
@@ -9,22 +9,25 @@ Chat exports are temporary source material for two derived outputs only:
 
 This is not a chat archive, chat history viewer, conversation search service or message-storage feature. SuperNova must not retain or expose original chat transcripts after analysis.
 
-## Current implementation: Phase 6.1A
+## Current implementation: Phase 6.1A–6.4
 
-The current branch implements the privacy-safe import and identity-confirmation foundation:
+The current branch implements the privacy-safe import foundation and the full Persona/FAQ review workflow:
 
-- Generic JSON, CSV, TXT, HTML, XLSX and ZIP parsing.
-- WeKeep ZIP text-message parsing. Non-text records are counted and ignored.
-- Server-generated source account IDs. Each ChatSource row is one independent source account; its UUID is returned as source_account_id.
-- Source account selection is explicit. No account, contact or group is matched or merged by wxid, group ID, nickname, remark or display name.
-- The worker parses message records and aggregates only sender reference, sender display name and text-message count.
-- PostgreSQL has no chat_messages, chat_conversations or chat_participants tables. There is no transcript read/list/search API.
-- The sender summary exists only to let the user explicitly confirm which sender is the logged-in account owner. The summary is deleted after confirmation.
-- The owner identity is stored only within its source account. Confirmation moves the import job to ready_for_analysis.
-- Original uploads are held in private object storage with a 24-hour TTL while awaiting analysis. Expired uploads are deleted and the job is marked failed, requiring re-upload.
-- Cancelled and failed jobs trigger temporary-upload cleanup.
+- Generic JSON, CSV, TXT, HTML, XLSX and ZIP parsing, including WeKeep ZIP text-message exports. Non-text records are counted and ignored.
+- Server-generated source account IDs. Each ChatSource row represents one independent logged-in source account; there is no matching or merging by wxid, group ID, nickname, remark or display name.
+- The import worker parses messages in memory and persists only sender reference, display name and aggregate text-message count for explicit owner confirmation.
+- Original uploads remain in private object storage for the analysis window (maximum 24 hours); the analysis worker reparses them and deletes temporary objects and metadata after a terminal analysis result.
+- Persistent Chat Analysis jobs support queued/running/retry_wait/succeeded/failed/cancelled states, worker leases, bounded retries and token/request usage counters.
+- The selected account owner's messages alone are used for Persona style learning. The model is instructed to describe observable writing behavior only and not infer sensitive traits or unsupported personal attributes.
+- FAQ extraction uses conversation context to pair another participant's question with an explicit answer from the confirmed owner. Other participants' messages are not treated as authoritative facts. Conflicting answers remain separate candidates; sample occurrence counts are bounded to the messages supplied to the model.
+- Model inputs and derived outputs pass through private-data redaction. Raw message bodies, message IDs, conversation IDs and replayable transcripts are not persisted or logged.
+- Persona and FAQ outputs are persisted as review drafts. Edits, approvals, rejections, applications and publications create audit events containing hashes rather than raw content.
+- Persona drafts require explicit approval before they can be applied to an existing tenant Persona. Application supports append/replace modes and an expected-updated-at check to prevent overwriting a Persona that changed during review.
+- FAQ candidates require explicit approval before publication. Approved candidates are converted to Markdown documents in an enabled Knowledge Base and queued through the existing Knowledge ingestion worker.
+- The Knowledge worker parses and chunks the published document, generates embeddings, stores the active index version and marks the document ready. Persona-linked Knowledge Bases are then available to hybrid RAG retrieval with grounded document/chunk citations.
+- Tenant and source-account identifiers scope the import, analysis, review and publication records. Source accounts remain independent even when their external identifiers or display names collide.
 
-The current implementation deliberately stops at ready_for_analysis. Persona extraction and Knowledge candidate generation are the next implementation increment; they must consume the temporary upload and then delete it on every terminal path.
+The implementation does not create a chat archive. It retains only aggregate import metadata and the reviewed derived Persona/FAQ outputs described above.
 
 ## Account and identity boundaries
 
@@ -43,7 +46,7 @@ The current implementation deliberately stops at ready_for_analysis. Persona ext
 3. Worker parses records. Message bodies exist only in transient worker memory. No message body, conversation or message identifier is written to PostgreSQL or logs.
 4. Worker stores a minimal sender summary: sender reference, display name and text-message count. No conversation list or message preview is produced.
 5. User explicitly confirms the sender representing the account owner. The sender summary is then deleted and the job becomes ready_for_analysis.
-6. The next increment reparses the temporary upload, extracts Persona and Knowledge drafts, and deletes the upload when analysis reaches a terminal state.
+6. The Chat Analysis Worker reparses the temporary upload, extracts Persona and FAQ drafts, and deletes the upload when analysis reaches a terminal state.
 7. Expired, cancelled or failed jobs delete temporary uploads. A failed/expired job must be re-uploaded; no transcript is retained for retry.
 
 ## Persona extraction contract
@@ -83,7 +86,7 @@ Allowed:
 - import job metadata, progress and aggregate counts
 - temporary upload metadata and private object key until analysis/TTL cleanup
 - sender summary only until explicit owner confirmation
-- Persona drafts and Knowledge candidates in the next analysis increment
+- Persona drafts and FAQ candidates awaiting review
 - approved Persona configuration and published Knowledge Base documents
 
 Forbidden:
@@ -118,13 +121,16 @@ Do not build a conversation list, message viewer, transcript search, media galle
 ## Acceptance criteria
 
 1. Supported exports yield text messages only; media and non-text payloads are ignored.
-2. No row containing a raw message body is written to PostgreSQL.
-3. No chat message/conversation table or read endpoint exists.
-4. Temporary uploads are deleted after terminal analysis states and after TTL expiry.
-5. Persona extraction uses only the explicitly selected owner's messages.
-6. Other participants' messages are question/context only, not authoritative facts.
-7. Persona drafts are not applied automatically.
-8. Knowledge candidates cannot enter the active RAG index until manually approved.
-9. Two source accounts under one tenant remain fully independent even when wxid, group ID or display names collide.
-10. Cross-tenant and cross-source-account access is denied.
-11. Logs, errors and job summaries contain no message bodies or raw personal identifiers.
+2. No row containing a raw message body, conversation transcript or replayable message record is written to PostgreSQL.
+3. The account owner is explicitly selected; the system never infers identity from message frequency, nickname, wxid or remarks.
+4. Persona extraction uses only the explicitly selected owner's messages and avoids sensitive-trait inference.
+5. Other participants' messages provide question/context only; an FAQ answer must be explicitly supplied by the owner.
+6. Persona drafts start as pending_review and cannot be applied before approval. Append/replace and concurrent-update checks work.
+7. FAQ candidates start as pending_review; edit, approve, reject and duplicate detection work. Conflicting answers remain separate.
+8. Only approved FAQ candidates can be published to an enabled Knowledge Base.
+9. FAQ publication creates a Markdown document and a persistent ingestion job; the Knowledge worker completes parsing, chunking and embedding and marks the document ready.
+10. Ready FAQ chunks are eligible for retrieval only through the tenant's explicitly Persona-linked Knowledge Bases; citations refer to real documents and chunks.
+11. Two source accounts under one tenant remain independent even when wxid, group ID or display names collide.
+12. Cross-tenant access is denied; import and analysis workers preserve source-account and tenant scope.
+13. Temporary uploads are deleted after terminal analysis states and after TTL expiry, including failure and cancellation paths.
+14. Logs, errors and job summaries contain no message bodies, raw conversation excerpts, API keys or raw personal identifiers.
