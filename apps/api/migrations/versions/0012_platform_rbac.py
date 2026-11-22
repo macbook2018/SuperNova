@@ -117,7 +117,7 @@ def upgrade() -> None:
         sa.Column(
             "created_at", sa.DateTime(timezone=True),
             nullable=False, server_default=sa.func.now(),
-        )
+        ),
     )
     op.create_index(
         "ix_platform_user_roles_user_active", "platform_user_roles",
@@ -133,11 +133,11 @@ def upgrade() -> None:
         sa.Column(
             "actor_user_id", sa.Uuid(as_uuid=True),
             sa.ForeignKey("users.id", ondelete="SET NULL"),
-        )
+        ),
         sa.Column(
             "target_user_id", sa.Uuid(as_uuid=True),
             sa.ForeignKey("users.id", ondelete="SET NULL"),
-        )
+        ),
         sa.Column("action", sa.String(100), nullable=False),
         sa.Column("resource_type", sa.String(80), nullable=False),
         sa.Column("resource_id", sa.String(160), nullable=False),
@@ -146,11 +146,11 @@ def upgrade() -> None:
         sa.Column("request_id", sa.String(100)),
         sa.Column(
             "details", sa.JSON(), nullable=False, server_default=sa.text("'{}'"),
-        )
+        ),
         sa.Column(
             "created_at", sa.DateTime(timezone=True),
             nullable=False, server_default=sa.func.now(),
-        )
+        ),
     )
     op.create_index("ix_platform_admin_audit_created", "platform_admin_audit_logs", ["created_at"])
     op.create_index(
