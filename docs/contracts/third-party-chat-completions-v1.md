@@ -150,23 +150,54 @@ WeXTool 当前固定发送 `stream: false`。网关保留原有 OpenAI 兼容流
 
 ## 2. 语音转写
 
-源文档描述的流程是：
+### 2.1 WeXTool 到 SuperNova 的公开接口
 
-1. 上传原始 SILK 文件至 `POST /v1/audio/transcriptions`。
-2. 从响应读取非空 `text`。
-3. 再将转写文字作为 `messages[0].content` 调用 `/v1/chat/completions`。
-4. 群语音请求可在后续聊天请求中附带 `speaker` 和 `sender_profile`。
+`POST /v1/audio/transcriptions` 使用与聊天接口相同的 SuperNova API Key：
 
-源文档规定的 multipart 字段：
+```http
+Authorization: Bearer <SuperNova API Key>
+Content-Type: multipart/form-data
+```
+
+multipart 字段：
 
 | 字段 | 类型 | 规则 |
 |---|---|---|
-| `file` | 二进制文件 | 必传，原始 SILK，文件名 `message.silk`，MIME `audio/silk` |
-| `model` | string | 配置转写模型时发送；不使用聊天模型 ID 自动填充 |
+| `file` | 二进制文件 | 必传，原始 SILK；文件名固定转发为 `message.silk`，MIME 必须为 `audio/silk` |
+| `model` | string | 可选；如提供，必须与平台配置的转写模型 ID 一致 |
 
-转写接口不上传 `user`、`account_wxid`、`sender_profile` 或 `speaker`。
+转写接口不上传 `user`、`account_wxid`、`sender_profile` 或 `speaker`。这些身份信息只在后续聊天请求中使用。
 
-**实现状态：当前 SuperNova 网关尚未实现 `POST /v1/audio/transcriptions`。** 当前 PR 不会虚报该接口已可用。若 WeXTool 的转写 Base URL 指向 SuperNova，需要另行增加转写代理和服务端转写供应商配置；若转写服务配置为独立第三方地址，则由 WeXTool 直接调用该服务。
+成功响应：
+
+```json
+{
+  "text": "今天下午三点开会"
+}
+```
+
+`text` 必须为非空字符串，最多 131072 个字符。客户端再将该文字作为 `messages[0].content` 调用 `/v1/chat/completions`；群语音请求可在后续聊天请求中附带 `speaker` 和 `sender_profile`。
+
+### 2.2 SuperNova 到平台语音服务的代理配置
+
+该接口由 SuperNova 统一代理。WeXTool 只使用 SuperNova API Key；上游语音服务地址、模型和 API Key 均由平台控制，不向租户客户端暴露，也不使用租户人格绑定的聊天模型 ID。
+
+平台服务端配置：
+
+- `SUPERNOVA_AUDIO_TRANSCRIPTION_BASE_URL`：上游语音服务 API 根地址。
+- `SUPERNOVA_AUDIO_TRANSCRIPTION_MODEL`：平台选定的 SILK 转写模型。
+- `SUPERNOVA_AUDIO_TRANSCRIPTION_CREDENTIAL_REF`：平台凭据引用，实际密钥存放在 `SUPERNOVA_PLATFORM_CREDENTIALS_JSON` 对应键下。
+- `SUPERNOVA_AUDIO_TRANSCRIPTION_MAX_FILE_BYTES`：上传文件大小上限，默认 25 MiB。
+- `SUPERNOVA_AUDIO_TRANSCRIPTION_TIMEOUT_SECONDS`：上游超时，默认 120 秒。
+
+前三项必须同时配置。上游服务必须接受原始 `audio/silk` 文件；SuperNova 当前按源文档将 SILK 原样转发，不在网关内转码。
+
+平台代理会验证上游 URL、限制 MIME 和文件大小、固定上游文件名、校验返回的 `text`，并且不会记录或输出音频内容及上游 API Key。
+
+### 2.3 用量计量
+
+语音转写使用平台语音服务，按一次平台模型请求计入套餐的 `platform_model_requests` 和 `api_requests`；不虚构聊天输入/输出 Token 数。实际转写调用会写入用量记录，类型为 `audio_transcription`。幂等键相同且文件内容一致时，返回已保存的转写结果，不重复调用上游。
+
 
 ## 3. 会话隔离与上下文
 

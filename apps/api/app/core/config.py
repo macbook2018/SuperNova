@@ -46,6 +46,11 @@ class Settings(BaseSettings):
     chat_import_worker_lease_seconds: int = 180
     chat_import_batch_size: int = 500
     chat_import_temp_ttl_hours: int = 24
+    audio_transcription_base_url: str | None = None
+    audio_transcription_model: str | None = None
+    audio_transcription_credential_ref: str | None = None
+    audio_transcription_max_file_bytes: int = 25 * 1024 * 1024
+    audio_transcription_timeout_seconds: float = 120.0
 
     @property
     def platform_admin_email_set(self) -> frozenset[str]:
@@ -103,6 +108,28 @@ class Settings(BaseSettings):
             raise ValueError("SUPERNOVA_CHAT_IMPORT_BATCH_SIZE must be between 1 and 5000")
         if not 1 <= self.chat_import_temp_ttl_hours <= 72:
             raise ValueError("SUPERNOVA_CHAT_IMPORT_TEMP_TTL_HOURS must be between 1 and 72")
+        audio_config = (
+            self.audio_transcription_base_url,
+            self.audio_transcription_model,
+            self.audio_transcription_credential_ref,
+        )
+        configured_audio_fields = [bool(value and value.strip()) for value in audio_config]
+        if any(configured_audio_fields) and not all(configured_audio_fields):
+            raise ValueError(
+                "SUPERNOVA_AUDIO_TRANSCRIPTION_BASE_URL, MODEL and CREDENTIAL_REF "
+                "must be configured together"
+            )
+        if (
+            self.audio_transcription_max_file_bytes < 1024
+            or self.audio_transcription_max_file_bytes > 100 * 1024 * 1024
+        ):
+            raise ValueError(
+                "SUPERNOVA_AUDIO_TRANSCRIPTION_MAX_FILE_BYTES must be between 1 KiB and 100 MiB"
+            )
+        if not 1 <= self.audio_transcription_timeout_seconds <= 300:
+            raise ValueError(
+                "SUPERNOVA_AUDIO_TRANSCRIPTION_TIMEOUT_SECONDS must be between 1 and 300"
+            )
         if self.refresh_token_ttl_days < 1 or self.refresh_token_ttl_days > 90:
             raise ValueError("SUPERNOVA_REFRESH_TOKEN_TTL_DAYS must be between 1 and 90")
         return self

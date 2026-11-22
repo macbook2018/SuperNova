@@ -1728,3 +1728,241 @@ def test_sender_profile_does_not_accept_avatar_url(client: TestClient) -> None:
 
     assert response.status_code == 422
 
+class FakeAudioClient:
+    calls: list[dict] = []
+    response: FakeResponse | None = None
+
+    def __init__(self, **_kwargs):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return None
+
+    def post(self, url: str, headers: dict, files: dict, data: dict):
+        self.calls.append(
+            {"url": url, "headers": headers, "files": files, "data": data}
+        )
+        assert self.response is not None
+        return self.response
+
+
+def _configure_audio_transcription(monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        gateway,
+        "get_settings",
+        lambda: SimpleNamespace(
+            audio_transcription_base_url="https://speech.example.com/v1",
+            audio_transcription_model="whisper-silk-v1",
+            audio_transcription_credential_ref="platform-speech",
+            audio_transcription_max_file_bytes=25 * 1024 * 1024,
+            audio_transcription_timeout_seconds=120.0,
+        ),
+    )
+    monkeypatch.setattr(
+        gateway,
+        "resolve_platform_api_key",
+        lambda credential_ref: (
+            "sk-platform-speech-secret"
+            if credential_ref == "platform-speech"
+            else None
+        ),
+    )
+    monkeypatch.setattr(gateway, "_validate_provider_target", lambda _url: None)
+    monkeypatch.setattr(gateway.httpx, "Client", FakeAudioClient)
+
+
+def test_audio_transcription_uses_platform_proxy_and_records_usage(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner = register(client)
+    key = create_api_key(client, owner)
+    _configure_audio_transcription(monkeypatch)
+    FakeAudioClient.calls = []
+    FakeAudioClient.response = FakeResponse({"text": "今天下午三点开会"})
+
+    response = client.post(
+        "/v1/audio/transcriptions",
+        headers={"Authorization": f"Bearer {key}"},
+        files={"file": ("message.silk", b"silk-audio-bytes", "audio/silk")},
+        data={"model": "whisper-silk-v1"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"text": "今天下午三点开会"}
+    call = FakeAudioClient.calls[0]
+    assert call["url"] == "https://speech.example.com/v1/audio/transcriptions"
+    assert call["headers"]["Authorization"] == "Bearer sk-platform-speech-secret"
+    assert call["headers"]["Authorization"] != f"Bearer {key}"
+    assert call["files"]["file"][0] == "message.silk"
+    assert call["files"]["file"][1] == b"silk-audio-bytes"
+    assert call["files"]["file"][2] == "audio/silk"
+    assert call["data"] == {"model": "whisper-silk-v1"}
+    with app.state.test_session_factory() as db:
+        record = db.scalar(
+            select(UsageRecord).where(UsageRecord.request_type == "audio_transcription")
+        )
+        assert record is not None
+        assert record.status == "succeeded"
+        assert record.model_source == "platform"
+        assert record.model_name == "whisper-silk-v1"
+        assert record.prompt_tokens is None
+        assert record.total_tokens is None
+        events = db.scalars(
+            select(BillingUsageEvent).where(
+                BillingUsageEvent.source_usage_record_id == record.id
+            )
+        ).all()
+        assert {event.resource_code for event in events} == {
+            "api_requests",
+            "platform_model_requests",
+        }
+
+
+def test_audio_transcription_idempotency_replays_without_second_upstream_call(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner = register(client)
+    key = create_api_key(client, owner)
+    _configure_audio_transcription(monkeypatch)
+    FakeAudioClient.calls = []
+    FakeAudioClient.response = FakeResponse({"text": "已转写"})
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "Idempotency-Key": "audio-message-001",
+    }
+    payload = {
+        "files": {"file": ("message.silk", b"same-audio", "audio/silk")},
+        "data": {"model": "whisper-silk-v1"},
+    }
+
+    first = client.post("/v1/audio/transcriptions", headers=headers, **payload)
+    second = client.post("/v1/audio/transcriptions", headers=headers, **payload)
+
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+    assert second.json() == {"text": "已转写"}
+    assert len(FakeAudioClient.calls) == 1
+
+
+def test_audio_transcription_requires_platform_configuration(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner = register(client)
+    key = create_api_key(client, owner)
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        gateway,
+        "get_settings",
+        lambda: SimpleNamespace(
+            audio_transcription_base_url=None,
+            audio_transcription_model=None,
+            audio_transcription_credential_ref=None,
+            audio_transcription_max_file_bytes=25 * 1024 * 1024,
+            audio_transcription_timeout_seconds=120.0,
+        ),
+    )
+    response = client.post(
+        "/v1/audio/transcriptions",
+        headers={"Authorization": f"Bearer {key}"},
+        files={"file": ("message.silk", b"silk", "audio/silk")},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "audio_transcription_not_configured"
+
+
+def test_audio_transcription_rejects_non_silk_and_unconfigured_model(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner = register(client)
+    key = create_api_key(client, owner)
+    _configure_audio_transcription(monkeypatch)
+    FakeAudioClient.calls = []
+
+    wrong_type = client.post(
+        "/v1/audio/transcriptions",
+        headers={"Authorization": f"Bearer {key}"},
+        files={"file": ("message.mp3", b"audio", "audio/mpeg")},
+    )
+    wrong_model = client.post(
+        "/v1/audio/transcriptions",
+        headers={"Authorization": f"Bearer {key}"},
+        files={"file": ("message.silk", b"silk", "audio/silk")},
+        data={"model": "another-model"},
+    )
+
+    assert wrong_type.status_code == 415
+    assert wrong_type.json()["error"]["code"] == "unsupported_audio_format"
+    assert wrong_model.status_code == 422
+    assert wrong_model.json()["error"]["code"] == "audio_transcription_model_not_allowed"
+    assert FakeAudioClient.calls == []
+
+
+def test_audio_transcription_rejects_empty_and_oversized_files(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner = register(client)
+    key = create_api_key(client, owner)
+    _configure_audio_transcription(monkeypatch)
+
+    empty = client.post(
+        "/v1/audio/transcriptions",
+        headers={"Authorization": f"Bearer {key}"},
+        files={"file": ("message.silk", b"", "audio/silk")},
+    )
+
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        gateway,
+        "get_settings",
+        lambda: SimpleNamespace(
+            audio_transcription_base_url="https://speech.example.com/v1",
+            audio_transcription_model="whisper-silk-v1",
+            audio_transcription_credential_ref="platform-speech",
+            audio_transcription_max_file_bytes=4,
+            audio_transcription_timeout_seconds=120.0,
+        ),
+    )
+    oversized = client.post(
+        "/v1/audio/transcriptions",
+        headers={"Authorization": f"Bearer {key}"},
+        files={"file": ("message.silk", b"12345", "audio/silk")},
+    )
+
+    assert empty.status_code == 422
+    assert empty.json()["error"]["code"] == "empty_audio_file"
+    assert oversized.status_code == 413
+    assert oversized.json()["error"]["code"] == "audio_file_too_large"
+
+
+def test_audio_transcription_rejects_invalid_upstream_text(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner = register(client)
+    key = create_api_key(client, owner)
+    _configure_audio_transcription(monkeypatch)
+    FakeAudioClient.calls = []
+    FakeAudioClient.response = FakeResponse({"text": "   "})
+
+    response = client.post(
+        "/v1/audio/transcriptions",
+        headers={"Authorization": f"Bearer {key}"},
+        files={"file": ("message.silk", b"silk", "audio/silk")},
+    )
+
+    assert response.status_code == 502
+    assert response.json()["error"]["code"] == "invalid_transcription_response"
+
