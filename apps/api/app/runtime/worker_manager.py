@@ -66,11 +66,13 @@ def _issue_runtime_config(db, bot: BotInstance, persona: Persona) -> dict:
     from app.runtime.security import issue_runtime_token
 
     settings = get_settings()
+    _revoke_credentials(db, bot)
     credentials = {
         scope: issue_runtime_token(db, bot, scope)
         for scope in ("chat.completions", "runtime.heartbeat", "runtime.events")
     }
     db.flush()
+    db.commit()
     return {
         "schema_version": 1,
         "tenant_id": str(bot.tenant_id),
@@ -149,13 +151,19 @@ def _process(command_id: UUID, provider: DockerRuntimeProvider) -> None:
                 bot.runtime_resource_id = resource_id
                 bot.actual_state = "starting"
                 db.commit()
-                if action == "restart" and provider.inspect(resource_id)["running"]:
-                    provider.restart(resource_id)
+                if action == "update_config" and bot.desired_state == "stopped":
+                    bot.actual_state = "stopped"
+                    _write_event(db, bot, "runtime.config_updated", {
+                        "state": "stopped", "resource_id": resource_id, "component": "worker"
+                    })
                 else:
-                    provider.start(resource_id)
-                _write_event(db, bot, "runtime.state_changed", {
-                    "state": "starting", "resource_id": resource_id, "component": "worker"
-                })
+                    if action == "restart" and provider.inspect(resource_id)["running"]:
+                        provider.restart(resource_id)
+                    else:
+                        provider.start(resource_id)
+                    _write_event(db, bot, "runtime.state_changed", {
+                        "state": "starting", "resource_id": resource_id, "component": "worker"
+                    })
             elif action == "stop":
                 bot.actual_state = "stopping"
                 db.commit()
