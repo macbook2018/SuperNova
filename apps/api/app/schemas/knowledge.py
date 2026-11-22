@@ -61,6 +61,7 @@ class PlatformEmbeddingModelAdminRead(BaseModel):
     credential_ref: str
     dimensions: int
     enabled: bool
+    verified_at: datetime | None
     created_at: datetime
 
 
