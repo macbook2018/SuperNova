@@ -476,7 +476,7 @@ onMounted(() => { void loadAll() })
         <div class="admin-form">
           <label>模型编码 <input v-model="modelForm.code" :disabled="!!editingModelId" maxlength="80" placeholder="例如 deepseek-chat"></label>
           <label>展示名称 <input v-model="modelForm.display_name" maxlength="100" placeholder="例如 DeepSeek Chat"></label>
-          <label>供应商类型 <select v-model="modelForm.provider_type" @change="providerPresetChanged"><option value="qwen">通义千问</option><option value="openai">OpenAI</option><option value="openai_compatible">OpenAI 兼容</option><option value="anthropic">Anthropic</option></select></label>
+          <label>供应商类型 <select v-model="modelForm.provider_type" @change="providerPresetChanged"><option value="deepseek">DeepSeek</option><option value="qwen">通义千问</option><option value="openai">OpenAI</option><option value="openai_compatible">OpenAI 兼容</option><option value="anthropic">Anthropic</option></select></label>
           <label>上游模型名称 <input v-model="modelForm.upstream_model_name" maxlength="120" placeholder="供应商侧的真实模型 ID"></label>
           <label class="wide">Base URL <input v-model="modelForm.base_url" maxlength="2048" placeholder="https://api.example.com/v1"></label>
           <label class="wide">凭据引用 <input v-model="modelForm.credential_ref" maxlength="255" placeholder="例如 deepseek-primary"><small>必须与服务器环境变量 JSON 的键名一致。</small></label>
@@ -505,7 +505,7 @@ onMounted(() => { void loadAll() })
         <div class="admin-form">
           <label>模型编码 <input v-model="embeddingForm.code" :disabled="!!editingEmbeddingId" maxlength="80" placeholder="例如 qwen-embedding-v3"></label>
           <label>展示名称 <input v-model="embeddingForm.display_name" maxlength="100" placeholder="例如 Qwen Embedding V3"></label>
-          <label>供应商类型 <select v-model="embeddingForm.provider_type" @change="embeddingPresetChanged"><option value="openai_compatible">OpenAI 兼容</option><option value="openai">OpenAI</option><option value="qwen">通义千问</option><option value="deepseek">DeepSeek</option></select></label>
+          <label>供应商类型 <select v-model="embeddingForm.provider_type" @change="embeddingPresetChanged"><option value="openai_compatible">OpenAI 兼容</option><option value="openai">OpenAI</option><option value="qwen">通义千问（兼容模式）</option></select></label>
           <label>上游 Embedding 模型 ID <input v-model="embeddingForm.upstream_model_name" maxlength="120" placeholder="例如服务商提供的 embedding 模型 ID"><small>必须是 Embedding 模型，不能填写 DeepSeek-chat 等对话模型 ID。</small></label>
           <label class="wide">OpenAI 兼容 Base URL <input v-model="embeddingForm.base_url" maxlength="2048" placeholder="https://api.provider.cn/v1"><small>填写服务商提供 Embeddings API 的根地址；系统会请求 /embeddings。仅支持 HTTPS 公网服务。</small></label>
           <label class="wide">凭据引用 <input v-model="embeddingForm.credential_ref" maxlength="255" placeholder="例如 siliconflow-embedding-primary"><small>需在 API 和 Knowledge Worker 的 SUPERNOVA_PLATFORM_CREDENTIALS_JSON 中配置同名键。</small></label>
