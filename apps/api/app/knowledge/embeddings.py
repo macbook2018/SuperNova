@@ -121,7 +121,11 @@ def embed_texts(
                     "Authorization": "Bearer " + config.api_key,
                     "Content-Type": "application/json",
                 },
-                json={"model": config.model_name, "input": batch},
+                json={
+                    "model": config.model_name,
+                    "input": batch,
+                    "dimensions": config.dimensions,
+                },
             )
             request_count += 1
             if on_batch is not None:

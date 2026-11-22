@@ -55,7 +55,11 @@ def test_embedding_adapter_sorts_vectors_and_records_usage(monkeypatch: pytest.M
     assert result.vectors[1][0] == 0.2
     assert heartbeats == [True]
     assert client.calls[0][0] == "https://embedding.example.com/v1/embeddings"
-    assert client.calls[0][2] == {"model": "test-embedding", "input": ["first", "second"]}
+    assert client.calls[0][2] == {
+        "model": "test-embedding",
+        "input": ["first", "second"],
+        "dimensions": 1536,
+    }
 
 
 def test_embedding_adapter_rejects_wrong_dimensions(monkeypatch: pytest.MonkeyPatch) -> None:
