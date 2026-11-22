@@ -9,6 +9,11 @@ from app.billing.money import currency_minor_unit_exponent
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
+from app.models.billing import (
+    BillingLedgerAccount,
+    BillingLedgerPosting,
+    BillingLedgerTransaction,
+)
 from app.models.platform_rbac import (
     PlatformPermission,
     PlatformRole,
@@ -543,3 +548,50 @@ def test_non_admin_cannot_grant_platform_roles(client: TestClient) -> None:
     )
     assert denied.status_code == 403
     assert denied.json()["detail"]["code"] == "platform_permission_required"
+
+
+def test_billing_ledger_query_does_not_apply_distinct_to_json_metadata(
+    client: TestClient,
+) -> None:
+    customer = register(client, "ledger-customer@example.com")
+    tenant_id = UUID(customer["tenant"]["id"])
+    generator = app.dependency_overrides[get_db]()
+    session = next(generator)
+    try:
+        transaction = BillingLedgerTransaction(
+            id=uuid4(),
+            idempotency_key="ledger-json-regression",
+            kind="usage",
+            mode="shadow",
+            currency="CNY",
+            reference_id="regression-test",
+            metadata_json={"source": "postgres-json"},
+        )
+        account = BillingLedgerAccount(
+            id=uuid4(),
+            account_key=f"tenant:{tenant_id}:usage",
+            tenant_id=tenant_id,
+            currency="CNY",
+            kind="usage",
+        )
+        session.add_all([transaction, account])
+        session.flush()
+        session.add(
+            BillingLedgerPosting(
+                id=uuid4(),
+                transaction_id=transaction.id,
+                account_id=account.id,
+                amount_minor=-100,
+            )
+        )
+        session.commit()
+    finally:
+        try:
+            next(generator)
+        except StopIteration:
+            pass
+
+    response = client.get("/billing/ledger", headers=headers(customer))
+    assert response.status_code == 200, response.text
+    assert len(response.json()) == 1
+    assert response.json()[0]["reference_id"] == "regression-test"
