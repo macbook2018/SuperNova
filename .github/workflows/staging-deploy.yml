@@ -8,8 +8,7 @@ on:
         required: true
         type: string
 
-# One deployment workflow at a time. Keep this lock through the post-deploy
-# acceptance environment so a later deployment cannot overtake acceptance.
+# The lock is held through deployment and the post-deploy acceptance gate.
 concurrency:
   group: supernova-staging-deploy
   cancel-in-progress: false
@@ -97,29 +96,20 @@ jobs:
       - name: Configure SSH
         run: |
           install -m 700 -d ~/.ssh
-          printf '%s\\n' "$STAGING_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$STAGING_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -p "$STAGING_SSH_PORT" -H "$STAGING_HOST" >> ~/.ssh/known_hosts
 
       - name: Upload Staging deployment and recovery files
         run: |
-          ssh -p "$STAGING_SSH_PORT" "$STAGING_USER@$STAGING_HOST" \\
-            "mkdir -p '$STAGING_DEPLOY_PATH'"
-          scp -P "$STAGING_SSH_PORT" \\
-            deploy/docker/compose.staging.yaml \\
-            deploy/scripts/bootstrap-staging.sh \\
-            deploy/scripts/deploy-staging.sh \\
-            deploy/scripts/rollback-staging.sh \\
-            deploy/scripts/acknowledge-staging-health.sh \\
-            "$STAGING_USER@$STAGING_HOST:$STAGING_DEPLOY_PATH/"
-          ssh -p "$STAGING_SSH_PORT" "$STAGING_USER@$STAGING_HOST" \\
-            "chmod 700 '$STAGING_DEPLOY_PATH/'*.sh"
+          ssh -p "$STAGING_SSH_PORT" "$STAGING_USER@$STAGING_HOST" "mkdir -p '$STAGING_DEPLOY_PATH'"
+          scp -P "$STAGING_SSH_PORT" deploy/docker/compose.staging.yaml deploy/scripts/bootstrap-staging.sh deploy/scripts/deploy-staging.sh deploy/scripts/rollback-staging.sh deploy/scripts/acknowledge-staging-health.sh "$STAGING_USER@$STAGING_HOST:$STAGING_DEPLOY_PATH/"
+          ssh -p "$STAGING_SSH_PORT" "$STAGING_USER@$STAGING_HOST" "chmod 700 '$STAGING_DEPLOY_PATH/'*.sh"
 
       - name: Check server bootstrap state
         id: bootstrap
         run: |
-          if ssh -p "$STAGING_SSH_PORT" "$STAGING_USER@$STAGING_HOST" \\
-            "test -s '$STAGING_DEPLOY_PATH/.env'"; then
+          if ssh -p "$STAGING_SSH_PORT" "$STAGING_USER@$STAGING_HOST" "test -s '$STAGING_DEPLOY_PATH/.env'"; then
             echo "ready=true" >> "$GITHUB_OUTPUT"
           else
             echo "ready=false" >> "$GITHUB_OUTPUT"
@@ -129,10 +119,7 @@ jobs:
         id: deploy
         if: steps.bootstrap.outputs.ready == 'true'
         run: |
-          ssh -p "$STAGING_SSH_PORT" "$STAGING_USER@$STAGING_HOST" \\
-            "set -eu
-             cd '$STAGING_DEPLOY_PATH'
-             ./deploy-staging.sh '${{ steps.lock-sha.outputs.sha }}' '${{ github.run_id }}' '${{ github.run_attempt }}'"
+          ssh -p "$STAGING_SSH_PORT" "$STAGING_USER@$STAGING_HOST" "set -eu; cd '$STAGING_DEPLOY_PATH'; ./deploy-staging.sh '${{ steps.lock-sha.outputs.sha }}' '${{ github.run_id }}' '${{ github.run_attempt }}'"
 
       - name: Verify deployed SHA and public Staging health
         id: post-deploy-verify
@@ -140,17 +127,13 @@ jobs:
         env:
           DEPLOY_SHA: ${{ steps.lock-sha.outputs.sha }}
         run: |
-          ssh -p "$STAGING_SSH_PORT" "$STAGING_USER@$STAGING_HOST" \\
-            "set -eu
-             test \\"\\$(cat '$STAGING_DEPLOY_PATH/.last_successful_tag')\\" = '$DEPLOY_SHA'
-             grep -F '\\"commit_sha\\": \\"$DEPLOY_SHA\\"' '$STAGING_DEPLOY_PATH/.last_successful_deployment.json' >/dev/null"
+          ssh -p "$STAGING_SSH_PORT" "$STAGING_USER@$STAGING_HOST" "set -eu; test \"\$(cat '$STAGING_DEPLOY_PATH/.last_successful_tag')\" = '$DEPLOY_SHA'; test -s '$STAGING_DEPLOY_PATH/.last_successful_deployment.json'"
 
           api_base="${STAGING_API_BASE_URL%/}"
           console_base="${STAGING_CONSOLE_BASE_URL%/}"
           healthy=false
           for attempt in $(seq 1 30); do
-            if curl -fsS "$api_base/health/ready" >/dev/null \\
-              && curl -fsS "$console_base/" | grep -q "SuperNova"; then
+            if curl -fsS "$api_base/health/ready" >/dev/null && curl -fsS "$console_base/" | grep -q "SuperNova"; then
               healthy=true
               break
             fi
@@ -159,16 +142,15 @@ jobs:
           test "$healthy" = true
           {
             echo "## Staging deployment verified"
-            echo "- Commit SHA: `$DEPLOY_SHA`"
-            echo "- API: `$api_base/health/ready`"
-            echo "- Console: `$console_base/`"
+            echo "- Commit SHA: \`$DEPLOY_SHA\`"
+            echo "- API: \`$api_base/health/ready\`"
+            echo "- Console: \`$console_base/\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Block deployment queue after failed deployment or health check
         if: always() && steps.bootstrap.outputs.ready == 'true' && (steps.deploy.outcome == 'failure' || steps.post-deploy-verify.outcome == 'failure')
         run: |
-          ssh -p "$STAGING_SSH_PORT" "$STAGING_USER@$STAGING_HOST" \\
-            "touch '$STAGING_DEPLOY_PATH/.staging-deployment-blocked'"
+          ssh -p "$STAGING_SSH_PORT" "$STAGING_USER@$STAGING_HOST" "touch '$STAGING_DEPLOY_PATH/.staging-deployment-blocked'"
 
       - name: Report first-time server bootstrap
         if: steps.bootstrap.outputs.ready != 'true'
@@ -191,6 +173,6 @@ jobs:
         run: |
           {
             echo "## Staging acceptance approved"
-            echo "- Commit SHA: `$DEPLOY_SHA`"
-            echo "- Acceptance time (UTC): `$(date -u +%Y-%m-%dT%H:%M:%SZ)`"
+            echo "- Commit SHA: \`$DEPLOY_SHA\`"
+            echo "- Acceptance time (UTC): \`$(date -u +%Y-%m-%dT%H:%M:%SZ)\`"
           } >> "$GITHUB_STEP_SUMMARY"
