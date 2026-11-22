@@ -284,7 +284,7 @@ def test_platform_user_search_and_profile_require_users_read_permission(
             db,
             code="support_reader",
             name="客户支持只读",
-            permissions=("platform.users.read",),
+            permissions=("platform.users.read", "platform.tenants.read"),
         )
         _assign_role(db, user_id=UUID(actor["user"]["id"]), role=reader)
 
