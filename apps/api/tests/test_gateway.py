@@ -1630,3 +1630,101 @@ def test_sender_profile_uses_documented_utf16_limits_and_removes_controls(
     assert '"nickname":"张三"' in system_content
     assert '"labels":["意向客户","已成交"]' in system_content
     assert "\\u0000" not in system_content
+
+def test_group_session_idempotency_is_scoped_by_logged_in_account(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner = register(client)
+    provider = create_provider(client, owner)
+    persona = create_persona(client, owner, provider["id"])
+    key = create_api_key(client, owner)
+    FakeClient.calls = []
+    FakeClient.response = FakeResponse(
+        {
+            "id": "chatcmpl-account-scope",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "ok"},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4},
+        }
+    )
+    monkeypatch.setattr(gateway.httpx, "Client", FakeClient)
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "Idempotency-Key": "same-group-message",
+    }
+    common = {
+        "model": persona["slug"],
+        "messages": [{"role": "user", "content": "群里你好"}],
+        "user": "123456789@chatroom",
+    }
+    first = client.post(
+        "/v1/chat/completions",
+        headers=headers,
+        json={**common, "account_wxid": "wxid_account_a"},
+    )
+    second = client.post(
+        "/v1/chat/completions",
+        headers=headers,
+        json={**common, "account_wxid": "wxid_account_b"},
+    )
+
+    assert first.status_code == 200, first.text
+    assert second.status_code == 409
+    assert second.json()["error"]["code"] == "idempotency_key_conflict"
+    assert len(FakeClient.calls) == 1
+
+
+def test_sender_profile_rejects_nickname_over_256_utf16_units(client: TestClient) -> None:
+    owner = register(client)
+    provider = create_provider(client, owner)
+    persona = create_persona(client, owner, provider["id"])
+    key = create_api_key(client, owner)
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {key}"},
+        json={
+            "model": persona["slug"],
+            "user": "wxid_sender",
+            "sender_profile": {
+                "wxid": "wxid_sender",
+                "nickname": "😀" * 129,
+                "remark": "",
+                "labels": [],
+            },
+            "messages": [{"role": "user", "content": "你好"}],
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_sender_profile_does_not_accept_avatar_url(client: TestClient) -> None:
+    owner = register(client)
+    provider = create_provider(client, owner)
+    persona = create_persona(client, owner, provider["id"])
+    key = create_api_key(client, owner)
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {key}"},
+        json={
+            "model": persona["slug"],
+            "user": "wxid_sender",
+            "sender_profile": {
+                "wxid": "wxid_sender",
+                "nickname": "张三",
+                "remark": "张总",
+                "labels": [],
+                "avatar_url": "https://example.com/avatar.png",
+            },
+            "messages": [{"role": "user", "content": "你好"}],
+        },
+    )
+
+    assert response.status_code == 422
+
