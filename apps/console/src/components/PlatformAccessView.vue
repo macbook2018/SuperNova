@@ -221,7 +221,7 @@ onMounted(() => { void refresh() })
 
     <section v-if="canReadUsers && activeTab==='users'" class="rbac-panel">
       <header><div><b>平台用户目录</b><small>按邮箱或账户名称搜索用户；仅展示账户基础信息和所属工作空间数量。</small></div><button class="rbac-button secondary" :disabled="usersLoading" @click="searchUsers">刷新</button></header>
-      <div class="rbac-search"><label>搜索用户<input v-model="userSearch" placeholder="输入邮箱或账户名称" @keydown.enter="searchUsers"></label><button class="rbac-button primary" :disabled="usersLoading" @click="searchUsers">搜索</button></div>
+      <div class="rbac-search"><label>搜索用户<input v-model="userSearch" placeholder="输入邮箱或账户名称" @keydown.enter="searchUsers(true)"></label><button class="rbac-button primary" :disabled="usersLoading" @click="searchUsers(true)">搜索</button></div>
       <div class="rbac-directory-meta">共 {{ userTotal }} 个用户，当前显示 {{ users.length }} 个</div>
       <div v-if="usersLoading" class="rbac-empty">正在读取用户…</div>
       <div v-else-if="!users.length" class="rbac-empty">没有找到匹配的用户</div>
@@ -237,7 +237,7 @@ onMounted(() => { void refresh() })
         <div v-if="userDetail" class="rbac-selected-user"><b>{{ userDetail.display_name }}</b><span>{{ userDetail.email }}</span><small>{{ userDetail.id }}</small><div>所属工作空间：{{ userDetail.tenants.map(item => item.tenant_name).join('、') || '无' }}</div></div>
         <div class="rbac-search">
           <label v-if="!canReadUsers">用户 ID<input v-model="userId" placeholder="粘贴用户 UUID" @keydown.enter="loadUserRoles"></label>
-          <button class="rbac-button primary" :disabled="loading" @click="loadUserRoles">查询角色</button>
+          <button v-if="!canReadUsers" class="rbac-button primary" :disabled="loading" @click="loadUserRoles">查询角色</button>
         </div>
         <div v-if="loading" class="rbac-empty">正在读取…</div>
         <div v-else-if="userId.trim() && !userRoles.length" class="rbac-empty">没有有效或历史平台角色记录，或尚未查询</div>
