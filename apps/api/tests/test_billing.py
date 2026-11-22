@@ -67,6 +67,7 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient, None, None]
                 "platform.models.manage",
                 "platform.billing.read",
                 "platform.billing.manage",
+                "platform.audit.read",
             )
         ]
         session.add_all([admin_role, finance_role, *admin_permissions])
@@ -482,6 +483,13 @@ def test_platform_rbac_grant_revoke_and_audit(client: TestClient) -> None:
         json={"reason": "岗位调整"},
     )
     assert revoked.status_code == 200, revoked.text
+
+    audit_response = client.get("/admin/platform/audit-logs", headers=headers(admin))
+    assert audit_response.status_code == 200
+    assert {item["action"] for item in audit_response.json()} >= {
+        "platform.role.grant",
+        "platform.role.revoke",
+    }
 
     after_revoke = client.get("/admin/platform/access", headers=headers(customer))
     assert after_revoke.json()["roles"] == []
