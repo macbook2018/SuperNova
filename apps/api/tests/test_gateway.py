@@ -1617,9 +1617,9 @@ def test_sender_profile_uses_documented_utf16_limits_and_removes_controls(
             "user": "wxid_sender",
             "sender_profile": {
                 "wxid": "wxid_sender",
-                "nickname": "张三\\u0000",
+                "nickname": "张三\u0000",
                 "remark": "",
-                "labels": ["意向客户", "意向客户", "已成交\\n"],
+                "labels": ["意向客户", "意向客户", "已成交\n"],
             },
             "messages": [{"role": "user", "content": "你好"}],
         },
@@ -1629,7 +1629,7 @@ def test_sender_profile_uses_documented_utf16_limits_and_removes_controls(
     system_content = FakeClient.calls[0]["json"]["messages"][0]["content"]
     assert '"nickname":"张三"' in system_content
     assert '"labels":["意向客户","已成交"]' in system_content
-    assert "\\u0000" not in system_content
+    assert chr(0) not in system_content
 
 def test_group_session_idempotency_is_scoped_by_logged_in_account(
     client: TestClient,
