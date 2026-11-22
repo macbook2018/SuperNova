@@ -2,11 +2,11 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-from pydantic import ValidationError
 
 from app.api import embedding_models
 from app.knowledge.embeddings import EmbeddingBatch
 from app.schemas.knowledge import PlatformEmbeddingModelCreate
+from pydantic import ValidationError
 
 
 def _model(**overrides):
