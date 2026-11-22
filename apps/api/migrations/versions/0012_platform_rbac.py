@@ -220,16 +220,30 @@ def upgrade() -> None:
                     granted_by_user_id=None,
                 )
             )
+            audit_table = sa.table(
+                "platform_admin_audit_logs",
+                sa.column("id", sa.Uuid(as_uuid=True)),
+                sa.column("actor_user_id", sa.Uuid(as_uuid=True)),
+                sa.column("target_user_id", sa.Uuid(as_uuid=True)),
+                sa.column("action", sa.String()),
+                sa.column("resource_type", sa.String()),
+                sa.column("resource_id", sa.String()),
+                sa.column("result", sa.String()),
+                sa.column("reason", sa.String()),
+                sa.column("details", sa.JSON()),
+            )
             bind.execute(
-                sa.text(
-                    "INSERT INTO platform_admin_audit_logs "
-                    "(id, actor_user_id, target_user_id, action, resource_type, resource_id, "
-                    "result, reason, details) "
-                    "VALUES (:id, NULL, :target, 'platform.role.bootstrap', 'user', :resource, "
-                    "'success', 'Initial migration from SUPERNOVA_PLATFORM_ADMIN_EMAILS', "
-                    "'{\\"source\\":\\"environment_allowlist\\"}')"
-                ),
-                {"id": str(uuid4()), "target": str(user_id), "resource": str(user_id)},
+                audit_table.insert().values(
+                    id=uuid4(),
+                    actor_user_id=None,
+                    target_user_id=user_id,
+                    action="platform.role.bootstrap",
+                    resource_type="user",
+                    resource_id=str(user_id),
+                    result="success",
+                    reason="Initial migration from SUPERNOVA_PLATFORM_ADMIN_EMAILS",
+                    details={"source": "environment_allowlist"},
+                )
             )
 
 
