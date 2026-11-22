@@ -117,6 +117,13 @@ PR Base 必须是：
 
 ## 8. 部署串行锁与验收门
 
+启用部署前，仓库管理员必须确认以下配置：
+
+- Repository variable：`STAGING_DEPLOY_ENABLED=true`。
+- Repository secrets：`STAGING_HOST`、`STAGING_USER`、`STAGING_SSH_PRIVATE_KEY`、`DOCKERHUB_USERNAME`、`DOCKERHUB_TOKEN`；`STAGING_SSH_PORT` 可选。
+- Repository variables：`STAGING_DEPLOY_PATH`、`STAGING_API_BASE_URL`、`STAGING_CONSOLE_BASE_URL` 可按环境设置；后两项默认分别为 `https://api.wet001.com` 和 `https://bot.wet001.com`。
+- GitHub Settings → Environments：创建 `staging-acceptance`，配置至少一名 Required reviewer。未配置 Required reviewers 时，验收 Job 会自动通过，不能形成真正的人工验收门。
+
 Staging 部署工作流使用固定 concurrency group：
 
 ```yaml
