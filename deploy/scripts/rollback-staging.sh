@@ -54,8 +54,31 @@ done
 
 "${COMPOSE[@]}" up -d api knowledge-worker chat-import-worker console
 
+all_services_healthy() {
+  local service container_id status image expected
+  for service in postgres redis api console knowledge-worker chat-import-worker; do
+    container_id="$("${COMPOSE[@]}" ps -q "$service")"
+    [[ -n "$container_id" ]] || return 1
+    status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$container_id" 2>/dev/null || true)"
+    [[ "$status" == "healthy" ]] || return 1
+    case "$service" in
+      api|knowledge-worker|chat-import-worker)
+        expected="macbook201808/supernova:api-${TAG}"
+        image="$(docker inspect --format '{{.Config.Image}}' "$container_id")"
+        [[ "$image" == "$expected" ]] || return 1
+        ;;
+      console)
+        expected="macbook201808/supernova:console-${TAG}"
+        image="$(docker inspect --format '{{.Config.Image}}' "$container_id")"
+        [[ "$image" == "$expected" ]] || return 1
+        ;;
+    esac
+  done
+}
+
 for attempt in $(seq 1 45); do
-  if python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:18082/health/ready', timeout=3)" >/dev/null 2>&1 \
+  if all_services_healthy \
+    && python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:18082/health/ready', timeout=3)" >/dev/null 2>&1 \
     && python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:18083/healthz', timeout=3)" >/dev/null 2>&1; then
     DEPLOYED_AT_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     if [[ -n "$CURRENT_TAG" ]]; then
