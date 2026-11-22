@@ -2,9 +2,12 @@ name: CI
 
 on:
   push:
-    branches: [main, "feat/**", "fix/**"]
+    branches: [main, "feat/**", "fix/**", "chore/**"]
   pull_request:
-    branches: [main]
+    types: [opened, synchronize, reopened, closed]
+    branches:
+      - main
+      - "feat/phase-6-knowledge-base-rag"
   workflow_dispatch:
 
 permissions:
@@ -104,6 +107,7 @@ jobs:
           bash -n deploy/scripts/bootstrap-staging.sh
           bash -n deploy/scripts/deploy-staging.sh
           bash -n deploy/scripts/rollback-staging.sh
+          bash -n deploy/scripts/acknowledge-staging-health.sh
           docker compose --project-name supernova-staging -f deploy/docker/compose.staging.yaml config --quiet
 
       - name: Test bootstrap with punctuation in MinIO secret
@@ -172,111 +176,10 @@ jobs:
         run: docker compose -f deploy/docker/compose.yaml down -v
 
   staging-deploy:
-    name: Transfer and deploy staging images
-    if: github.ref == 'refs/heads/feat/phase-6-knowledge-base-rag' && vars.STAGING_DEPLOY_ENABLED == 'true'
+    name: Staging deployment (single serialized queue)
+    if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'feat/phase-6-knowledge-base-rag' && vars.STAGING_DEPLOY_ENABLED == 'true'
     needs: [console, api, compose-smoke]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    env:
-      STAGING_HOST: ${{ secrets.STAGING_HOST }}
-      STAGING_USER: ${{ secrets.STAGING_USER }}
-      STAGING_SSH_PORT: ${{ secrets.STAGING_SSH_PORT || '22' }}
-      STAGING_SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
-      STAGING_DEPLOY_PATH: ${{ vars.STAGING_DEPLOY_PATH || '/opt/supernova-staging' }}
-      STAGING_API_BASE_URL: ${{ vars.STAGING_API_BASE_URL || 'https://api.wet001.com' }}
-      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Validate staging secrets
-        run: |
-          test -n "$STAGING_HOST"
-          test -n "$STAGING_USER"
-          test -n "$STAGING_SSH_PRIVATE_KEY"
-          test -n "$STAGING_API_BASE_URL"
-          test "$DOCKERHUB_USERNAME" = "macbook201808"
-          test -n "$DOCKERHUB_TOKEN"
-
-      - name: Log in to Docker Hub for image publishing
-        uses: docker/login-action@v3
-        with:
-          username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ env.DOCKERHUB_TOKEN }}
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build and push API image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: apps/api/Dockerfile
-          push: true
-          tags: macbook201808/supernova:api-${{ github.sha }}
-          cache-from: type=gha,scope=supernova-api
-          cache-to: type=gha,mode=max,scope=supernova-api
-
-      - name: Build and push Console image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: apps/console/Dockerfile
-          push: true
-          build-args: |
-            VITE_API_BASE_URL=${{ env.STAGING_API_BASE_URL }}
-          tags: macbook201808/supernova:console-${{ github.sha }}
-          cache-from: type=gha,scope=supernova-console
-          cache-to: type=gha,mode=max,scope=supernova-console
-
-      - name: Configure SSH
-        run: |
-          install -m 700 -d ~/.ssh
-          printf '%s\n' "$STAGING_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -p "$STAGING_SSH_PORT" -H "$STAGING_HOST" >> ~/.ssh/known_hosts
-
-      - name: Upload staging deployment files
-        run: |
-          ssh -p "$STAGING_SSH_PORT" "$STAGING_USER@$STAGING_HOST" \
-            "mkdir -p '$STAGING_DEPLOY_PATH'"
-          scp -P "$STAGING_SSH_PORT" \
-            deploy/docker/compose.staging.yaml \
-            deploy/scripts/bootstrap-staging.sh \
-            deploy/scripts/deploy-staging.sh \
-            deploy/scripts/rollback-staging.sh \
-            "$STAGING_USER@$STAGING_HOST:$STAGING_DEPLOY_PATH/"
-          ssh -p "$STAGING_SSH_PORT" "$STAGING_USER@$STAGING_HOST" \
-            "chmod 700 '$STAGING_DEPLOY_PATH/'*.sh"
-
-      - name: Check server bootstrap state
-        id: bootstrap
-        run: |
-          if ssh -p "$STAGING_SSH_PORT" "$STAGING_USER@$STAGING_HOST" \
-            "test -s '$STAGING_DEPLOY_PATH/.env'"; then
-            echo "ready=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Deploy immutable image tag
-        if: steps.bootstrap.outputs.ready == 'true'
-        run: |
-          ssh -p "$STAGING_SSH_PORT" "$STAGING_USER@$STAGING_HOST" \
-            "set -eu
-             cd '$STAGING_DEPLOY_PATH'
-             ./deploy-staging.sh '${{ github.sha }}'"
-
-      - name: Report first-time server bootstrap
-        if: steps.bootstrap.outputs.ready != 'true'
-        run: |
-          echo "Deployment files were uploaded, but the server .env is not initialized yet."
-          echo "SSH to the server, create the MinIO bucket-only account, then run:"
-          echo "cd '$STAGING_DEPLOY_PATH' && ./bootstrap-staging.sh"
-          {
-            echo "## Server bootstrap required"
-            echo "Initialize the server-only .env and MinIO bucket credentials, then run this workflow again to build and transfer the images."
-          } >> "$GITHUB_STEP_SUMMARY"
-
+    uses: ./.github/workflows/staging-deploy.yml
+    with:
+      deploy_sha: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+    secrets: inherit
