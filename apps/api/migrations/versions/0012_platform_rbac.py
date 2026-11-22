@@ -25,6 +25,7 @@ ROLE_DEFINITIONS = (
 )
 
 PERMISSIONS = (
+    ("platform.admin", "完整平台管理权限"),
     ("platform.access", "进入平台管理区域"),
     ("platform.rbac.manage", "管理平台角色及用户授权"),
     ("platform.users.read", "查看平台用户"),
