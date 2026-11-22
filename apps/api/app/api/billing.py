@@ -7,7 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import CurrentPrincipal, DatabaseSession
-from app.api.platform_admin import record_platform_audit, require_platform_admin
+from app.api.platform_admin import record_platform_audit, require_platform_permission
 from app.billing.entitlements import (
     _subscription_read,
     build_entitlement_snapshot,
@@ -117,7 +117,7 @@ def create_billing_plan(
     db: DatabaseSession,
     request_id: str | None = Header(default=None, alias="X-Request-ID"),
 ) -> BillingPlanRead:
-    require_platform_admin(principal)
+    require_platform_permission(principal, "platform.billing.manage")
     plan = BillingPlan(
         id=uuid4(),
         code=payload.code,
