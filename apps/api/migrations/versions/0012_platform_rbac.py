@@ -73,7 +73,10 @@ def upgrade() -> None:
         sa.Column("name", sa.String(100), nullable=False),
         sa.Column("description", sa.Text(), nullable=False, server_default=""),
         sa.Column("is_system", sa.Boolean(), nullable=False, server_default=sa.true()),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True),
+            nullable=False, server_default=sa.func.now(),
+        )
     )
     op.create_table(
         "platform_permissions",
@@ -124,15 +127,23 @@ def upgrade() -> None:
     op.create_table(
         "platform_admin_audit_logs",
         sa.Column("id", sa.Uuid(as_uuid=True), primary_key=True, nullable=False),
-        sa.Column("actor_user_id", sa.Uuid(as_uuid=True), sa.ForeignKey("users.id", ondelete="SET NULL")),
-        sa.Column("target_user_id", sa.Uuid(as_uuid=True), sa.ForeignKey("users.id", ondelete="SET NULL")),
+        sa.Column(
+            "actor_user_id", sa.Uuid(as_uuid=True),
+            sa.ForeignKey("users.id", ondelete="SET NULL"),
+        )
+        sa.Column(
+            "target_user_id", sa.Uuid(as_uuid=True),
+            sa.ForeignKey("users.id", ondelete="SET NULL"),
+        )
         sa.Column("action", sa.String(100), nullable=False),
         sa.Column("resource_type", sa.String(80), nullable=False),
         sa.Column("resource_id", sa.String(160), nullable=False),
         sa.Column("result", sa.String(20), nullable=False, server_default="success"),
         sa.Column("reason", sa.String(500)),
         sa.Column("request_id", sa.String(100)),
-        sa.Column("details", sa.JSON(), nullable=False, server_default=sa.text("'{}'")),
+        sa.Column(
+            "details", sa.JSON(), nullable=False, server_default=sa.text("'{}'"),
+        )
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
     )
     op.create_index("ix_platform_admin_audit_created", "platform_admin_audit_logs", ["created_at"])
@@ -170,13 +181,19 @@ def upgrade() -> None:
     op.bulk_insert(
         roles_table,
         [
-            {"id": role_ids[code], "code": code, "name": name, "description": description, "is_system": True}
+            {
+                "id": role_ids[code], "code": code, "name": name,
+                "description": description, "is_system": True,
+            }
             for code, name, description in ROLE_DEFINITIONS
         ],
     )
     op.bulk_insert(
         permissions_table,
-        [{"id": permission_ids[code], "code": code, "description": description} for code, description in PERMISSIONS],
+        [
+            {"id": permission_ids[code], "code": code, "description": description}
+            for code, description in PERMISSIONS
+        ],
     )
     op.bulk_insert(
         role_permissions_table,
