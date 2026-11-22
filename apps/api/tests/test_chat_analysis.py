@@ -590,6 +590,53 @@ def test_chat_analysis_review_and_faq_publication_are_tenant_scoped(
             for chunk in chunks
         )
 
+        published_chunk = next(
+            chunk for chunk in chunks
+            if "标准价格是多少？" in chunk.content and "99 元" in chunk.content
+        )
+        search_hit = {
+            "chunk_id": published_chunk.id,
+            "document_id": document.id,
+            "document_name": document.original_filename,
+            "source_type": document.source_type,
+            "source_url": document.source_url,
+            "page_number": None,
+            "sheet_name": None,
+            "slide_number": None,
+            "chunk_index": published_chunk.chunk_index,
+            "score": 0.98,
+            "vector_rank": 1,
+            "lexical_rank": 1,
+            "snippet": published_chunk.content[:700],
+            "content": published_chunk.content,
+            "metadata": published_chunk.metadata_json or {},
+            "rrf_score": 1 / 61,
+        }
+    monkeypatch.setattr(
+        "app.api.knowledge.retrieve_knowledge_base",
+        lambda *_args, **_kwargs: [search_hit],
+    )
+    search_response = client.post(
+        f"/knowledge-bases/{knowledge_base_id}/search",
+        headers=headers(auth),
+        json={"query": "标准价格是多少？", "top_k": 5},
+    )
+    assert search_response.status_code == 200, search_response.text
+    search_payload = search_response.json()
+    assert search_payload["knowledge_base_id"] == knowledge_base_id
+    assert len(search_payload["hits"]) == 1
+    assert search_payload["hits"][0]["document_id"] == str(document.id)
+    assert search_payload["hits"][0]["chunk_id"] == str(published_chunk.id)
+    assert "99 元" in search_payload["hits"][0]["snippet"]
+
+    other_tenant = register(client, "chat-analysis-search-other@example.com")
+    hidden_search = client.post(
+        f"/knowledge-bases/{knowledge_base_id}/search",
+        headers=headers(other_tenant),
+        json={"query": "标准价格是多少？"},
+    )
+    assert hidden_search.status_code == 404
+
 
 def test_chat_analysis_bundle_is_hidden_from_other_tenants(
     client: TestClient,
