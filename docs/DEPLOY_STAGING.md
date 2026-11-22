@@ -69,6 +69,31 @@ chmod 700 bootstrap-staging.sh deploy-staging.sh rollback-staging.sh
 ~~~
 
 The bootstrap script generates PostgreSQL, Redis, JWT and Fernet secrets locally and writes a mode-600 .env. It prompts for the MinIO bucket-only access key/secret and the platform-admin email. Do not share the resulting .env.
+The bootstrap script generates PostgreSQL, Redis, JWT and Fernet secrets locally and writes a mode-600 .env. It prompts for the MinIO bucket-only access key/secret and the platform-admin email. Do not share the resulting .env.
+
+### Configure platform model credentials
+
+The platform model pool uses server-side credentials. The Console stores only a credential reference; it never stores or returns the upstream API Key.
+
+1. Confirm `SUPERNOVA_PLATFORM_ADMIN_EMAILS` contains the exact email used to sign in to SuperNova.
+2. Edit `/opt/supernova-staging/.env` and set the credential map. The keys on the left are credential references that you will enter in the platform model admin page:
+
+   ```dotenv
+   SUPERNOVA_PLATFORM_CREDENTIALS_JSON='{"deepseek-primary":"REPLACE_WITH_REAL_API_KEY"}'
+   ```
+
+   Keep the real value only on the server. Do not paste it into chat, GitHub, issue comments or shell commands that may be saved in history.
+3. Ensure the file remains private: `chmod 600 /opt/supernova-staging/.env`.
+4. Recreate only the API and application workers so they receive the updated environment:
+
+   ```bash
+   cd /opt/supernova-staging
+   docker compose --project-name supernova-staging --env-file .env -f compose.staging.yaml up -d --no-deps --force-recreate api knowledge-worker chat-import-worker
+   ```
+
+5. In the platform admin page, create a model using the same `credential_ref` (for example, `deepseek-primary`), publish a current price version, and only then enable it.
+
+The staging Compose file passes this map to the API and workers. If the map is empty or a reference does not exist, the platform model is intentionally omitted from tenant-visible model lists.
 
 ## GitHub configuration
 
