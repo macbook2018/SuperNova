@@ -37,7 +37,7 @@ def require_platform_admin(principal: Principal) -> None:
     require_platform_permission(principal, "platform.admin")
 
 
-def _audit(
+def record_platform_audit(
     db,
     *,
     actor_user_id: UUID,
@@ -134,7 +134,7 @@ def grant_platform_role(
         expires_at=payload.expires_at,
     )
     db.add(assignment)
-    _audit(
+    record_platform_audit(
         db,
         actor_user_id=principal.user.id,
         target_user_id=user_id,
