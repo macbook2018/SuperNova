@@ -121,3 +121,5 @@ def test_docker_provider_writes_credentials_outside_runtime_config(
     assert client.containers.created["cap_drop"] == ["ALL"]
     assert client.containers.created["pids_limit"] == 128
     assert client.containers.created["volumes"][str(config_dir)]["mode"] == "ro"
+    data_dir = tmp_path / tenant_id.hex / bot_id.hex / "data"
+    assert client.containers.created["volumes"][str(data_dir)]["bind"] == "/var/lib/astrbot"
