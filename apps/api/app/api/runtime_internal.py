@@ -7,6 +7,8 @@ from sqlalchemy import select
 from app.api.deps import DatabaseSession
 from app.api.gateway import GatewayPrincipal, create_chat_completion
 from app.models.bot_runtime import BotRuntimeEvent
+from app.runtime.deps import require_runtime_scope
+from app.runtime.security import RuntimePrincipal
 from app.schemas.bot_runtime import (
     RuntimeChatCompletionRequest,
     RuntimeEventEnvelope,
@@ -15,9 +17,6 @@ from app.schemas.bot_runtime import (
     RuntimeHeartbeatResponse,
 )
 from app.schemas.gateway import ChatCompletionRequest
-from app.runtime.deps import require_runtime_scope
-from app.runtime.security import RuntimePrincipal
-
 router = APIRouter(prefix="/internal/runtime/v1", tags=["内部机器人运行时"])
 
 RuntimeChatPrincipal = Annotated[
@@ -46,7 +45,10 @@ def runtime_heartbeat(
     if payload.runtime_version != bot.runtime_version:
         raise HTTPException(
             status_code=409,
-            detail={"code": "runtime_version_mismatch", "message": "运行时版本与实例固定版本不一致"},
+            detail={
+                "code": "runtime_version_mismatch",
+                "message": "运行时版本与实例固定版本不一致",
+            },
         )
 
     now = datetime.now(UTC)
