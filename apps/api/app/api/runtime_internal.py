@@ -18,7 +18,6 @@ from app.schemas.bot_runtime import (
 )
 from app.schemas.gateway import ChatCompletionRequest
 
-
 router = APIRouter(prefix="/internal/runtime/v1", tags=["内部机器人运行时"])
 
 RuntimeChatPrincipal = Annotated[
