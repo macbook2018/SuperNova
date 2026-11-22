@@ -2,7 +2,6 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-
 from app.api import embedding_models
 from app.knowledge.embeddings import EmbeddingBatch
 from app.schemas.knowledge import PlatformEmbeddingModelCreate
@@ -102,5 +101,5 @@ def test_platform_embedding_schema_requires_1536_and_rejects_chat_only_provider(
     with pytest.raises(ValueError):
         PlatformEmbeddingModelCreate(**{**base, "dimensions": 1024})
 
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValueError):
         PlatformEmbeddingModelCreate(**{**base, "provider_type": "deepseek"})
