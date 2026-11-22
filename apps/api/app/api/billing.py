@@ -383,21 +383,16 @@ def billing_ledger(
     db: DatabaseSession,
     limit: int = Query(default=50, ge=1, le=100),
 ) -> list[BillingLedgerTransactionRead]:
+    tenant_transaction_ids = select(BillingLedgerPosting.transaction_id).join(
+        BillingLedgerAccount,
+        BillingLedgerAccount.id == BillingLedgerPosting.account_id,
+    ).where(BillingLedgerAccount.tenant_id == principal.tenant.id)
     transactions = db.scalars(
         select(BillingLedgerTransaction)
-        .join(
-            BillingLedgerPosting,
-            BillingLedgerPosting.transaction_id == BillingLedgerTransaction.id,
-        )
-        .join(
-            BillingLedgerAccount,
-            BillingLedgerAccount.id == BillingLedgerPosting.account_id,
-        )
         .where(
-            BillingLedgerAccount.tenant_id == principal.tenant.id,
             BillingLedgerTransaction.mode == "shadow",
+            BillingLedgerTransaction.id.in_(tenant_transaction_ids),
         )
-        .distinct()
         .order_by(BillingLedgerTransaction.created_at.desc())
         .limit(limit)
     ).all()
