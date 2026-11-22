@@ -101,7 +101,9 @@ class Settings(BaseSettings):
         if not 16 <= self.runtime_pids_limit <= 4096:
             raise ValueError("SUPERNOVA_RUNTIME_PIDS_LIMIT must be between 16 and 4096")
         if not 64 * 1024 * 1024 <= self.runtime_disk_limit_bytes <= 100 * 1024**3:
-            raise ValueError("SUPERNOVA_RUNTIME_DISK_LIMIT_BYTES must be between 64 MiB and 100 GiB")
+            raise ValueError(
+                "SUPERNOVA_RUNTIME_DISK_LIMIT_BYTES must be between 64 MiB and 100 GiB"
+            )
         if self.access_token_ttl_minutes < 5 or self.access_token_ttl_minutes > 60:
             raise ValueError("SUPERNOVA_ACCESS_TOKEN_TTL_MINUTES must be between 5 and 60")
         if self.knowledge_max_upload_bytes < 1024 or self.knowledge_max_url_bytes < 1024:
