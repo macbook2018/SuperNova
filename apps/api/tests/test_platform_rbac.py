@@ -5,10 +5,6 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, event, select
-from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy.pool import StaticPool
 
 from app.db.base import Base
 from app.db.session import get_db
@@ -19,6 +15,11 @@ from app.models.platform_rbac import (
     PlatformRolePermission,
     PlatformUserRole,
 )
+
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, event, select
+from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
 
 
 @pytest.fixture
@@ -142,7 +143,7 @@ def test_platform_role_grant_revoke_and_audit_are_effective_on_next_request(
             name="超级管理员",
             permissions=("platform.rbac.manage", "platform.audit.read"),
         )
-        read_only = _seed_role(
+        _seed_role(
             db,
             code="read_only",
             name="平台只读",
