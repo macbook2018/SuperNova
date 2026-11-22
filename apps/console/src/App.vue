@@ -109,6 +109,7 @@ const nav = [
   },
 ]
 const activeNav = computed(() => page.value === 'knowledgeDetail' ? 'knowledge' : page.value)
+const visibleNav = computed(() => nav.filter(group => group.label !== '平台管理' || platformAdminAccess.value))
 
 const personas = ref<PersonaView[]>([])
 const providers = ref<ModelProvider[]>([])
@@ -862,7 +863,7 @@ async function revokeKey(key: ApiKey) {
  <aside class="sidebar" :class="{'sidebar-open':mobileOpen}">
   <div class="brand"><img src="/logo-rounded.svg" alt="SuperNova"><div><b>SuperNova</b><small>智能体平台</small></div><i>BETA</i></div>
   <button class="workspace" @click="notify('当前账户使用单一默认工作空间')"><span>{{(currentTenant?.name||'S').slice(0,1).toUpperCase()}}</span><div><b>{{currentTenant?.name||'我的工作空间'}}</b><small>{{currentTenant?.role==='owner'?'工作空间所有者':'工作空间成员'}}</small></div><ChevronDown :size="15"/></button>
-  <nav><div v-for="g in nav" v-if="g.label !== '平台管理' || platformAdminAccess" :key="g.label" class="nav-group"><small>{{g.label}}</small><button v-for="n in g.items" :key="n.key" :class="{active:activeNav===n.key}" @click="go(n.key)"><component :is="n.icon" :size="18"/>{{n.label}}<em v-if="n.key==='personas'">{{personas.length}}</em></button></div></nav>
+  <nav><div v-for="g in visibleNav" :key="g.label" class="nav-group"><small>{{g.label}}</small><button v-for="n in g.items" :key="n.key" :class="{active:activeNav===n.key}" @click="go(n.key)"><component :is="n.icon" :size="18"/>{{n.label}}<em v-if="n.key==='personas'">{{personas.length}}</em></button></div></nav>
   <div class="sidebar-bottom"><div class="help"><LifeBuoy :size="17"/><div><b>需要帮助？</b><small>查看使用指南与接口文档</small></div></div><button class="side-setting" @click="go('settings')"><Settings2 :size="17"/>账户设置</button><div class="profile"><span>{{(currentUser?.display_name||'U').slice(0,1).toUpperCase()}}</span><div><b>{{currentUser?.display_name||'用户'}}</b><small>{{currentUser?.email}}</small></div><button @click="logout" aria-label="退出登录"><LogOut :size="16"/></button></div></div>
  </aside>
  <main class="main">
@@ -1131,7 +1132,7 @@ async function revokeKey(key: ApiKey) {
  <div v-if="providerModal" class="modal-backdrop" @click.self="providerModal=false"><section class="modal small-modal"><div class="modal-title"><div><small>MODEL PROVIDER</small><h2>{{editingProviderId?'编辑模型供应商':'添加模型供应商'}}</h2><p>API Key 会在服务端加密保存，读取接口不会返回明文。</p></div><button @click="providerModal=false"><X :size="18"/></button></div>
   <div class="form-grid">
    <label class="full">供应商名称 <b>*</b><input v-model="providerForm.name" maxlength="80" placeholder="例如：DeepSeek 主账户"></label>
-   <label class="full">供应商类型<select v-model="providerForm.provider_type" @change="providerPresetChanged"><option value="deepseek">DeepSeek</option><option value="openai">OpenAI</option><option value="qwen">通义千问（Qwen）</option><option value="anthropic">Anthropic</option><option value="openai_compatible">OpenAI 兼容接口</option></select></label>
+   <label class="full">供应商类型<select v-model="providerForm.provider_type" @change="providerPresetChanged"><option value="deepseek">DeepSeek</option><option value="openai">OpenAI</option><option value="qwen">通义千问（Qwen）</option><option value="openai_compatible">OpenAI 兼容接口</option></select></label>
    <label class="full">Base URL <b>*</b><input v-model="providerForm.base_url" maxlength="2048" placeholder="https://api.example.com/v1"><small>非本机地址必须使用 HTTPS；兼容接口可自定义。</small></label>
    <label class="full">API Key <b v-if="!editingProviderId">*</b><input v-model="providerForm.api_key" type="password" maxlength="4096" autocomplete="new-password" :placeholder="editingProviderId?'留空表示保留现有密钥':'请输入供应商 API Key'"><small v-if="editingProviderId">编辑时不回显旧密钥；填写新值会替换现有密钥。</small></label>
    <div class="form-switch full"><div><b>启用供应商</b><small>停用后可保留配置，但人格不应使用该供应商。</small></div><button class="toggle" :class="{on:providerForm.enabled}" @click="providerForm.enabled=!providerForm.enabled"></button></div>
