@@ -1,4 +1,5 @@
 import httpx
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 from fastapi import APIRouter, Header, HTTPException
 from sqlalchemy import select
@@ -31,6 +32,7 @@ def _admin_read(model: PlatformEmbeddingModel) -> PlatformEmbeddingModelAdminRea
         credential_ref=model.credential_ref,
         dimensions=model.dimensions,
         enabled=model.enabled,
+        verified_at=model.verified_at,
         created_at=model.created_at,
     )
 
@@ -45,7 +47,10 @@ def list_public_embedding_models(
 ) -> list[PlatformEmbeddingModelPublicRead]:
     models = db.scalars(
         select(PlatformEmbeddingModel)
-        .where(PlatformEmbeddingModel.enabled.is_(True))
+        .where(
+            PlatformEmbeddingModel.enabled.is_(True),
+            PlatformEmbeddingModel.verified_at.is_not(None),
+        )
         .order_by(PlatformEmbeddingModel.display_name.asc())
     ).all()
     result = []
@@ -93,6 +98,14 @@ def create_embedding_model(
     request_id: str | None = Header(default=None, alias="X-Request-ID"),
 ) -> PlatformEmbeddingModelAdminRead:
     require_platform_permission(principal, "platform.models.manage")
+    if payload.enabled:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "embedding_model_test_required",
+                "message": "请先创建模型、测试连接并确认返回 1536 维向量，再启用模型",
+            },
+        )
     model = PlatformEmbeddingModel(
         id=uuid4(),
         code=payload.code,
@@ -157,6 +170,27 @@ def update_embedding_model(
                 "message": "平台 Embedding 模型字段不允许设置为 null",
             },
         )
+    connection_fields = {"provider_type", "upstream_model_name", "base_url", "credential_ref", "dimensions"}
+    connection_changed = bool(connection_fields.intersection(updates))
+    if connection_changed and updates.get("enabled") is True:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "embedding_model_retest_required",
+                "message": "修改了服务商、模型、地址或凭据后，必须重新测试连接才能启用",
+            },
+        )
+    if updates.get("enabled") is True and model.verified_at is None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "embedding_model_test_required",
+                "message": "请先测试连接并确认返回 1536 维向量，再启用模型",
+            },
+        )
+    if connection_changed:
+        model.verified_at = None
+        model.enabled = False
     for field, value in updates.items():
         setattr(model, field, value)
     record_platform_audit(
@@ -254,6 +288,7 @@ def test_embedding_model_connection(
             },
         ) from None
 
+    model.verified_at = datetime.now(UTC)
     record_platform_audit(
         db,
         actor_user_id=principal.user.id,
