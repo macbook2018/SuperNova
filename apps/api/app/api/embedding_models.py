@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import CurrentPrincipal, DatabaseSession
-from app.api.platform_admin import record_platform_audit, require_platform_admin
+from app.api.platform_admin import record_platform_audit, require_platform_permission
 from app.billing.credentials import resolve_platform_api_key
 from app.models.knowledge import PlatformEmbeddingModel
 from app.schemas.knowledge import (
@@ -72,7 +72,7 @@ def list_admin_embedding_models(
     principal: CurrentPrincipal,
     db: DatabaseSession,
 ) -> list[PlatformEmbeddingModelAdminRead]:
-    require_platform_admin(principal)
+    require_platform_permission(principal, "platform.models.read")
     models = db.scalars(
         select(PlatformEmbeddingModel).order_by(PlatformEmbeddingModel.created_at.desc())
     ).all()
@@ -90,7 +90,7 @@ def create_embedding_model(
     db: DatabaseSession,
     request_id: str | None = Header(default=None, alias="X-Request-ID"),
 ) -> PlatformEmbeddingModelAdminRead:
-    require_platform_admin(principal)
+    require_platform_permission(principal, "platform.models.manage")
     model = PlatformEmbeddingModel(
         id=uuid4(),
         code=payload.code,
@@ -135,7 +135,7 @@ def update_embedding_model(
     db: DatabaseSession,
     request_id: str | None = Header(default=None, alias="X-Request-ID"),
 ) -> PlatformEmbeddingModelAdminRead:
-    require_platform_admin(principal)
+    require_platform_permission(principal, "platform.models.manage")
     model = db.get(PlatformEmbeddingModel, model_id)
     if model is None:
         raise HTTPException(
