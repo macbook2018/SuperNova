@@ -445,6 +445,14 @@ def test_platform_rbac_grant_revoke_and_audit(client: TestClient) -> None:
     assert granted.status_code == 201, granted.text
     assert granted.json()["role"] == "finance"
 
+    assigned_roles = client.get(
+        f"/admin/platform/users/{customer['user']['id']}/roles",
+        headers=headers(admin),
+    )
+    assert assigned_roles.status_code == 200
+    assert assigned_roles.json()[0]["role"] == "finance"
+    assert assigned_roles.json()[0]["active"] is True
+
     customer_access = client.get(
         "/admin/platform/access", headers=headers(customer)
     )
