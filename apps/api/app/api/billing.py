@@ -132,7 +132,8 @@ def create_billing_plan(
     record_platform_audit(
         db, actor_user_id=principal.user.id, target_user_id=None,
         action="platform.billing.plan.create", resource_type="billing_plan",
-        resource_id=f"{plan.code}:{plan.revision}", reason="创建套餐版本",
+        resource_id=f"{plan.code}:{plan.revision}",
+        reason="创建套餐版本",
         request_id=request_id,
         details={"currency": plan.currency, "subscription_price_minor": plan.subscription_price_minor},
     )
@@ -450,7 +451,11 @@ def create_billing_reconciliation(
         db, actor_user_id=principal.user.id, target_user_id=None,
         action="platform.billing.reconciliation.run", resource_type="billing_reconciliation",
         resource_id=str(run.id), reason="执行账务对账", request_id=request_id,
-        details={"period_start": payload.period_start.isoformat(), "period_end": payload.period_end.isoformat(), "status": run.status},
+        details={
+            "period_start": payload.period_start.isoformat(),
+            "period_end": payload.period_end.isoformat(),
+            "status": run.status,
+        },
     )
     db.commit()
     return BillingReconciliationRunRead.model_validate(run)
