@@ -6,7 +6,6 @@ import pytest
 from app.api import embedding_models
 from app.knowledge.embeddings import EmbeddingBatch
 from app.schemas.knowledge import PlatformEmbeddingModelCreate
-from pydantic import ValidationError
 
 
 def _model(**overrides):
@@ -100,7 +99,7 @@ def test_platform_embedding_schema_requires_1536_and_rejects_chat_only_provider(
     }
     assert PlatformEmbeddingModelCreate(**base).dimensions == 1536
 
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValueError):
         PlatformEmbeddingModelCreate(**{**base, "dimensions": 1024})
 
     with pytest.raises(ValidationError):
