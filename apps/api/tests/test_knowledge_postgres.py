@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import os
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
 from app.db.base import Base
-from app.knowledge import retrieval
+from app.knowledge import retrieval, worker as knowledge_worker
 from app.knowledge.embeddings import EmbeddingBatch, EmbeddingConfig
 from app.models import __all__ as MODEL_EXPORTS
 from app.models.catalog import KnowledgeBase, Persona, PersonaKnowledgeBase
@@ -14,6 +15,7 @@ from app.models.identity import Tenant
 from app.models.knowledge import (
     KnowledgeChunk,
     KnowledgeDocument,
+    KnowledgeIngestionJob,
     KnowledgeUsageRecord,
 )
 from sqlalchemy import create_engine, func, select, text
@@ -218,3 +220,85 @@ def test_postgres_hybrid_retrieval_returns_only_persona_linked_citations(
         assert "不可信的引用数据" in context
         assert "其他人格内部信息" not in context
         assert db.scalar(select(func.count(KnowledgeUsageRecord.id))) == 1
+
+
+@pytest.mark.parametrize(
+    ("job_type", "document_status", "active_index_version", "expected_document_status"),
+    [
+        ("ingest", "processing", 0, "failed"),
+        ("reindex", "ready", 1, "ready"),
+        ("delete", "deleting", 1, "deleting"),
+    ],
+)
+def test_knowledge_worker_dead_letters_expired_jobs_at_max_attempts(
+    postgres_session_factory,
+    monkeypatch: pytest.MonkeyPatch,
+    job_type: str,
+    document_status: str,
+    active_index_version: int,
+    expected_document_status: str,
+) -> None:
+    tenant_id = uuid4()
+    knowledge_base = _knowledge_base(tenant_id, f"Retry {job_type}")
+    document_id = uuid4()
+    now = datetime.now(UTC)
+    document = KnowledgeDocument(
+        id=document_id,
+        tenant_id=tenant_id,
+        knowledge_base_id=knowledge_base.id,
+        original_filename=f"{job_type}.md",
+        source_type="upload",
+        source_url=None,
+        object_key=f"tenant/{tenant_id}/knowledge/{knowledge_base.id}/{document_id}.md",
+        mime_type="text/markdown",
+        file_size_bytes=0,
+        sha256=hashlib.sha256(job_type.encode("utf-8")).hexdigest(),
+        status=document_status,
+        active_index_version=active_index_version,
+        pending_index_version=max(1, active_index_version),
+        chunk_count=0,
+    )
+    job = KnowledgeIngestionJob(
+        id=uuid4(),
+        tenant_id=tenant_id,
+        knowledge_base_id=knowledge_base.id,
+        document_id=document_id,
+        job_type=job_type,
+        status="running",
+        dedupe_key=f"expired-{job_type}-{uuid4().hex}",
+        index_version=max(1, active_index_version),
+        attempts=5,
+        max_attempts=5,
+        available_at=now - timedelta(minutes=2),
+        locked_at=now - timedelta(minutes=2),
+        lease_expires_at=now - timedelta(minutes=1),
+        worker_id="stale-worker",
+    )
+
+    with postgres_session_factory() as db:
+        db.add(Tenant(id=tenant_id, name=f"Retry {job_type}", status="active"))
+        db.flush()
+        db.add(knowledge_base)
+        db.flush()
+        db.add(document)
+        db.flush()
+        db.add(job)
+        db.commit()
+
+    monkeypatch.setattr(knowledge_worker, "SessionLocal", postgres_session_factory)
+    monkeypatch.setattr(knowledge_worker, "WORKER_ID", "knowledge-retry-test-worker")
+
+    assert knowledge_worker._claim_job() is None
+
+    with postgres_session_factory() as db:
+        saved_job = db.get(KnowledgeIngestionJob, job.id)
+        saved_document = db.get(KnowledgeDocument, document_id)
+        assert saved_job is not None
+        assert saved_job.status == "dead_letter"
+        assert saved_job.attempts == 5
+        assert saved_job.last_error == "knowledge_max_attempts_exceeded"
+        assert saved_job.worker_id is None
+        assert saved_job.lease_expires_at is None
+        assert saved_document is not None
+        assert saved_document.status == expected_document_status
+        assert saved_document.error_code == "MaxAttemptsExceeded"

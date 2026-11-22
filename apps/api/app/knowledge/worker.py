@@ -55,6 +55,23 @@ def _claim_job() -> UUID | None:
         )
         if job is None:
             return None
+        if job.attempts >= job.max_attempts:
+            job.status = "dead_letter"
+            job.last_error = "knowledge_max_attempts_exceeded"
+            job.worker_id = None
+            job.locked_at = None
+            job.lease_expires_at = None
+            document = db.get(KnowledgeDocument, job.document_id)
+            if document is not None:
+                if job.job_type != "delete":
+                    if job.job_type == "reindex" and document.active_index_version > 0:
+                        document.status = "ready"
+                    else:
+                        document.status = "failed"
+                document.error_code = "MaxAttemptsExceeded"
+                document.error_message = "知识库任务超过最大重试次数，请手动重试"
+            db.commit()
+            return None
         job.status = "running"
         job.attempts += 1
         job.locked_at = now
