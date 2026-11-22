@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import ChatImportsView from './components/ChatImportsView.vue'
+import PlatformAdminView from './components/PlatformAdminView.vue'
 import {
   Activity, AlertCircle, ArrowRight, Bell, Bot, Check, CheckCircle2,
   ChevronDown, ChevronRight, CircleHelp, Copy, Cpu, Database, Download, FileText,
@@ -36,7 +37,7 @@ import {
   type UsageSummary,
 } from './lib/api'
 
-type Page = 'overview' | 'personas' | 'providers' | 'knowledge' | 'knowledgeDetail' | 'chatImports' | 'api' | 'billing' | 'usage' | 'settings'
+type Page = 'overview' | 'personas' | 'providers' | 'knowledge' | 'knowledgeDetail' | 'chatImports' | 'api' | 'billing' | 'usage' | 'settings' | 'platformAdmin'
 type PersonaView = Persona & { color: string }
 type KnowledgeBaseView = KnowledgeBase & { color: string; docs: KnowledgeDocument[] }
 
@@ -48,6 +49,7 @@ let toastTimer: number | undefined
 const authenticated = ref(false)
 const currentUser = ref<User | null>(null)
 const currentTenant = ref<Tenant | null>(null)
+const platformAdminAccess = ref(false)
 const authMode = ref<'login' | 'register'>('login')
 const authBusy = ref(false)
 const authError = ref('')
@@ -64,6 +66,7 @@ const titles: Record<Page, string> = {
   billing: '套餐与额度',
   usage: '用量与账单',
   settings: '账户设置',
+  platformAdmin: '平台模型管理',
 }
 const descriptions: Record<Page, string> = {
   overview: '查看工作空间中的人格、模型供应商和资源状态。',
@@ -76,6 +79,7 @@ const descriptions: Record<Page, string> = {
   billing: '查看当前订阅、实时额度预留、影子计价和账本记录；当前不会产生真实扣款。',
   usage: '查看真实模型调用次数、输入输出 Token、响应时间和未计量请求。',
   settings: '查看账户资料与安全设置。',
+  platformAdmin: '管理平台统一对话模型、Embedding 模型、供应商凭据引用和模型价格。',
 }
 const nav = [
   {
@@ -98,6 +102,10 @@ const nav = [
       { key: 'billing' as Page, label: '套餐与额度', icon: Wallet },
       { key: 'usage' as Page, label: '用量记录', icon: Activity },
     ],
+  },
+  {
+    label: '平台管理',
+    items: [{ key: 'platformAdmin' as Page, label: '平台模型管理', icon: Settings2 }],
   },
 ]
 const activeNav = computed(() => page.value === 'knowledgeDetail' ? 'knowledge' : page.value)
@@ -199,6 +207,15 @@ async function loadWorkspace() {
   if (!kbs.value.some(kb => kb.id === selectedId.value)) selectedId.value = kbs.value[0]?.id ?? ''
 }
 
+async function loadPlatformAdminAccess() {
+  try {
+    await request<PlatformModel[]>('/admin/platform/models')
+    platformAdminAccess.value = true
+  } catch {
+    platformAdminAccess.value = false
+  }
+}
+
 async function loadKnowledgeDetail(showError = false) {
   if (!selectedId.value) return
   knowledgeBusy.value = true
@@ -268,6 +285,7 @@ async function loadIdentity() {
   currentTenant.value = identity.tenant
   authenticated.value = true
   await loadWorkspace()
+  await loadPlatformAdminAccess()
   await loadBilling()
   await loadUsage()
 }
@@ -300,6 +318,7 @@ async function submitAuth() {
     currentTenant.value = response.tenant
     authenticated.value = true
     await loadWorkspace()
+    await loadPlatformAdminAccess()
     notify(authMode.value === 'login' ? '登录成功' : '账户创建成功')
   } catch (error) {
     authError.value = error instanceof Error ? error.message : '请求失败，请稍后重试'
@@ -320,6 +339,7 @@ async function logout() {
   authenticated.value = false
   currentUser.value = null
   currentTenant.value = null
+  platformAdminAccess.value = false
   personas.value = []
   providers.value = []
   kbs.value = []
@@ -842,7 +862,7 @@ async function revokeKey(key: ApiKey) {
  <aside class="sidebar" :class="{'sidebar-open':mobileOpen}">
   <div class="brand"><img src="/logo-rounded.svg" alt="SuperNova"><div><b>SuperNova</b><small>智能体平台</small></div><i>BETA</i></div>
   <button class="workspace" @click="notify('当前账户使用单一默认工作空间')"><span>{{(currentTenant?.name||'S').slice(0,1).toUpperCase()}}</span><div><b>{{currentTenant?.name||'我的工作空间'}}</b><small>{{currentTenant?.role==='owner'?'工作空间所有者':'工作空间成员'}}</small></div><ChevronDown :size="15"/></button>
-  <nav><div v-for="g in nav" :key="g.label" class="nav-group"><small>{{g.label}}</small><button v-for="n in g.items" :key="n.key" :class="{active:activeNav===n.key}" @click="go(n.key)"><component :is="n.icon" :size="18"/>{{n.label}}<em v-if="n.key==='personas'">{{personas.length}}</em></button></div></nav>
+  <nav><div v-for="g in nav" v-if="g.label !== '平台管理' || platformAdminAccess" :key="g.label" class="nav-group"><small>{{g.label}}</small><button v-for="n in g.items" :key="n.key" :class="{active:activeNav===n.key}" @click="go(n.key)"><component :is="n.icon" :size="18"/>{{n.label}}<em v-if="n.key==='personas'">{{personas.length}}</em></button></div></nav>
   <div class="sidebar-bottom"><div class="help"><LifeBuoy :size="17"/><div><b>需要帮助？</b><small>查看使用指南与接口文档</small></div></div><button class="side-setting" @click="go('settings')"><Settings2 :size="17"/>账户设置</button><div class="profile"><span>{{(currentUser?.display_name||'U').slice(0,1).toUpperCase()}}</span><div><b>{{currentUser?.display_name||'用户'}}</b><small>{{currentUser?.email}}</small></div><button @click="logout" aria-label="退出登录"><LogOut :size="16"/></button></div></div>
  </aside>
  <main class="main">
@@ -891,6 +911,8 @@ async function revokeKey(key: ApiKey) {
     <section v-else class="panel empty"><Server :size="30"/><b>还没有配置模型供应商</b><small>添加 DeepSeek、OpenAI、通义千问或任意 OpenAI 兼容服务。</small><button class="btn primary" @click="editProvider()"><Plus :size="15"/>添加第一个供应商</button></section>
     <div class="info"><ShieldCheck :size="17"/><div><b>凭据安全</b><small>模型供应商 API Key 使用 Fernet 对称加密后存入数据库；接口只返回密钥末四位提示，不返回密文或明文。生产环境必须配置独立的 SUPERNOVA_ENCRYPTION_KEY。</small></div></div>
    </template>
+
+   <PlatformAdminView v-else-if="page==='platformAdmin'" />
 
    <template v-else-if="page==='knowledge'">
     <section class="kb-summary">
