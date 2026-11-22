@@ -7,7 +7,7 @@ from typing import Protocol
 from uuid import UUID
 
 import docker
-from docker.errors import APIError, NotFound
+from docker.errors import NotFound
 
 
 class RuntimeProvider(Protocol):
@@ -51,6 +51,8 @@ class DockerRuntimeProvider:
     def provision(self, *, tenant_id: UUID, bot_instance_id: UUID, runtime_config: dict) -> str:
         name = self._name(bot_instance_id)
         instance_root = self.runtime_root / tenant_id.hex / bot_instance_id.hex
+        instance_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        instance_root.chmod(0o700)
         config_dir = instance_root / "config"
         config_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         (instance_root / "data").mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -88,7 +90,10 @@ class DockerRuntimeProvider:
             )
 
         volume = self._volume_name(bot_instance_id)
-        self.client.volumes.create(name=volume, labels=labels)
+        try:
+            self.client.volumes.get(volume)
+        except NotFound:
+            self.client.volumes.create(name=volume, labels=labels)
         self.client.containers.create(
             image=self.image,
             name=name,
@@ -97,6 +102,7 @@ class DockerRuntimeProvider:
             labels=labels,
             network=network.name,
             environment={"SUPERNOVA_RUNTIME_CONFIG": "/etc/supernova/runtime.json"},
+            extra_hosts={"host.docker.internal": "host-gateway"},
             volumes={
                 str(config_dir): {"bind": "/etc/supernova", "mode": "ro"},
                 volume: {"bind": "/var/lib/astrbot", "mode": "rw"},
@@ -143,7 +149,11 @@ class DockerRuntimeProvider:
             container = self.client.containers.get(resource_id)
             if container.labels.get("com.supernova.managed") != "true":
                 raise RuntimeError("runtime_resource_not_managed")
+            tenant_hex = container.labels.get("com.supernova.tenant_id", "").replace("-", "")
             container.remove(force=True, v=True)
+            if re.fullmatch(r"[0-9a-f]{32}", tenant_hex):
+                import shutil
+                shutil.rmtree(self.runtime_root / tenant_hex / bot_hex, ignore_errors=True)
         except NotFound:
             pass
         try:
