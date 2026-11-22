@@ -240,7 +240,7 @@ def test_non_admin_cannot_manage_plans_or_platform_models(client: TestClient) ->
         },
     )
     assert denied_plan.status_code == 403
-    assert denied_plan.json()["detail"]["code"] == "platform_admin_required"
+    assert denied_plan.json()["detail"]["code"] == "platform_permission_required"
 
     denied_model = client.get("/admin/platform/models", headers=headers(customer))
     assert denied_model.status_code == 403
@@ -394,7 +394,7 @@ def test_platform_admin_can_run_shadow_reconciliation_and_non_admin_is_denied(
         },
     )
     assert denied.status_code == 403
-    assert denied.json()["detail"]["code"] == "platform_admin_required"
+    assert denied.json()["detail"]["code"] == "platform_permission_required"
 
     response = client.post(
         "/admin/billing/reconciliation/run",
