@@ -215,7 +215,7 @@ def test_platform_role_grant_rejects_expired_and_inactive_assignments(
             db,
             code="temporary_support",
             name="临时支持",
-            permissions=("platform.users.read",),
+            permissions=("platform.users.read", "platform.tenants.read"),
         )
         _assign_role(db, user_id=UUID(actor["user"]["id"]), role=super_admin)
         _assign_role(
@@ -329,3 +329,36 @@ def test_platform_user_search_rejects_users_without_read_permission(
     response = client.get("/admin/platform/users", headers=_headers(user))
     assert response.status_code == 403
     assert response.json()["detail"]["code"] == "platform_permission_required"
+
+
+def test_platform_user_read_does_not_disclose_tenant_metadata_without_tenant_permission(
+    rbac_environment: tuple[TestClient, sessionmaker],
+) -> None:
+    client, factory = rbac_environment
+    actor = _register(client, "user-read-only@example.com")
+    target = _register(client, "private-tenant-customer@example.com")
+
+    with factory() as db:
+        reader = _seed_role(
+            db,
+            code="user_directory_reader",
+            name="用户目录只读",
+            permissions=("platform.users.read",),
+        )
+        _assign_role(db, user_id=UUID(actor["user"]["id"]), role=reader)
+
+    headers = _headers(actor)
+    listing = client.get("/admin/platform/users", headers=headers)
+    assert listing.status_code == 200
+    target_row = next(
+        item for item in listing.json()["items"]
+        if item["id"] == target["user"]["id"]
+    )
+    assert target_row["tenant_count"] is None
+
+    detail = client.get(
+        f"/admin/platform/users/{target['user']['id']}",
+        headers=headers,
+    )
+    assert detail.status_code == 200
+    assert detail.json()["tenants"] == []
