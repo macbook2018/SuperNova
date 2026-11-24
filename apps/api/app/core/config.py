@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
     platform_admin_emails: str = ""
     platform_credentials_json: str = "{}"
+    billing_subscription_enforcement_enabled: bool = True
     s3_endpoint_url: str = "http://minio:9000"
     s3_access_key: str = "supernova"
     s3_secret_key: str = "change-me-local-only"

@@ -214,6 +214,7 @@ def reserve_gateway_request(
     output_token_reservation: int,
     price_version_id: UUID | None,
     reserve_platform_tokens: bool = True,
+    require_active_subscription: bool = True,
 ) -> ReservationDecision:
     """Atomically reserve request/token quotas and claim an idempotency key.
 
@@ -246,7 +247,7 @@ def reserve_gateway_request(
     )
     current = _current_subscription_for_update(db, tenant_id, now)
     legacy_byok = policy is None and model_source == "byok"
-    if current is None and not legacy_byok:
+    if current is None and require_active_subscription and not legacy_byok:
         raise HTTPException(
             status_code=403,
             detail={
@@ -641,8 +642,8 @@ def finalize_gateway_request(
             quantity=1,
             currency=currency,
             plan_id=plan_id,
-            state="included",
-            included_units=1,
+            state="included" if plan_id else "unmetered",
+            included_units=1 if plan_id else 0,
         )
 
     item_by_code = {

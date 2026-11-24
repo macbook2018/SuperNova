@@ -20,6 +20,7 @@ from app.billing.metering import (
     run_billing_reconciliation,
     settle_unknown_reservation_with_usage,
 )
+from app.core.config import Settings
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import app, asgi_app
@@ -679,6 +680,16 @@ def test_platform_model_routes_without_tenant_provider_and_records_source(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     owner = register(client)
+    monkeypatch.setattr(
+        gateway,
+        "get_settings",
+        lambda: Settings(billing_subscription_enforcement_enabled=False),
+    )
+    with app.state.test_session_factory() as seed_db:
+        seed_db.query(TenantSubscription).filter(
+            TenantSubscription.tenant_id == UUID(owner["tenant"]["id"])
+        ).delete()
+        seed_db.commit()
     monkeypatch.setattr(gateway, "resolve_platform_api_key", lambda _ref: "sk-platform-secret-123")
     model_id = uuid4()
     now = datetime.now(UTC)
@@ -932,6 +943,99 @@ def test_new_tenant_requires_subscription_for_byok_calls(
     assert response.json()["error"]["code"] == "subscription_required"
     assert FakeClient.calls == []
 
+
+
+
+
+def test_pre_subscription_mode_allows_byok_calls_without_subscription(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner = register(client)
+    provider = create_provider(client, owner)
+    persona = create_persona(client, owner, provider["id"])
+    key = create_api_key(client, owner)
+    FakeClient.calls = []
+    FakeClient.response = FakeResponse(
+        {
+            "id": "chatcmpl-pre-subscription-byok",
+            "object": "chat.completion",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "BYOK pre-subscription ok"},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 2, "completion_tokens": 2, "total_tokens": 4},
+        }
+    )
+    monkeypatch.setattr(gateway.httpx, "Client", FakeClient)
+    monkeypatch.setattr(
+        gateway,
+        "get_settings",
+        lambda: Settings(billing_subscription_enforcement_enabled=False),
+    )
+
+    with app.state.test_session_factory() as seed_db:
+        seed_db.query(TenantSubscription).filter(
+            TenantSubscription.tenant_id == UUID(owner["tenant"]["id"])
+        ).delete()
+        seed_db.commit()
+
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {key}"},
+        json={
+            "model": persona["slug"],
+            "messages": [{"role": "user", "content": "hello"}],
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["choices"][0]["message"]["content"] == "BYOK pre-subscription ok"
+    assert len(FakeClient.calls) == 1
+
+    with app.state.test_session_factory() as seed_db:
+        reservation = seed_db.scalar(
+            select(BillingReservation).where(
+                BillingReservation.tenant_id == UUID(owner["tenant"]["id"])
+            )
+        )
+        assert reservation is not None
+        assert reservation.subscription_id is None
+        assert reservation.plan_id is None
+
+
+
+
+def test_v1_models_lists_personas_before_subscription_rollout(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner = register(client)
+    provider = create_provider(client, owner)
+    persona = create_persona(client, owner, provider["id"])
+    key = create_api_key(client, owner)
+    monkeypatch.setattr(
+        gateway,
+        "get_settings",
+        lambda: Settings(billing_subscription_enforcement_enabled=False),
+    )
+
+    with app.state.test_session_factory() as seed_db:
+        seed_db.query(TenantSubscription).filter(
+            TenantSubscription.tenant_id == UUID(owner["tenant"]["id"])
+        ).delete()
+        seed_db.commit()
+
+    response = client.get(
+        "/v1/models",
+        headers={"Authorization": f"Bearer {key}"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert persona["slug"] in [item["id"] for item in response.json()["data"]]
 
 def test_historical_tenant_without_billing_policy_keeps_byok_compatibility(
     client: TestClient,
