@@ -26,8 +26,11 @@ class RuntimeProvider(Protocol):
 class DockerRuntimeProvider:
     """Docker provider. Only the dedicated Worker Manager may instantiate this class."""
 
-    def __init__(self, *, image: str, runtime_root: str, memory_limit: str = "512m",
-                 cpu_limit: float = 1.0, pids_limit: int = 128, compose_project: str = "supernova") -> None:
+    def __init__(
+        self, *, image: str, runtime_root: str, memory_limit: str = "512m",
+        cpu_limit: float = 1.0, pids_limit: int = 128,
+        compose_project: str = "supernova",
+    ) -> None:
         if not image or image.endswith(":latest") or image == "latest":
             raise ValueError("AstrBot runtime image must use an immutable pinned tag")
         if not re.fullmatch(r"[a-zA-Z0-9_.:/-]+", image):
