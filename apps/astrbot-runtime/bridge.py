@@ -5,9 +5,7 @@ import asyncio
 import json
 import logging
 import os
-import signal
 import sys
-import time
 from pathlib import Path
 from typing import Any
 
@@ -149,13 +147,21 @@ async def start_bridge() -> tuple[web.AppRunner, aiohttp.ClientSession]:
     return runner, session
 
 
-def bootstrap_astrbot(config: dict[str, Any]) -> None:
+def storage_root(config: dict[str, Any]) -> Path:
+    # Default policy: no conversation/session data survives a container restart.
+    # A durable retention period requires explicit product approval and a purge worker.
+    if config.get("storage", {}).get("session_retention_days", 0) != 0:
+        raise RuntimeError("persistent_sessions_not_approved")
+    return Path("/tmp/supernova-astrbot-session")
+
+
+def bootstrap_astrbot(config: dict[str, Any], root: Path) -> None:
     # The installed, pinned AstrBot package supplies its public default config.
     from copy import deepcopy
 
     from astrbot.core.config.default import DEFAULT_CONFIG
 
-    data_root = Path("/var/lib/astrbot/data")
+    data_root = root / "data"
     data_root.mkdir(parents=True, exist_ok=True)
     astrbot = deepcopy(DEFAULT_CONFIG)
     old_path = data_root / "cmd_config.json"
@@ -221,12 +227,13 @@ async def heartbeat_loop(
 async def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
     config = runtime_config()
-    bootstrap_astrbot(config)
+    root = storage_root(config)
+    bootstrap_astrbot(config, root)
     runner, session = await start_bridge()
     process = await asyncio.create_subprocess_exec(
         sys.executable, "/opt/astrbot/main.py",
         cwd="/opt/astrbot",
-        env={**os.environ, "ASTRBOT_ROOT": "/var/lib/astrbot"},
+        env={**os.environ, "ASTRBOT_ROOT": str(root)},
     )
     task = asyncio.create_task(heartbeat_loop(session, process))
     try:
