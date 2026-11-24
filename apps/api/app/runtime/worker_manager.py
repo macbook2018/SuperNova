@@ -35,6 +35,7 @@ def _provider() -> DockerRuntimeProvider:
         memory_limit=settings.runtime_memory_limit,
         cpu_limit=settings.runtime_cpu_limit,
         pids_limit=settings.runtime_pids_limit,
+        compose_project=settings.runtime_gateway_compose_project,
     )
 
 
