@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 from typing import Protocol
@@ -56,8 +57,8 @@ class DockerRuntimeProvider:
         data_dir = instance_root / "data"
         data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         # Dedicated non-root AstrBot UID must be able to read its private config.
-        config_dir.chown(10001, 10001)
-        data_dir.chown(10001, 10001)
+        os.chown(config_dir, 10001, 10001)
+        os.chown(data_dir, 10001, 10001)
         config_payload = runtime_config.get("config", runtime_config)
         credentials_payload = runtime_config.get("credentials", {})
         for filename, payload in (
@@ -71,7 +72,7 @@ class DockerRuntimeProvider:
                 encoding="utf-8",
             )
             temporary.chmod(0o600)
-            temporary.chown(10001, 10001)
+            os.chown(temporary, 10001, 10001)
             temporary.replace(target)
             target.chmod(0o600)
 
