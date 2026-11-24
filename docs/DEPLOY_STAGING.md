@@ -1,51 +1,46 @@
-# SuperNova staging deployment on Server A
+# SuperNova staging deployment — Hong Kong
 
 This is a temporary, low-concurrency staging deployment. It is isolated from the existing Docker projects and must not stop or modify Activation Manager, Website Watch, EmbedEaseAI, OpenClaw or other sites.
 
 ## Target topology
 
-- Host: Server A, Debian 12, 2 vCPU, 4 GB RAM.
+- Host: the Hong Kong staging host, Debian 12, 2 vCPU, 4 GB RAM.
 - Existing host Nginx (Baota) remains the only public HTTP/HTTPS entry point.
 - Console: 127.0.0.1:18083, served by a small Nginx container.
 - API: 127.0.0.1:18082.
 - PostgreSQL/pgvector and Redis are private to the Compose network.
-- Existing MinIO is reused through host.docker.internal:9000; SuperNova uses its own bucket and least-privilege access key.
-- No server-side source checkout or image build. GitHub Actions builds and publishes immutable SHA-tagged images to GHCR.
+- Dedicated Silo (S3-compatible) object storage: standalone container `supernova-staging-s3` on `supernova-staging_default`; endpoint `http://supernova-staging-s3:9000`. Keep its named volume `supernova_staging_s3_data` and bucket-only credentials; do not publish ports 9000/9001.
+- No server-side source checkout or image build. GitHub Actions builds and publishes immutable SHA-tagged images to Docker Hub (`macbook201808/supernova`).
 
-The Compose memory limits total about 976 MiB. They are ceilings, not guaranteed reservations. Monitor host memory, Swap, container OOM events and disk during testing. If memory pressure rises, stop staging workloads and review before changing existing services.
+The core Compose memory limits total about 976 MiB, plus the separately managed 512 MiB Silo ceiling. They are ceilings, not guaranteed reservations. Monitor host memory, Swap, container OOM events and disk during testing. If memory pressure rises, stop staging workloads and review before changing existing services.
 
 ## Domains (confirmed)
 
-- Console: bot.wet001.com
-- API: api.wet001.com
+- Console: bot.ai-supernova.com
+- API: api.ai-supernova.com
 
-Create A records for both names pointing to Server A's public IP. Do not change existing DNS records.
+Create A records for both names pointing to the Hong Kong staging host's public IP. Do not change existing DNS records.
 
 In Baota:
-1. Add a site for bot.wet001.com, issue/attach its HTTPS certificate, and reverse-proxy / to http://127.0.0.1:18083.
-2. Add a site for api.wet001.com, issue/attach its HTTPS certificate, and reverse-proxy / to http://127.0.0.1:18082.
+1. Add a site for bot.ai-supernova.com, issue/attach its HTTPS certificate, and reverse-proxy / to http://127.0.0.1:18083.
+2. Add a site for api.ai-supernova.com, issue/attach its HTTPS certificate, and reverse-proxy / to http://127.0.0.1:18082.
 3. For the API site, set client_max_body_size 45m and proxy read/send timeouts to at least 300 seconds.
 4. Preserve all existing vhost files. Do not replace the global Nginx configuration.
 
 The Console image is built with VITE_API_BASE_URL; set the GitHub repository variable STAGING_API_BASE_URL to the exact HTTPS API origin.
 
-## MinIO preparation
+## Object storage preparation
 
-Do not use the existing MinIO root credentials in the SuperNova application.
+Use the dedicated Silo container (the deployed version is pinned to `pgsty/silo:RELEASE.2026-11-12T00-00-00Z`).
+Start PostgreSQL and Redis first to create the project network, then attach the storage container. Create bucket `supernova-staging`, a dedicated application account, and attach `deploy/minio/supernova-staging-policy.json`. Verify object put/get/delete as that account, not the storage root user. Set the server-only .env endpoint to `http://supernova-staging-s3:9000`.
 
-1. In the existing MinIO Console, create bucket supernova-staging.
-2. Create a dedicated user/service account for SuperNova.
-3. Apply deploy/minio/supernova-staging-policy.json (or an equivalent bucket-only read/write policy).
-4. Put the generated access key and secret into the server-only .env using the bootstrap script.
-5. Do not paste MinIO credentials into chat or commit them to GitHub.
-
-Server A currently exposes the existing MinIO API/Console ports on public interfaces. This deployment does not change those bindings because other applications may depend on them. Review their firewall restrictions separately after confirming those dependencies.
+Keep root credentials under /opt/supernova-storage with mode 600. The application must not use root credentials. The standalone storage container is not a Compose-managed service and must remain connected to the project network. Do not tear down the project network during normal updates. Back up the S3 volume as well as PostgreSQL before destructive maintenance.
 
 ## One-time server setup
 
 Create a dedicated deploy account. Docker-group membership is effectively root-equivalent; protect its SSH key accordingly.
 
-As root on Server A:
+As root on the Hong Kong staging host:
 
 ~~~bash
 useradd --create-home --shell /bin/bash supernova-deploy 2>/dev/null || true
@@ -60,7 +55,7 @@ and set owner supernova-deploy:supernova-deploy, mode 600. The private key goes 
 
 The deployment account must be able to run Docker commands and write to /opt/supernova-staging.
 
-On the first deployment workflow run, the workflow publishes the images and uploads the scripts, then reports that bootstrap is required if .env is absent. After the MinIO bucket/user and DNS/domain decisions are ready, run:
+Download the deployment files from the stable branch or use the first workflow upload. Once the dedicated S3 credentials and DNS/domain decisions are ready, run:
 
 ~~~bash
 cd /opt/supernova-staging
@@ -68,8 +63,7 @@ chmod 700 bootstrap-staging.sh deploy-staging.sh rollback-staging.sh
 ./bootstrap-staging.sh
 ~~~
 
-The bootstrap script generates PostgreSQL, Redis, JWT and Fernet secrets locally and writes a mode-600 .env. It prompts for the MinIO bucket-only access key/secret and the platform-admin email. Do not share the resulting .env.
-The bootstrap script generates PostgreSQL, Redis, JWT and Fernet secrets locally and writes a mode-600 .env. It prompts for the MinIO bucket-only access key/secret and the platform-admin email. Do not share the resulting .env.
+The bootstrap script generates PostgreSQL, Redis, JWT and Fernet secrets locally and writes a mode-600 .env. It prompts for the S3 bucket-only access key/secret and the platform-admin email. Do not share the resulting .env.
 
 ### Configure platform model credentials
 
@@ -102,16 +96,18 @@ Repository: Settings -> Secrets and variables -> Actions.
 Variables:
 - STAGING_DEPLOY_ENABLED = true (set this only after one-time server setup and GitHub Actions runner checks).
 - STAGING_DEPLOY_PATH = /opt/supernova-staging.
-- STAGING_API_BASE_URL = https://api.wet001.com (change if another API domain is selected).
+- STAGING_API_BASE_URL = https://api.ai-supernova.com (change if another API domain is selected).
 
 Secrets:
-- STAGING_HOST = Server A public IP.
+- STAGING_HOST = the Hong Kong staging host public IP.
 - STAGING_USER = supernova-deploy.
 - STAGING_SSH_PORT = SSH port (usually 22).
 - STAGING_SSH_PRIVATE_KEY = private half of the dedicated deployment key.
-- STAGING_GHCR_READ_TOKEN = GitHub PAT with read:packages, used only by the server to pull private GHCR images.
+- STAGING_SSH_KNOWN_HOSTS = trusted host-key line(s) for the target SSH server, obtained via an already authenticated server console; for port 22 use IP followed by the contents of /etc/ssh/ssh_host_ed25519_key.pub (key type and public key only).
+- DOCKERHUB_USERNAME = macbook201808.
+- DOCKERHUB_TOKEN = Docker Hub publishing token.
 
-The workflow uses the repository-scoped GITHUB_TOKEN with packages: write to publish images. The server PAT is not committed to the repository.
+The workflow publishes SHA-tagged images with the existing Docker Hub credentials. Keep STAGING_DEPLOY_ENABLED=false until the new host, its deployment key, pinned host key, object storage and .env are verified. Do not reuse an old SHA tag built with a different Console API origin. After the new host is ready, manually dispatch CI on the current Phase 6 branch. Do not merge or deploy the Phase 7 draft as part of this infrastructure cutover.
 
 ## CI and automatic deployment
 
@@ -127,7 +123,7 @@ Before enabling deployment, verify GitHub Actions can actually allocate hosted r
 - API, Console, Knowledge Worker and Chat Import Worker health checks must pass before the new SHA is recorded as the last successful deployment.
 - On failure, inspect logs and the backup. The script does not automatically restore database data.
 - Application image rollback is available with ./rollback-staging.sh (or pass an explicit SHA). It does not reverse Alembic migrations or restore database contents. Use it only when the previous application version is compatible with the current schema.
-- Never run docker compose down -v, docker system prune -a, or global volume/image cleanup on Server A.
+- Never run docker compose down -v, docker system prune -a, or global volume/image cleanup on the Hong Kong staging host.
 
 ## Resource monitoring
 
