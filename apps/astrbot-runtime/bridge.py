@@ -228,6 +228,10 @@ async def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
     config = runtime_config()
     root = storage_root(config)
+    root.mkdir(parents=True, exist_ok=True)
+    # Importing astrbot.core initializes SQLite and configuration immediately.
+    # Set the ephemeral root BEFORE any AstrBot import, not just for the child.
+    os.environ["ASTRBOT_ROOT"] = str(root)
     bootstrap_astrbot(config, root)
     runner, session = await start_bridge()
     process = await asyncio.create_subprocess_exec(
