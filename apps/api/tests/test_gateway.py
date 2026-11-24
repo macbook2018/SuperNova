@@ -1897,6 +1897,7 @@ def _configure_audio_transcription(monkeypatch: pytest.MonkeyPatch) -> None:
             audio_transcription_timeout_seconds=120.0,
             audio_transcription_sample_rate=24000,
             audio_transcription_max_decoded_bytes=64 * 1024 * 1024,
+            billing_subscription_enforcement_enabled=True,
         ),
     )
     monkeypatch.setattr(
@@ -2008,6 +2009,7 @@ def test_audio_transcription_requires_platform_configuration(
             audio_transcription_credential_ref=None,
             audio_transcription_max_file_bytes=25 * 1024 * 1024,
             audio_transcription_timeout_seconds=120.0,
+            billing_subscription_enforcement_enabled=True,
         ),
     )
     response = client.post(
@@ -2073,6 +2075,7 @@ def test_audio_transcription_rejects_empty_and_oversized_files(
             audio_transcription_credential_ref="platform-speech",
             audio_transcription_max_file_bytes=4,
             audio_transcription_timeout_seconds=120.0,
+            billing_subscription_enforcement_enabled=True,
         ),
     )
     oversized = client.post(
