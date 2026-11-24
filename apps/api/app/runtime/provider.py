@@ -27,7 +27,7 @@ class DockerRuntimeProvider:
     """Docker provider. Only the dedicated Worker Manager may instantiate this class."""
 
     def __init__(self, *, image: str, runtime_root: str, memory_limit: str = "512m",
-                 cpu_limit: float = 1.0, pids_limit: int = 128) -> None:
+                 cpu_limit: float = 1.0, pids_limit: int = 128, compose_project: str = "supernova") -> None:
         if not image or image.endswith(":latest") or image == "latest":
             raise ValueError("AstrBot runtime image must use an immutable pinned tag")
         if not re.fullmatch(r"[a-zA-Z0-9_.:/-]+", image):
@@ -38,6 +38,9 @@ class DockerRuntimeProvider:
         self.memory_limit = memory_limit
         self.cpu_limit = cpu_limit
         self.pids_limit = pids_limit
+        if not re.fullmatch(r"[a-zA-Z0-9_-]+", compose_project):
+            raise ValueError("runtime_compose_project_invalid")
+        self.compose_project = compose_project
 
     @staticmethod
     def _name(bot_instance_id: UUID) -> str:
@@ -101,7 +104,12 @@ class DockerRuntimeProvider:
             )
 
         api_candidates = self.client.containers.list(
-            filters={"label": "com.docker.compose.service=api"}
+            filters={
+                "label": [
+                    "com.docker.compose.service=api",
+                    f"com.docker.compose.project={self.compose_project}",
+                ]
+            }
         )
         if len(api_candidates) != 1:
             raise RuntimeError("runtime_gateway_container_not_unique")
