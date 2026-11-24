@@ -8,7 +8,7 @@ import aiohttp
 import pytest
 from aiohttp import web
 
-BRIDGE_PATH = Path(__file__).resolve().parents[3] / "astrbot-runtime" / "bridge.py"
+BRIDGE_PATH = Path(__file__).resolve().parents[2] / "astrbot-runtime" / "bridge.py"
 SPEC = importlib.util.spec_from_file_location("supernova_astrbot_bridge", BRIDGE_PATH)
 assert SPEC and SPEC.loader
 bridge = importlib.util.module_from_spec(SPEC)
