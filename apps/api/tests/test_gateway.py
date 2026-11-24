@@ -1,12 +1,20 @@
 import hashlib
+import io
 import json
+import wave
 from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID, uuid4
 
+import pysilk
 import pytest
 from app.api import gateway
+from app.audio.silk import (
+    DecodedAudioTooLargeError,
+    InvalidSilkAudioError,
+    decode_silk_to_wav,
+)
 from app.billing.metering import (
     reserve_gateway_request,
     run_billing_reconciliation,
@@ -291,6 +299,14 @@ def test_chat_completion_routes_persona_and_records_actual_usage(
             "model": persona["slug"],
             "messages": [{"role": "user", "content": "你好"}],
             "max_tokens": 4096,
+            "user": "wxid_sender",
+            "account_wxid": "wxid_logged_in",
+            "sender_profile": {
+                "wxid": "wxid_sender",
+                "nickname": "张三",
+                "remark": "张总",
+                "labels": ["意向客户", "已成交"],
+            },
         },
     )
 
@@ -302,10 +318,15 @@ def test_chat_completion_routes_persona_and_records_actual_usage(
     assert call["headers"]["Authorization"] == "Bearer sk-provider-secret-1234"
     assert call["json"]["model"] == "deepseek-flash"
     assert call["json"]["max_tokens"] == 1024
-    assert call["json"]["messages"][0] == {
-        "role": "system",
-        "content": "你是一名耐心、专业的客服。",
-    }
+    system_content = call["json"]["messages"][0]["content"]
+    assert system_content.startswith("你是一名耐心、专业的客服。")
+    assert '"nickname":"张三"' in system_content
+    assert '"remark":"张总"' in system_content
+    assert '"labels":["意向客户","已成交"]' in system_content
+    assert "wxid_sender" not in system_content
+    assert "wxid_logged_in" not in system_content
+    assert "account_wxid" not in call["json"]
+    assert "user" not in call["json"]
 
     summary = client.get("/usage/summary", headers=jwt_headers(owner))
     assert summary.status_code == 200, summary.text
@@ -1419,3 +1440,591 @@ def test_missing_platform_usage_keeps_token_reservation_unknown_and_never_estima
                 BillingAuditEvent.subject_id == str(reservation.id),
             )
         ) == 1
+
+def test_group_chat_session_id_is_not_the_sender_wxid(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner = register(client)
+    provider = create_provider(client, owner)
+    persona = create_persona(client, owner, provider["id"])
+    key = create_api_key(client, owner)
+    FakeClient.calls = []
+    FakeClient.response = FakeResponse(
+        {
+            "id": "chatcmpl-group",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "收到"},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 8, "completion_tokens": 2, "total_tokens": 10},
+        }
+    )
+    monkeypatch.setattr(gateway.httpx, "Client", FakeClient)
+
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {key}"},
+        json={
+            "model": persona["slug"],
+            "messages": [{"role": "user", "content": "今天下午三点开会"}],
+            "user": "123456789@chatroom",
+            "account_wxid": "wxid_logged_in",
+            "speaker": "wxid_group_member",
+            "sender_profile": {
+                "wxid": "wxid_group_member",
+                "nickname": "李四",
+                "remark": "",
+                "labels": [],
+            },
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    upstream = FakeClient.calls[0]["json"]
+    assert upstream["messages"][-1]["content"] == "今天下午三点开会"
+    system_content = upstream["messages"][0]["content"]
+    assert '"nickname":"李四"' in system_content
+    assert "123456789@chatroom" not in system_content
+    assert "wxid_logged_in" not in system_content
+    assert "wxid_group_member" not in system_content
+    assert "user" not in upstream
+    assert "account_wxid" not in upstream
+    assert "speaker" not in upstream
+
+
+def test_wechat_identity_metadata_requires_a_session_user(client: TestClient) -> None:
+    owner = register(client)
+    provider = create_provider(client, owner)
+    persona = create_persona(client, owner, provider["id"])
+    key = create_api_key(client, owner)
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {key}"},
+        json={
+            "model": persona["slug"],
+            "messages": [{"role": "user", "content": "你好"}],
+            "account_wxid": "wxid_logged_in",
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_multimodal_image_content_is_forwarded_and_text_is_used_for_rag(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner = register(client)
+    provider = create_provider(client, owner)
+    persona = create_persona(client, owner, provider["id"])
+    key = create_api_key(client, owner)
+    FakeClient.calls = []
+    FakeClient.response = FakeResponse(
+        {
+            "id": "chatcmpl-image",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "这是一张图片"},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 12, "completion_tokens": 4, "total_tokens": 16},
+        }
+    )
+    retrieval_calls: list[str] = []
+
+    def fake_retrieve(_db, *, tenant_id, persona_id, query):
+        retrieval_calls.append(query)
+        return "", []
+
+    monkeypatch.setattr(gateway.httpx, "Client", FakeClient)
+    monkeypatch.setattr(gateway, "retrieve_persona_context", fake_retrieve)
+
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {key}"},
+        json={
+            "model": persona["slug"],
+            "user": "wxid_sender",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "请看一下这张图片"},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": "data:image/png;base64,aGVsbG8="},
+                        },
+                    ],
+                }
+            ],
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    upstream_content = FakeClient.calls[0]["json"]["messages"][-1]["content"]
+    assert upstream_content[0] == {"type": "text", "text": "请看一下这张图片"}
+    assert upstream_content[1]["type"] == "image_url"
+    assert upstream_content[1]["image_url"]["url"] == "data:image/png;base64,aGVsbG8="
+    assert retrieval_calls == ["请看一下这张图片"]
+
+
+def test_multimodal_rejects_more_than_one_image_in_a_message(client: TestClient) -> None:
+    owner = register(client)
+    provider = create_provider(client, owner)
+    persona = create_persona(client, owner, provider["id"])
+    key = create_api_key(client, owner)
+    image = {"type": "image_url", "image_url": {"url": "data:image/png;base64,aGVsbG8="}}
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {key}"},
+        json={
+            "model": persona["slug"],
+            "messages": [{"role": "user", "content": [image, image]}],
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_sender_profile_uses_documented_utf16_limits_and_removes_controls(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner = register(client)
+    provider = create_provider(client, owner)
+    persona = create_persona(client, owner, provider["id"])
+    key = create_api_key(client, owner)
+    FakeClient.calls = []
+    FakeClient.response = FakeResponse(
+        {
+            "id": "chatcmpl-profile",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "ok"},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4},
+        }
+    )
+    monkeypatch.setattr(gateway.httpx, "Client", FakeClient)
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {key}"},
+        json={
+            "model": persona["slug"],
+            "user": "wxid_sender",
+            "sender_profile": {
+                "wxid": "wxid_sender",
+                "nickname": "张三\u0000",
+                "remark": "",
+                "labels": ["意向客户", "意向客户", "已成交\n"],
+            },
+            "messages": [{"role": "user", "content": "你好"}],
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    system_content = FakeClient.calls[0]["json"]["messages"][0]["content"]
+    assert '"nickname":"张三"' in system_content
+    assert '"labels":["意向客户","已成交"]' in system_content
+    assert chr(0) not in system_content
+
+def test_group_session_idempotency_is_scoped_by_logged_in_account(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner = register(client)
+    provider = create_provider(client, owner)
+    persona = create_persona(client, owner, provider["id"])
+    key = create_api_key(client, owner)
+    FakeClient.calls = []
+    FakeClient.response = FakeResponse(
+        {
+            "id": "chatcmpl-account-scope",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "ok"},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4},
+        }
+    )
+    monkeypatch.setattr(gateway.httpx, "Client", FakeClient)
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "Idempotency-Key": "same-group-message",
+    }
+    common = {
+        "model": persona["slug"],
+        "messages": [{"role": "user", "content": "群里你好"}],
+        "user": "123456789@chatroom",
+    }
+    first = client.post(
+        "/v1/chat/completions",
+        headers=headers,
+        json={**common, "account_wxid": "wxid_account_a"},
+    )
+    second = client.post(
+        "/v1/chat/completions",
+        headers=headers,
+        json={**common, "account_wxid": "wxid_account_b"},
+    )
+
+    assert first.status_code == 200, first.text
+    assert second.status_code == 409
+    assert second.json()["error"]["code"] == "idempotency_key_conflict"
+    assert len(FakeClient.calls) == 1
+
+
+def test_sender_profile_rejects_nickname_over_256_utf16_units(client: TestClient) -> None:
+    owner = register(client)
+    provider = create_provider(client, owner)
+    persona = create_persona(client, owner, provider["id"])
+    key = create_api_key(client, owner)
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {key}"},
+        json={
+            "model": persona["slug"],
+            "user": "wxid_sender",
+            "sender_profile": {
+                "wxid": "wxid_sender",
+                "nickname": "😀" * 129,
+                "remark": "",
+                "labels": [],
+            },
+            "messages": [{"role": "user", "content": "你好"}],
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_sender_profile_does_not_accept_avatar_url(client: TestClient) -> None:
+    owner = register(client)
+    provider = create_provider(client, owner)
+    persona = create_persona(client, owner, provider["id"])
+    key = create_api_key(client, owner)
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {key}"},
+        json={
+            "model": persona["slug"],
+            "user": "wxid_sender",
+            "sender_profile": {
+                "wxid": "wxid_sender",
+                "nickname": "张三",
+                "remark": "张总",
+                "labels": [],
+                "avatar_url": "https://example.com/avatar.png",
+            },
+            "messages": [{"role": "user", "content": "你好"}],
+        },
+    )
+
+    assert response.status_code == 422
+
+class FakeAudioClient:
+    calls: list[dict] = []
+    response: FakeResponse | None = None
+
+    def __init__(self, **_kwargs):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return None
+
+    def post(self, url: str, headers: dict, files: dict, data: dict):
+        self.calls.append(
+            {"url": url, "headers": headers, "files": files, "data": data}
+        )
+        assert self.response is not None
+        return self.response
+
+
+def _sample_silk_audio() -> bytes:
+    pcm_input = io.BytesIO(b"\x00\x10" * 960)
+    silk_output = io.BytesIO()
+    pysilk.encode(pcm_input, silk_output, 24000, 24000, tencent=True)
+    return silk_output.getvalue()
+
+
+def test_silk_decoder_converts_tencent_prefixed_voice_to_wav() -> None:
+    silk_bytes = _sample_silk_audio()
+
+    assert silk_bytes.startswith(b"\x02#!SILK_V3")
+    wav_bytes = decode_silk_to_wav(silk_bytes)
+
+    assert wav_bytes.startswith(b"RIFF")
+    with wave.open(io.BytesIO(wav_bytes), "rb") as wav_file:
+        assert wav_file.getnchannels() == 1
+        assert wav_file.getsampwidth() == 2
+        assert wav_file.getframerate() == 24000
+        assert wav_file.getnframes() > 0
+
+
+def test_silk_decoder_rejects_invalid_stream_and_bounds_decoded_pcm() -> None:
+    with pytest.raises(InvalidSilkAudioError):
+        decode_silk_to_wav(b"not-a-silk-file")
+
+    with pytest.raises(DecodedAudioTooLargeError):
+        decode_silk_to_wav(_sample_silk_audio(), max_pcm_bytes=2)
+
+
+def _configure_audio_transcription(monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        gateway,
+        "get_settings",
+        lambda: SimpleNamespace(
+            audio_transcription_base_url="https://speech.example.com/v1",
+            audio_transcription_model="whisper-silk-v1",
+            audio_transcription_credential_ref="platform-speech",
+            audio_transcription_max_file_bytes=25 * 1024 * 1024,
+            audio_transcription_timeout_seconds=120.0,
+            audio_transcription_sample_rate=24000,
+            audio_transcription_max_decoded_bytes=64 * 1024 * 1024,
+        ),
+    )
+    monkeypatch.setattr(
+        gateway,
+        "resolve_platform_api_key",
+        lambda credential_ref: (
+            "sk-platform-speech-secret"
+            if credential_ref == "platform-speech"
+            else None
+        ),
+    )
+    monkeypatch.setattr(gateway, "_validate_provider_target", lambda _url: None)
+    monkeypatch.setattr(gateway.httpx, "Client", FakeAudioClient)
+
+
+def test_audio_transcription_uses_platform_proxy_and_records_usage(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner = register(client)
+    key = create_api_key(client, owner)
+    _configure_audio_transcription(monkeypatch)
+    FakeAudioClient.calls = []
+    FakeAudioClient.response = FakeResponse({"text": "今天下午三点开会"})
+
+    response = client.post(
+        "/v1/audio/transcriptions",
+        headers={"Authorization": f"Bearer {key}"},
+        files={"file": ("message.silk", _sample_silk_audio(), "audio/silk")},
+        data={"model": "whisper-silk-v1"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"text": "今天下午三点开会"}
+    call = FakeAudioClient.calls[0]
+    assert call["url"] == "https://speech.example.com/v1/audio/transcriptions"
+    assert call["headers"]["Authorization"] == "Bearer sk-platform-speech-secret"
+    assert call["headers"]["Authorization"] != f"Bearer {key}"
+    assert call["files"]["file"][0] == "message.wav"
+    assert call["files"]["file"][1].startswith(b"RIFF")
+    assert call["files"]["file"][2] == "audio/wav"
+    with wave.open(io.BytesIO(call["files"]["file"][1]), "rb") as wav_file:
+        assert wav_file.getnchannels() == 1
+        assert wav_file.getsampwidth() == 2
+        assert wav_file.getframerate() == 24000
+    assert call["data"] == {"model": "whisper-silk-v1"}
+    with app.state.test_session_factory() as db:
+        record = db.scalar(
+            select(UsageRecord).where(UsageRecord.request_type == "audio_transcription")
+        )
+        assert record is not None
+        assert record.status == "succeeded"
+        assert record.model_source == "platform"
+        assert record.model_name == "whisper-silk-v1"
+        assert record.prompt_tokens is None
+        assert record.total_tokens is None
+        events = db.scalars(
+            select(BillingUsageEvent).where(
+                BillingUsageEvent.source_usage_record_id == record.id
+            )
+        ).all()
+        assert {event.resource_code for event in events} == {
+            "api_requests",
+            "platform_model_requests",
+        }
+
+
+def test_audio_transcription_idempotency_replays_without_second_upstream_call(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner = register(client)
+    key = create_api_key(client, owner)
+    _configure_audio_transcription(monkeypatch)
+    FakeAudioClient.calls = []
+    FakeAudioClient.response = FakeResponse({"text": "已转写"})
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "Idempotency-Key": "audio-message-001",
+    }
+    payload = {
+        "files": {"file": ("message.silk", _sample_silk_audio(), "audio/silk")},
+        "data": {"model": "whisper-silk-v1"},
+    }
+
+    first = client.post("/v1/audio/transcriptions", headers=headers, **payload)
+    second = client.post("/v1/audio/transcriptions", headers=headers, **payload)
+
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+    assert second.json() == {"text": "已转写"}
+    assert len(FakeAudioClient.calls) == 1
+
+
+def test_audio_transcription_requires_platform_configuration(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner = register(client)
+    key = create_api_key(client, owner)
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        gateway,
+        "get_settings",
+        lambda: SimpleNamespace(
+            audio_transcription_base_url=None,
+            audio_transcription_model=None,
+            audio_transcription_credential_ref=None,
+            audio_transcription_max_file_bytes=25 * 1024 * 1024,
+            audio_transcription_timeout_seconds=120.0,
+        ),
+    )
+    response = client.post(
+        "/v1/audio/transcriptions",
+        headers={"Authorization": f"Bearer {key}"},
+        files={"file": ("message.silk", b"silk", "audio/silk")},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "audio_transcription_not_configured"
+
+
+def test_audio_transcription_rejects_non_silk_and_unconfigured_model(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner = register(client)
+    key = create_api_key(client, owner)
+    _configure_audio_transcription(monkeypatch)
+    FakeAudioClient.calls = []
+
+    wrong_type = client.post(
+        "/v1/audio/transcriptions",
+        headers={"Authorization": f"Bearer {key}"},
+        files={"file": ("message.mp3", b"audio", "audio/mpeg")},
+    )
+    wrong_model = client.post(
+        "/v1/audio/transcriptions",
+        headers={"Authorization": f"Bearer {key}"},
+        files={"file": ("message.silk", b"silk", "audio/silk")},
+        data={"model": "another-model"},
+    )
+
+    assert wrong_type.status_code == 415
+    assert wrong_type.json()["error"]["code"] == "unsupported_audio_format"
+    assert wrong_model.status_code == 422
+    assert wrong_model.json()["error"]["code"] == "audio_transcription_model_not_allowed"
+    assert FakeAudioClient.calls == []
+
+
+def test_audio_transcription_rejects_empty_and_oversized_files(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner = register(client)
+    key = create_api_key(client, owner)
+    _configure_audio_transcription(monkeypatch)
+
+    empty = client.post(
+        "/v1/audio/transcriptions",
+        headers={"Authorization": f"Bearer {key}"},
+        files={"file": ("message.silk", b"", "audio/silk")},
+    )
+
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        gateway,
+        "get_settings",
+        lambda: SimpleNamespace(
+            audio_transcription_base_url="https://speech.example.com/v1",
+            audio_transcription_model="whisper-silk-v1",
+            audio_transcription_credential_ref="platform-speech",
+            audio_transcription_max_file_bytes=4,
+            audio_transcription_timeout_seconds=120.0,
+        ),
+    )
+    oversized = client.post(
+        "/v1/audio/transcriptions",
+        headers={"Authorization": f"Bearer {key}"},
+        files={"file": ("message.silk", b"12345", "audio/silk")},
+    )
+
+    assert empty.status_code == 422
+    assert empty.json()["error"]["code"] == "empty_audio_file"
+    assert oversized.status_code == 413
+    assert oversized.json()["error"]["code"] == "audio_file_too_large"
+
+
+def test_audio_transcription_rejects_invalid_upstream_text(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner = register(client)
+    key = create_api_key(client, owner)
+    _configure_audio_transcription(monkeypatch)
+    FakeAudioClient.calls = []
+    FakeAudioClient.response = FakeResponse({"text": "   "})
+
+    response = client.post(
+        "/v1/audio/transcriptions",
+        headers={"Authorization": f"Bearer {key}"},
+        files={"file": ("message.silk", _sample_silk_audio(), "audio/silk")},
+    )
+
+    assert response.status_code == 502
+    assert response.json()["error"]["code"] == "invalid_transcription_response"
+
+def test_audio_transcription_rejects_invalid_silk_before_upstream_call(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner = register(client)
+    key = create_api_key(client, owner)
+    _configure_audio_transcription(monkeypatch)
+    FakeAudioClient.calls = []
+
+    response = client.post(
+        "/v1/audio/transcriptions",
+        headers={"Authorization": f"Bearer {key}"},
+        files={"file": ("message.silk", b"not-a-silk-stream", "audio/silk")},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "invalid_silk_audio"
+    assert FakeAudioClient.calls == []
+

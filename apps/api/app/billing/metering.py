@@ -60,14 +60,14 @@ def fingerprint_gateway_request(
     upstream_payload: dict,
     *,
     api_key_id: UUID,
-    persona_id: UUID,
+    persona_id: UUID | None,
     model_source: str,
     price_version_id: UUID | None,
 ) -> str:
     canonical = {
         "payload": upstream_payload,
         "api_key_id": str(api_key_id),
-        "persona_id": str(persona_id),
+        "persona_id": str(persona_id) if persona_id is not None else None,
         "model_source": model_source,
         "price_version_id": str(price_version_id) if price_version_id else None,
     }
@@ -213,6 +213,7 @@ def reserve_gateway_request(
     input_token_reservation: int,
     output_token_reservation: int,
     price_version_id: UUID | None,
+    reserve_platform_tokens: bool = True,
 ) -> ReservationDecision:
     """Atomically reserve request/token quotas and claim an idempotency key.
 
@@ -271,13 +272,14 @@ def reserve_gateway_request(
 
     requested: dict[str, int] = {"api_requests": 1}
     if model_source == "platform":
-        requested.update(
-            {
-                "platform_model_requests": 1,
-                "platform_input_tokens": max(1, input_token_reservation),
-                "platform_output_tokens": max(1, output_token_reservation),
-            }
-        )
+        requested["platform_model_requests"] = 1
+        if reserve_platform_tokens:
+            requested.update(
+                {
+                    "platform_input_tokens": max(1, input_token_reservation),
+                    "platform_output_tokens": max(1, output_token_reservation),
+                }
+            )
 
     if subscription is not None and plan is not None:
         for resource_code, units in requested.items():
