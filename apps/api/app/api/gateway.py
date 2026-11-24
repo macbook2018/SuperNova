@@ -29,6 +29,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import DatabaseSession
+from app.audio.silk import (
+    DecodedAudioTooLargeError,
+    InvalidSilkAudioError,
+    decode_silk_to_wav,
+)
 from app.billing.credentials import resolve_platform_api_key
 from app.billing.entitlements import check_gateway_entitlements
 from app.billing.metering import (
@@ -779,6 +784,26 @@ def create_audio_transcription(
             status_code=existing.replay_status or 200,
         )
 
+    started = time.monotonic()
+    try:
+        wav_bytes = decode_silk_to_wav(
+            audio_bytes,
+            sample_rate=settings.audio_transcription_sample_rate,
+            max_pcm_bytes=settings.audio_transcription_max_decoded_bytes,
+        )
+    except DecodedAudioTooLargeError:
+        raise _client_error(
+            413,
+            "decoded_audio_too_large",
+            "解码后的语音超过平台允许的大小",
+        ) from None
+    except InvalidSilkAudioError:
+        raise _client_error(
+            422,
+            "invalid_silk_audio",
+            "无法识别该 SILK 文件，请检查文件是否完整",
+        ) from None
+
     reservation = reserve_gateway_request(
         db,
         tenant_id=principal.tenant.id,
@@ -805,7 +830,6 @@ def create_audio_transcription(
         settings.audio_transcription_timeout_seconds,
         connect=10.0,
     )
-    started = time.monotonic()
     try:
         with httpx.Client(
             timeout=timeout,
@@ -815,7 +839,7 @@ def create_audio_transcription(
             upstream = client.post(
                 endpoint,
                 headers=headers,
-                files={"file": ("message.silk", audio_bytes, "audio/silk")},
+                files={"file": ("message.wav", wav_bytes, "audio/wav")},
                 data={"model": configured_model},
             )
     except httpx.TimeoutException:

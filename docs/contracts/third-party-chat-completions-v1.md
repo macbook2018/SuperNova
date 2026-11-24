@@ -163,7 +163,7 @@ multipart 字段：
 
 | 字段 | 类型 | 规则 |
 |---|---|---|
-| `file` | 二进制文件 | 必传，原始 SILK；文件名固定转发为 `message.silk`，MIME 必须为 `audio/silk` |
+| `file` | 二进制文件 | 必传，原始 SILK；上传文件名以 `.silk` 结尾，MIME 必须为 `audio/silk` |
 | `model` | string | 可选；如提供，必须与平台配置的转写模型 ID 一致 |
 
 转写接口不上传 `user`、`account_wxid`、`sender_profile` 或 `speaker`。这些身份信息只在后续聊天请求中使用。
@@ -180,19 +180,19 @@ multipart 字段：
 
 ### 2.2 SuperNova 到平台语音服务的代理配置
 
-该接口由 SuperNova 统一代理。WeXTool 只使用 SuperNova API Key；上游语音服务地址、模型和 API Key 均由平台控制，不向租户客户端暴露，也不使用租户人格绑定的聊天模型 ID。
+该接口由 SuperNova 统一代理。WeXTool 只使用 SuperNova API Key；上游语音服务地址、模型和 API Key 均由平台控制，不向租户客户端暴露，也不使用租户人格绑定的聊天模型 ID。SuperNova 在内存中将原始 SILK V3 解码为单声道、16-bit PCM WAV，再向上游发送 `message.wav`（MIME `audio/wav`）。WeChat 的 `0x02` 腾讯前缀和标准 `#!SILK_V3` 文件头均受支持；不会创建临时音频文件。
 
 平台服务端配置：
 
 - `SUPERNOVA_AUDIO_TRANSCRIPTION_BASE_URL`：上游语音服务 API 根地址。
 - `SUPERNOVA_AUDIO_TRANSCRIPTION_MODEL`：平台选定的 SILK 转写模型。
 - `SUPERNOVA_AUDIO_TRANSCRIPTION_CREDENTIAL_REF`：平台凭据引用，实际密钥存放在 `SUPERNOVA_PLATFORM_CREDENTIALS_JSON` 对应键下。
-- `SUPERNOVA_AUDIO_TRANSCRIPTION_MAX_FILE_BYTES`：上传文件大小上限，默认 25 MiB。
+- `SUPERNOVA_AUDIO_TRANSCRIPTION_MAX_FILE_BYTES`：原始 SILK 上传大小上限，默认 25 MiB。
 - `SUPERNOVA_AUDIO_TRANSCRIPTION_TIMEOUT_SECONDS`：上游超时，默认 120 秒。
+- `SUPERNOVA_AUDIO_TRANSCRIPTION_SAMPLE_RATE`：解码 WAV 采样率，默认 24000 Hz；支持 8000、12000、16000、24000、48000 Hz。
+- `SUPERNOVA_AUDIO_TRANSCRIPTION_MAX_DECODED_BYTES`：解码 PCM 大小上限，默认 64 MiB，用于限制内存占用。
 
-前三项必须同时配置。上游服务必须接受原始 `audio/silk` 文件；SuperNova 当前按源文档将 SILK 原样转发，不在网关内转码。
-
-平台代理会验证上游 URL、限制 MIME 和文件大小、固定上游文件名、校验返回的 `text`，并且不会记录或输出音频内容及上游 API Key。
+前三项必须同时配置。上游语音服务必须接受 WAV 文件。SuperNova 会验证上传 MIME 和文件大小、校验 SILK V3 文件头、限制解码后 PCM 大小、固定上游文件名及 MIME，并校验返回的 `text`。原始 SILK 和转换后的 WAV 仅在请求内存中处理，不持久化；不会记录或输出音频内容及上游 API Key。
 
 ### 2.3 用量计量
 

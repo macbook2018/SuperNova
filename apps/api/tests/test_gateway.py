@@ -1,12 +1,20 @@
 import hashlib
+import io
 import json
+import wave
 from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID, uuid4
 
+import pysilk
 import pytest
 from app.api import gateway
+from app.audio.silk import (
+    DecodedAudioTooLargeError,
+    InvalidSilkAudioError,
+    decode_silk_to_wav,
+)
 from app.billing.metering import (
     reserve_gateway_request,
     run_billing_reconciliation,
@@ -1749,6 +1757,35 @@ class FakeAudioClient:
         return self.response
 
 
+def _sample_silk_audio() -> bytes:
+    pcm_input = io.BytesIO(b"\x00\x10" * 960)
+    silk_output = io.BytesIO()
+    pysilk.encode(pcm_input, silk_output, 24000, 24000, tencent=True)
+    return silk_output.getvalue()
+
+
+def test_silk_decoder_converts_tencent_prefixed_voice_to_wav() -> None:
+    silk_bytes = _sample_silk_audio()
+
+    assert silk_bytes.startswith(b"\x02#!SILK_V3")
+    wav_bytes = decode_silk_to_wav(silk_bytes)
+
+    assert wav_bytes.startswith(b"RIFF")
+    with wave.open(io.BytesIO(wav_bytes), "rb") as wav_file:
+        assert wav_file.getnchannels() == 1
+        assert wav_file.getsampwidth() == 2
+        assert wav_file.getframerate() == 24000
+        assert wav_file.getnframes() > 0
+
+
+def test_silk_decoder_rejects_invalid_stream_and_bounds_decoded_pcm() -> None:
+    with pytest.raises(InvalidSilkAudioError):
+        decode_silk_to_wav(b"not-a-silk-file")
+
+    with pytest.raises(DecodedAudioTooLargeError):
+        decode_silk_to_wav(_sample_silk_audio(), max_pcm_bytes=2)
+
+
 def _configure_audio_transcription(monkeypatch: pytest.MonkeyPatch) -> None:
     from types import SimpleNamespace
 
@@ -1761,6 +1798,8 @@ def _configure_audio_transcription(monkeypatch: pytest.MonkeyPatch) -> None:
             audio_transcription_credential_ref="platform-speech",
             audio_transcription_max_file_bytes=25 * 1024 * 1024,
             audio_transcription_timeout_seconds=120.0,
+            audio_transcription_sample_rate=24000,
+            audio_transcription_max_decoded_bytes=64 * 1024 * 1024,
         ),
     )
     monkeypatch.setattr(
@@ -1789,7 +1828,7 @@ def test_audio_transcription_uses_platform_proxy_and_records_usage(
     response = client.post(
         "/v1/audio/transcriptions",
         headers={"Authorization": f"Bearer {key}"},
-        files={"file": ("message.silk", b"silk-audio-bytes", "audio/silk")},
+        files={"file": ("message.silk", _sample_silk_audio(), "audio/silk")},
         data={"model": "whisper-silk-v1"},
     )
 
@@ -1799,9 +1838,13 @@ def test_audio_transcription_uses_platform_proxy_and_records_usage(
     assert call["url"] == "https://speech.example.com/v1/audio/transcriptions"
     assert call["headers"]["Authorization"] == "Bearer sk-platform-speech-secret"
     assert call["headers"]["Authorization"] != f"Bearer {key}"
-    assert call["files"]["file"][0] == "message.silk"
-    assert call["files"]["file"][1] == b"silk-audio-bytes"
-    assert call["files"]["file"][2] == "audio/silk"
+    assert call["files"]["file"][0] == "message.wav"
+    assert call["files"]["file"][1].startswith(b"RIFF")
+    assert call["files"]["file"][2] == "audio/wav"
+    with wave.open(io.BytesIO(call["files"]["file"][1]), "rb") as wav_file:
+        assert wav_file.getnchannels() == 1
+        assert wav_file.getsampwidth() == 2
+        assert wav_file.getframerate() == 24000
     assert call["data"] == {"model": "whisper-silk-v1"}
     with app.state.test_session_factory() as db:
         record = db.scalar(
@@ -1838,7 +1881,7 @@ def test_audio_transcription_idempotency_replays_without_second_upstream_call(
         "Idempotency-Key": "audio-message-001",
     }
     payload = {
-        "files": {"file": ("message.silk", b"same-audio", "audio/silk")},
+        "files": {"file": ("message.silk", _sample_silk_audio(), "audio/silk")},
         "data": {"model": "whisper-silk-v1"},
     }
 
@@ -1960,9 +2003,28 @@ def test_audio_transcription_rejects_invalid_upstream_text(
     response = client.post(
         "/v1/audio/transcriptions",
         headers={"Authorization": f"Bearer {key}"},
-        files={"file": ("message.silk", b"silk", "audio/silk")},
+        files={"file": ("message.silk", _sample_silk_audio(), "audio/silk")},
     )
 
     assert response.status_code == 502
     assert response.json()["error"]["code"] == "invalid_transcription_response"
+
+def test_audio_transcription_rejects_invalid_silk_before_upstream_call(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner = register(client)
+    key = create_api_key(client, owner)
+    _configure_audio_transcription(monkeypatch)
+    FakeAudioClient.calls = []
+
+    response = client.post(
+        "/v1/audio/transcriptions",
+        headers={"Authorization": f"Bearer {key}"},
+        files={"file": ("message.silk", b"not-a-silk-stream", "audio/silk")},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "invalid_silk_audio"
+    assert FakeAudioClient.calls == []
 

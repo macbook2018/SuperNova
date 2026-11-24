@@ -51,6 +51,8 @@ class Settings(BaseSettings):
     audio_transcription_credential_ref: str | None = None
     audio_transcription_max_file_bytes: int = 25 * 1024 * 1024
     audio_transcription_timeout_seconds: float = 120.0
+    audio_transcription_sample_rate: int = 24000
+    audio_transcription_max_decoded_bytes: int = 64 * 1024 * 1024
 
     @property
     def platform_admin_email_set(self) -> frozenset[str]:
@@ -129,6 +131,19 @@ class Settings(BaseSettings):
         if not 1 <= self.audio_transcription_timeout_seconds <= 300:
             raise ValueError(
                 "SUPERNOVA_AUDIO_TRANSCRIPTION_TIMEOUT_SECONDS must be between 1 and 300"
+            )
+        if self.audio_transcription_sample_rate not in {8000, 12000, 16000, 24000, 48000}:
+            raise ValueError(
+                "SUPERNOVA_AUDIO_TRANSCRIPTION_SAMPLE_RATE must be one of "
+                "8000, 12000, 16000, 24000 or 48000"
+            )
+        if (
+            self.audio_transcription_max_decoded_bytes < 1024
+            or self.audio_transcription_max_decoded_bytes > 256 * 1024 * 1024
+        ):
+            raise ValueError(
+                "SUPERNOVA_AUDIO_TRANSCRIPTION_MAX_DECODED_BYTES must be between "
+                "1 KiB and 256 MiB"
             )
         if self.refresh_token_ttl_days < 1 or self.refresh_token_ttl_days > 90:
             raise ValueError("SUPERNOVA_REFRESH_TOKEN_TTL_DAYS must be between 1 and 90")
