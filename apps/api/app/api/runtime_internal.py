@@ -118,8 +118,24 @@ def runtime_chat_completion(
 ):
     # The runtime cannot select another Persona or model. The server binds every
     # request to the Persona recorded on the authenticated BotInstance.
+    # A compromised runtime must not override the Persona system prompt or
+    # sampling configuration, even when it bypasses the local bridge.
+    safe_messages = [
+        message.model_dump(exclude_none=True)
+        for message in payload.messages
+        if message.role in {"user", "assistant"}
+    ]
+    if not safe_messages or not any(msg["role"] == "user" for msg in safe_messages):
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "runtime_user_message_required", "message": "需要用户消息"},
+        )
     gateway_payload = ChatCompletionRequest.model_validate(
-        {"model": principal.persona.slug, **payload.model_dump(exclude={"model"})}
+        {
+            "model": principal.persona.slug,
+            "messages": safe_messages,
+            "stream": False,
+        }
     )
     gateway_principal = GatewayPrincipal(
         api_key=None,
