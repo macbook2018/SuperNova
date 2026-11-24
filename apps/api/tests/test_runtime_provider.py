@@ -39,7 +39,10 @@ class FakeContainers:
         raise NotFound("missing")
 
     def list(self, *, filters):
-        assert filters == {"label": "com.docker.compose.service=api"}
+        assert filters == {"label": [
+            "com.docker.compose.service=api",
+            "com.docker.compose.project=supernova",
+        ]}
         return [self.api]
 
     def create(self, **kwargs):
