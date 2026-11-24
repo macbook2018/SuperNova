@@ -166,7 +166,7 @@ def bootstrap_astrbot(config: dict[str, Any], root: Path) -> None:
     astrbot = deepcopy(DEFAULT_CONFIG)
     old_path = data_root / "cmd_config.json"
     if old_path.exists():
-        existing = json.loads(old_path.read_text(encoding="utf-8"))
+        existing = json.loads(old_path.read_text(encoding="utf-8-sig"))
         # Preserve channel settings once Phase 8 has installed approved adapters.
         astrbot["platform"] = existing.get("platform", [])
     astrbot["provider_sources"] = [{
