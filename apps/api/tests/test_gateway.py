@@ -674,7 +674,6 @@ def test_gateway_rejects_provider_redirect_instead_of_following_it(
     assert response.json()["error"]["code"] == "upstream_error"
 
 
-
 def test_platform_model_routes_without_tenant_provider_and_records_source(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
@@ -836,7 +835,6 @@ def test_gateway_blocks_new_request_when_api_request_entitlement_exhausted(
     assert len(FakeClient.calls) == 1
 
 
-
 def test_persona_can_switch_between_platform_and_byok_without_cross_source_references(
     client: TestClient,
 ) -> None:
@@ -944,9 +942,6 @@ def test_new_tenant_requires_subscription_for_byok_calls(
     assert FakeClient.calls == []
 
 
-
-
-
 def test_pre_subscription_mode_allows_byok_calls_without_subscription(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
@@ -1005,8 +1000,6 @@ def test_pre_subscription_mode_allows_byok_calls_without_subscription(
         assert reservation is not None
         assert reservation.subscription_id is None
         assert reservation.plan_id is None
-
-
 
 
 def test_v1_models_lists_personas_before_subscription_rollout(

@@ -208,11 +208,12 @@ def check_gateway_entitlements(
     require_active_subscription: bool = True,
 ) -> None:
     policy = db.get(TenantBillingPolicy, tenant_id)
+    if policy is None and model_source == "byok":
+        # Preserve the pre-Phase-5B BYOK compatibility path.
+        return
+
     current = get_current_subscription(db, tenant_id)
-    if current is None and (
-        not require_active_subscription
-        or (policy is None and model_source == "byok")
-    ):
+    if current is None and not require_active_subscription:
         # Before Phase 5D, API access remains available without a commercial
         # subscription. Once enabled, active subscriptions and plan entitlements
         # are enforced for both platform and BYOK model sources.
