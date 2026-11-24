@@ -38,3 +38,52 @@ jobs:
             supernova-astrbot-runtime:4.29.4-6133541 \
             -c "import astrbot, aiohttp, ast; assert astrbot.__version__ == '4.29.4'; ast.parse(open('/opt/supernova/bridge.py').read())"
           docker image inspect supernova-astrbot-runtime:4.29.4-6133541 >/dev/null
+
+      - name: Boot isolated AstrBot and verify live bridge
+        run: |
+          tmpdir="$(mktemp -d)"
+          trap 'docker rm -f snv-astrbot-smoke >/dev/null 2>&1 || true; rm -rf "$tmpdir"' EXIT
+          cat > "$tmpdir/runtime.json" <<'JSON'
+          {
+            "schema_version": 1,
+            "tenant_id": "00000000-0000-0000-0000-000000000001",
+            "bot_instance_id": "00000000-0000-0000-0000-000000000002",
+            "persona_id": "00000000-0000-0000-0000-000000000003",
+            "runtime_version": "4.29.4",
+            "config_version": 1,
+            "gateway": {
+              "base_url": "http://api:8000/internal/runtime/v1",
+              "credential_ref": "/etc/supernova/runtime-credentials.json",
+              "model": "ci-persona"
+            },
+            "platforms": [],
+            "storage": {"data_dir": "/var/lib/astrbot", "session_retention_days": 0}
+          }
+          JSON
+          printf '%s\n' '{"chat.completions":"ci-token","runtime.heartbeat":"ci-token","runtime.events":"ci-token"}' > "$tmpdir/runtime-credentials.json"
+          chmod 644 "$tmpdir"/*.json
+          docker run -d --name snv-astrbot-smoke --network none \
+            --memory 768m --cpus 1 --pids-limit 128 \
+            --read-only --cap-drop ALL --security-opt no-new-privileges \
+            --tmpfs /tmp:rw,nosuid,noexec,size=128m \
+            -v "$tmpdir/runtime.json:/etc/supernova/runtime.json:ro" \
+            -v "$tmpdir/runtime-credentials.json:/etc/supernova/runtime-credentials.json:ro" \
+            -e SUPERNOVA_RUNTIME_CONFIG=/etc/supernova/runtime.json \
+            supernova-astrbot-runtime:4.29.4-6133541
+          success=0
+          for attempt in $(seq 1 30); do
+            if docker exec snv-astrbot-smoke python -c 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:18789/healthz", timeout=2)' >/dev/null 2>&1; then
+              if docker exec snv-astrbot-smoke python -c 'import os; assert any(b"/opt/astrbot/main.py" in open("/proc/" + p + "/cmdline", "rb").read() for p in os.listdir("/proc") if p.isdigit())' >/dev/null 2>&1; then
+                success=1
+                break
+              fi
+            fi
+            sleep 2
+          done
+          if [ "$success" != 1 ]; then
+            docker logs --tail 100 snv-astrbot-smoke
+            exit 1
+          fi
+          docker exec snv-astrbot-smoke python -c 'import os; assert os.environ.get("ASTRBOT_ROOT") == "/var/lib/astrbot"'
+          docker exec snv-astrbot-smoke python -c 'import os; assert os.path.exists("/tmp/supernova-astrbot-session/data/cmd_config.json")'
+          docker exec snv-astrbot-smoke python -c 'import os; assert not os.path.exists("/var/lib/astrbot/data/data_v4.db")'
