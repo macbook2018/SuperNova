@@ -79,7 +79,7 @@ def test_docker_provider_writes_credentials_outside_runtime_config(
     tmp_path: Path, monkeypatch
 ) -> None:
     client = FakeDockerClient()
-    monkeypatch.setattr(Path, "chown", lambda self, *args, **kwargs: None)
+    monkeypatch.setattr(runtime_provider.os, "chown", lambda *args, **kwargs: None)
     monkeypatch.setattr(runtime_provider.docker, "from_env", lambda **_kwargs: client)
     provider = runtime_provider.DockerRuntimeProvider(
         image="example/astrbot:4.29.4-pinned",
