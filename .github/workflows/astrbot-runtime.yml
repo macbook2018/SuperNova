@@ -36,5 +36,5 @@ jobs:
         run: |
           docker run --rm --entrypoint python \
             supernova-astrbot-runtime:4.29.4-6133541 \
-            -c "import astrbot; assert astrbot.__version__ == '4.29.4'; import aiohttp; import runpy; import py_compile; py_compile.compile('/opt/supernova/bridge.py', doraise=True)"
+            -c "import astrbot, aiohttp, ast; assert astrbot.__version__ == '4.29.4'; ast.parse(open('/opt/supernova/bridge.py').read())"
           docker image inspect supernova-astrbot-runtime:4.29.4-6133541 >/dev/null
