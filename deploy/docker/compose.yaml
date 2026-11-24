@@ -84,6 +84,7 @@ services:
     restart: unless-stopped
     environment:
       SUPERNOVA_ENVIRONMENT: ${SUPERNOVA_ENVIRONMENT:-development}
+      SUPERNOVA_BILLING_SUBSCRIPTION_ENFORCEMENT_ENABLED: ${SUPERNOVA_BILLING_SUBSCRIPTION_ENFORCEMENT_ENABLED:-false}
       SUPERNOVA_LOG_LEVEL: ${SUPERNOVA_LOG_LEVEL:-INFO}
       SUPERNOVA_DATABASE_URL: postgresql://${POSTGRES_USER:-supernova}:${POSTGRES_PASSWORD:-change-me-local-only}@postgres:5432/${POSTGRES_DB:-supernova}
       SUPERNOVA_REDIS_URL: redis://:${REDIS_PASSWORD:-change-me-local-only}@redis:6379/0

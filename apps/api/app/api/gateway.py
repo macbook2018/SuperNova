@@ -673,6 +673,7 @@ def list_models(
     ).all()
 
     data = []
+    settings = get_settings()
     for persona in personas:
         try:
             resolved = _resolve_persona(db, principal, persona.slug)
@@ -681,6 +682,7 @@ def list_models(
                 tenant_id=principal.tenant.id,
                 model_source=resolved.model_source,
                 max_output_tokens=0,
+                require_active_subscription=settings.billing_subscription_enforcement_enabled,
             )
         except HTTPException:
             continue
@@ -814,6 +816,7 @@ def create_audio_transcription(
         output_token_reservation=0,
         price_version_id=None,
         reserve_platform_tokens=False,
+        require_active_subscription=settings.billing_subscription_enforcement_enabled,
     )
     if reservation.replay_response is not None:
         return JSONResponse(
@@ -946,6 +949,7 @@ def create_chat_completion(
     idempotency_key_header: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
     request_id = _request_id(request)
+    settings = get_settings()
     resolved = _resolve_persona(db, principal, payload.model)
     persona = resolved.persona
     base_payload = _upstream_payload(payload, resolved)
@@ -1048,6 +1052,7 @@ def create_chat_completion(
         ),
         output_token_reservation=upstream_payload["max_tokens"],
         price_version_id=resolved.price_version_id,
+        require_active_subscription=settings.billing_subscription_enforcement_enabled,
     )
     if reservation.replay_response is not None:
         return JSONResponse(
