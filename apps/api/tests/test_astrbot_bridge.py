@@ -141,3 +141,12 @@ async def test_bridge_forwards_to_gateway_with_rotated_scoped_jwt(
     assert all(item["payload"]["messages"] == [
         {"role": "user", "content": "hello"}
     ] for item in observed)
+
+
+def test_default_session_store_is_ephemeral(tmp_path: Path) -> None:
+    cfg = config_for(tmp_path)
+    cfg["storage"] = {"data_dir": "/var/lib/astrbot", "session_retention_days": 0}
+    assert bridge.storage_root(cfg) == Path("/tmp/supernova-astrbot-session")
+    cfg["storage"]["session_retention_days"] = 7
+    with pytest.raises(RuntimeError, match="persistent_sessions_not_approved"):
+        bridge.storage_root(cfg)
