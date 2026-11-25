@@ -1,0 +1,212 @@
+name: Hong Kong RAG candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Reviewed SuperNova RAG pull request number
+        required: true
+        type: string
+      candidate_sha:
+        description: Exact reviewed 40-character lowercase commit SHA
+        required: true
+        type: string
+
+      review_confirmation:
+        description: Optional maintainer sign-off. REVIEWED <candidate SHA> [WITH A1 <A1 SHA>]
+        required: false
+        type: string
+
+permissions: {}
+
+env:
+  CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+  PR_NUMBER: ${{ inputs.pr_number }}
+  SIGNOFF: ${{ inputs.review_confirmation }}
+
+jobs:
+  verify:
+    name: Verify reviewed candidate
+    if: github.repository == 'macbook2018/SuperNova' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    steps:
+      - name: Check out trusted control code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify PR, review, commit ancestry and CI jobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 deploy/scripts/verify-hk-candidate.py
+
+  build:
+    name: Build isolated candidate images
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    outputs:
+      artifact_id: ${{ steps.archive.outputs.artifact-id }}
+      archive_hash: ${{ steps.package.outputs.archive_hash }}
+      api_id: ${{ steps.package.outputs.api_id }}
+      console_id: ${{ steps.package.outputs.console_id }}
+    steps:
+      - name: Check out trusted image packaging code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          path: control
+      - name: Check out exact candidate with read-only access
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
+          path: candidate
+      - name: Build, package and identify the two reviewed images
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ && "$(git -C candidate rev-parse HEAD)" == "$CANDIDATE_SHA" ]]
+          context="$RUNNER_TEMP/app-source"
+          mkdir -m 700 "$context"
+          git -C candidate archive "$CANDIDATE_SHA" | tar -x -C "$context"
+          bundle="$RUNNER_TEMP/hk-images"
+          python3 control/deploy/hk-candidate/controller.py build-bundle "$context" "$CANDIDATE_SHA" "$bundle"
+          hash="$(jq -er .archive_hash "$bundle/identities.json")"
+          api_id="$(jq -er .api_id "$bundle/identities.json")"
+          console_id="$(jq -er .console_id "$bundle/identities.json")"
+          [[ "$hash" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$api_id" =~ ^sha256:[0-9a-f]{64}$ && "$console_id" =~ ^sha256:[0-9a-f]{64}$ ]]
+          {
+            echo "archive_hash=$hash"
+            echo "api_id=$api_id"
+            echo "console_id=$console_id"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "PR #$PR_NUMBER — $CANDIDATE_SHA"
+            echo "Archive SHA-256: $hash"
+            echo "API image: $api_id"
+            echo "Console image: $console_id"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Store same-run immutable image artifact
+        id: archive
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: hk-rag-images-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/hk-images/images.tar
+          compression-level: 1
+          retention-days: 1
+          if-no-files-found: error
+
+  deploy:
+    name: Approve and deploy PR ${{ inputs.pr_number }} at ${{ inputs.candidate_sha }} to isolated HK
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: hk-rag-candidate
+    concurrency:
+      group: supernova-staging-deploy
+      queue: max
+      cancel-in-progress: false
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    env:
+      ARCHIVE_ID: ${{ needs.build.outputs.artifact_id }}
+      ARCHIVE_HASH: ${{ needs.build.outputs.archive_hash }}
+      API_IMAGE_ID: ${{ needs.build.outputs.api_id }}
+      CONSOLE_IMAGE_ID: ${{ needs.build.outputs.console_id }}
+    steps:
+      - name: Check out only the trusted controller
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Check deployment environment protection
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ENABLED: ${{ vars.HK_RAG_CANDIDATE_ENABLED }}
+        run: |
+          set -euo pipefail
+          [[ "$ENABLED" == true && "$GITHUB_REF" == refs/heads/main ]]
+          env_api="repos/$GITHUB_REPOSITORY/environments/hk-rag-candidate"
+          gh api "$env_api" | jq -e '
+            .name == "hk-rag-candidate" and
+            .deployment_branch_policy.custom_branch_policies == true' >/dev/null
+          gh api "$env_api/deployment-branch-policies?per_page=100" | jq -e '
+            .total_count == 1 and
+            any(.branch_policies[]; .name == "main" and .type == "branch")' >/dev/null
+          [[ "$ARCHIVE_ID" =~ ^[1-9][0-9]*$ && "$ARCHIVE_HASH" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$API_IMAGE_ID" =~ ^sha256:[0-9a-f]{64}$ && "$CONSOLE_IMAGE_ID" =~ ^sha256:[0-9a-f]{64}$ ]]
+      - name: Download build output by artifact ID
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact_id }}
+          path: ${{ runner.temp }}/hk-bundle
+          merge-multiple: true
+      - name: Validate payload and latest approval immediately before transfer
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/hk-bundle/images.tar"
+          [[ -f "$archive" && ! -L "$archive" ]]
+          printf '%s  %s\n' "$ARCHIVE_HASH" "$archive" | sha256sum --check --status
+          python3 deploy/scripts/verify-hk-candidate.py
+      - name: Transfer verified images and deploy with the trusted controller
+        shell: bash
+        env:
+          SSH_HOST: ${{ secrets.HK_CANDIDATE_SSH_HOST }}
+          SSH_USER: ${{ secrets.HK_CANDIDATE_SSH_USER }}
+          SSH_PORT: ${{ secrets.HK_CANDIDATE_SSH_PORT || '22' }}
+          SSH_KEY: ${{ secrets.HK_CANDIDATE_SSH_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.HK_CANDIDATE_SSH_KNOWN_HOSTS }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$SSH_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ && "$SSH_USER" =~ ^[a-z_][a-z0-9_-]*$ ]]
+          [[ "$SSH_PORT" =~ ^[1-9][0-9]{0,4}$ ]]
+          (( SSH_PORT <= 65535 ))
+          [[ -n "$SSH_KEY" && -n "$SSH_KNOWN_HOSTS" ]]
+          umask 077
+          credentials="$(mktemp -d)"
+          target="$SSH_USER@$SSH_HOST"
+          remote_dir=''
+          cleanup() {
+            if [[ -n "$remote_dir" ]]; then
+              ssh "${opts[@]}" -p "$SSH_PORT" "$target" \
+                "rm -f -- '$remote_dir/images.tar' '$remote_dir/compose.yaml' '$remote_dir/hk-rag-candidate-host.sh' '$remote_dir/controller.py'; rmdir -- '$remote_dir'" || true
+            fi
+            rm -rf -- "$credentials"
+          }
+          trap cleanup EXIT
+          printf '%s\n' "$SSH_KEY" > "$credentials/key"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$credentials/known_hosts"
+          opts=(-F /dev/null -i "$credentials/key" -o BatchMode=yes -o IdentitiesOnly=yes
+                -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$credentials/known_hosts"
+                -o GlobalKnownHostsFile=/dev/null -o ForwardAgent=no)
+          lookup="$SSH_HOST"
+          if [[ "$SSH_PORT" != 22 ]]; then lookup="[$SSH_HOST]:$SSH_PORT"; fi
+          ssh-keygen -F "$lookup" -f "$credentials/known_hosts" >/dev/null
+          # Populate remote_dir only after the remote reply has passed strict path validation.
+          transfer="$(ssh "${opts[@]}" -p "$SSH_PORT" "$target" 'umask 077; mktemp -d /tmp/supernova-hk.XXXXXXXXXXXX')"
+          [[ "$transfer" =~ ^/tmp/supernova-hk\.[A-Za-z0-9]{12}$ ]]
+          remote_dir="$transfer"
+          scp "${opts[@]}" -P "$SSH_PORT" "$RUNNER_TEMP/hk-bundle/images.tar" \
+            deploy/hk-candidate/{compose.yaml,hk-rag-candidate-host.sh,controller.py} "$target:$remote_dir/"
+          # An approval can be dismissed or a head can advance during a large image transfer.
+          python3 deploy/scripts/verify-hk-candidate.py
+          ssh "${opts[@]}" -p "$SSH_PORT" "$target" \
+            "cd '$remote_dir' && bash ./hk-rag-candidate-host.sh deploy '$CANDIDATE_SHA' '$ARCHIVE_HASH' '$API_IMAGE_ID' '$CONSOLE_IMAGE_ID'"

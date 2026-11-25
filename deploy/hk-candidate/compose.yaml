@@ -1,0 +1,158 @@
+x-service: &service
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options: {max-size: 5m, max-file: "2"}
+
+x-app: &app
+  <<: *service
+  image: ${HK_API_IMAGE:?required}
+  pull_policy: never
+  init: true
+  networks: [backend, outbound]
+  environment: &app-env
+    SUPERNOVA_ENVIRONMENT: production
+    SUPERNOVA_BILLING_SUBSCRIPTION_ENFORCEMENT_ENABLED: "false"
+    SUPERNOVA_DATABASE_URL: postgresql+psycopg://hk_candidate:${HK_PG_PASSWORD:?required}@postgres:5432/hk_candidate
+    SUPERNOVA_REDIS_URL: redis://:${HK_REDIS_PASSWORD:?required}@redis:6379/0
+    SUPERNOVA_JWT_SECRET: ${HK_JWT_SECRET:?required}
+    SUPERNOVA_ENCRYPTION_KEY: ${HK_ENCRYPTION_KEY:?required}
+    SUPERNOVA_PLATFORM_ADMIN_EMAILS: ${HK_ADMIN_EMAILS:-}
+    SUPERNOVA_PLATFORM_CREDENTIALS_JSON: ${HK_MODEL_CREDENTIALS_JSON:-}
+    SUPERNOVA_CORS_ORIGINS: http://127.0.0.1:18183
+    SUPERNOVA_S3_ENDPOINT_URL: http://silo:9000
+    SUPERNOVA_S3_BUCKET: hk-rag-candidate
+    SUPERNOVA_S3_ACCESS_KEY: ${HK_S3_ACCESS_KEY:?required}
+    SUPERNOVA_S3_SECRET_KEY: ${HK_S3_SECRET_KEY:?required}
+    SUPERNOVA_KNOWLEDGE_MAX_UPLOAD_BYTES: "10485760"
+    SUPERNOVA_KNOWLEDGE_MAX_URL_BYTES: "10485760"
+
+services:
+  postgres:
+    networks: [backend]
+    <<: *service
+    image: ${HK_POSTGRES_IMAGE:-pgvector/pgvector:pg16}
+    mem_limit: 320m
+    cpus: 0.5
+    environment:
+      POSTGRES_DB: hk_candidate
+      POSTGRES_USER: hk_candidate
+      POSTGRES_PASSWORD: ${HK_PG_PASSWORD:?required}
+    command: [postgres, -c, shared_buffers=96MB, -c, max_connections=40, -c, work_mem=2MB, -c, maintenance_work_mem=32MB]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD, pg_isready, -U, hk_candidate, -d, hk_candidate]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    networks: [backend]
+    <<: *service
+    image: ${HK_REDIS_IMAGE:-redis:7-alpine}
+    mem_limit: 48m
+    cpus: 0.1
+    command: [redis-server, --appendonly, "yes", --requirepass, "${HK_REDIS_PASSWORD:?required}", --maxmemory, 32mb, --maxmemory-policy, noeviction]
+    environment:
+      REDISCLI_AUTH: ${HK_REDIS_PASSWORD:?required}
+    volumes: [redisdata:/data]
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  silo:
+    networks: [backend]
+    <<: *service
+    image: ${HK_SILO_IMAGE:-pgsty/silo:RELEASE.2026-11-09T00-00-00Z}
+    command: [server, /data, --console-address, ":9001"]
+    mem_limit: 384m
+    cpus: 0.4
+    volumes: [silodata:/data]
+    environment:
+      MINIO_ROOT_USER: ${HK_SILO_ROOT_USER:?required}
+      MINIO_ROOT_PASSWORD: ${HK_SILO_ROOT_PASSWORD:?required}
+    healthcheck:
+      test: [CMD, silo, healthcheck, ready]
+      interval: 10s
+      timeout: 5s
+      retries: 25
+
+  storage-init:
+    networks: [backend]
+    image: ${HK_SILO_IMAGE:-pgsty/silo:RELEASE.2026-11-09T00-00-00Z}
+    profiles: [init]
+    mem_limit: 96m
+    cpus: 0.2
+    environment:
+      MC_HOST_hk: http://${HK_SILO_ROOT_USER:?required}:${HK_SILO_ROOT_PASSWORD:?required}@silo:9000
+      APP_ACCESS: ${HK_S3_ACCESS_KEY:?required}
+      APP_SECRET: ${HK_S3_SECRET_KEY:?required}
+    entrypoint: [/bin/sh, -ec]
+    command:
+      - |
+        mcli mb --ignore-existing hk/hk-rag-candidate >/dev/null
+        cat > /tmp/hk-policy.json <<'POLICY'
+        {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:ListBucket","s3:GetBucketLocation"],"Resource":["arn:aws:s3:::hk-rag-candidate"]},{"Effect":"Allow","Action":["s3:GetObject","s3:PutObject","s3:DeleteObject","s3:AbortMultipartUpload","s3:ListMultipartUploadParts"],"Resource":["arn:aws:s3:::hk-rag-candidate/*"]}]}
+        POLICY
+        mcli admin policy create hk hk-rag-app /tmp/hk-policy.json >/dev/null
+        mcli admin user add hk "$$APP_ACCESS" "$$APP_SECRET" >/dev/null
+        mcli admin policy attach hk hk-rag-app --user "$$APP_ACCESS" >/dev/null
+
+  api:
+    <<: *app
+    mem_limit: 256m
+    cpus: 0.5
+    ports: ["127.0.0.1:18182:8000"]
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+
+  knowledge-worker:
+    <<: *app
+    mem_limit: 160m
+    cpus: 0.25
+    command: [python, -m, app.knowledge.worker]
+    healthcheck:
+      test: [CMD, python, -m, app.healthcheck, --process-module, app.knowledge.worker, --check-database]
+      interval: 10s
+      timeout: 8s
+      retries: 18
+
+  chat-import-worker:
+    <<: *app
+    mem_limit: 160m
+    cpus: 0.25
+    command: [python, -m, app.chat_import.worker]
+    healthcheck:
+      test: [CMD, python, -m, app.healthcheck, --process-module, app.chat_import.worker, --check-database]
+      interval: 10s
+      timeout: 8s
+      retries: 18
+
+  console:
+    networks: [outbound]
+    <<: *service
+    image: ${HK_CONSOLE_IMAGE:?required}
+    pull_policy: never
+    mem_limit: 32m
+    cpus: 0.10
+    ports: ["127.0.0.1:18183:8080"]
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 4s
+      retries: 18
+
+volumes:
+  pgdata: {}
+  redisdata: {}
+  silodata: {}
+
+networks:
+  backend:
+    internal: true
+  outbound: {}
