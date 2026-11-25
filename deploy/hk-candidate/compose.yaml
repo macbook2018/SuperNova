@@ -81,7 +81,7 @@ services:
 
   storage-init:
     networks: [backend]
-    image: ${HK_MC_IMAGE:-minio/mc:RELEASE.2025-08-13T08-35-41Z}
+    image: ${HK_SILO_IMAGE:-pgsty/silo:RELEASE.2026-11-09T00-00-00Z}
     profiles: [init]
     mem_limit: 96m
     cpus: 0.2
@@ -92,13 +92,13 @@ services:
     entrypoint: [/bin/sh, -ec]
     command:
       - |
-        mc mb --ignore-existing hk/hk-rag-candidate >/dev/null
+        mcli mb --ignore-existing hk/hk-rag-candidate >/dev/null
         cat > /tmp/hk-policy.json <<'POLICY'
         {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:ListBucket","s3:GetBucketLocation"],"Resource":["arn:aws:s3:::hk-rag-candidate"]},{"Effect":"Allow","Action":["s3:GetObject","s3:PutObject","s3:DeleteObject","s3:AbortMultipartUpload","s3:ListMultipartUploadParts"],"Resource":["arn:aws:s3:::hk-rag-candidate/*"]}]}
         POLICY
-        mc admin policy create hk hk-rag-app /tmp/hk-policy.json >/dev/null
-        mc admin user add hk "$$APP_ACCESS" "$$APP_SECRET" >/dev/null
-        mc admin policy attach hk hk-rag-app --user "$$APP_ACCESS" >/dev/null
+        mcli admin policy create hk hk-rag-app /tmp/hk-policy.json >/dev/null
+        mcli admin user add hk "$$APP_ACCESS" "$$APP_SECRET" >/dev/null
+        mcli admin policy attach hk hk-rag-app --user "$$APP_ACCESS" >/dev/null
 
   api:
     <<: *app

@@ -86,6 +86,7 @@ def check(cfg, project):
         }
         require(ports == expected.get(name, []), f"Unexpected exposure in {name}")
         require(service.get("mem_limit") and service.get("cpus"), f"No resource limit for {name}")
+    require(sv["storage-init"]["image"] == sv["silo"]["image"], "Unmatched Silo admin client")
     require(cfg["networks"]["backend"]["internal"] is True, "Data network must be internal")
     require(
         all(set(sv[s]["networks"]) == {"backend"} for s in controller.DATA + ["storage-init"]),

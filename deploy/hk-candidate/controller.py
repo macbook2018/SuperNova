@@ -33,7 +33,6 @@ INFRA = {
     "HK_POSTGRES_IMAGE": "pgvector/pgvector:pg16",
     "HK_REDIS_IMAGE": "redis:7-alpine",
     "HK_SILO_IMAGE": "pgsty/silo:RELEASE.2026-11-09T00-00-00Z",
-    "HK_MC_IMAGE": "minio/mc:RELEASE.2025-08-13T08-35-41Z",
 }
 GIB = 1024**3
 
