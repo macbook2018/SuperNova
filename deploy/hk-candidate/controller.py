@@ -5,6 +5,7 @@ import base64
 import contextlib
 import fcntl
 import hashlib
+import io
 import json
 import os
 import re
@@ -12,9 +13,11 @@ import secrets
 import shutil
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import tarfile
+import tempfile
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -53,29 +56,71 @@ def command(args, *, capture=False, **kwargs):
     )
 
 
-def atomic(path, value):
-    temporary = path.with_name(path.name + ".tmp")
-    with temporary.open("w") as out:
-        out.write(value)
-        out.flush()
-        os.fsync(out.fileno())
-    temporary.replace(path)
-    fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+def private_opener(path, flags):
+    # A parent default ACL can override umask. Request the private mode at creation.
+    fd = os.open(path, flags | os.O_NOFOLLOW, 0o600)
     try:
-        os.fsync(fd)
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1:
+            raise ValueError("Expected a regular, privately owned candidate file")
+        os.fchmod(fd, 0o600)
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def private_directory(path, *, exist_ok=False):
+    path.mkdir(mode=0o700, exist_ok=exist_ok)
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        info = os.fstat(fd)
+        if info.st_uid != os.getuid() or info.st_mode & 0o077:
+            raise ValueError(f"{path} must be private (0700), owned by the deploy account")
+        os.fchmod(fd, 0o700)
     finally:
         os.close(fd)
 
 
+def atomic(path, value):
+    fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}-")
+    try:
+        with os.fdopen(fd, "w") as out:
+            os.fchmod(out.fileno(), 0o600)
+            out.write(value)
+            out.flush()
+            os.fsync(out.fileno())
+        os.replace(temporary, path)
+        directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+def check_secrets(path):
+    info = path.lstat()
+    if (
+        not stat.S_ISREG(info.st_mode)
+        or info.st_uid != os.getuid()
+        or stat.S_IMODE(info.st_mode) != 0o600
+    ):
+        raise ValueError("Invalid candidate secrets file ownership or permissions")
+
+
 def init():
-    ROOT.mkdir(mode=0o700, exist_ok=True)
-    if ROOT.resolve() != ROOT or ROOT.stat().st_uid != os.getuid() or ROOT.stat().st_mode & 0o077:
-        raise ValueError(f"{ROOT} must be private (0700), owned by the deploy account")
-    RELEASES.mkdir(mode=0o700, exist_ok=True)
+    if ROOT.resolve() != ROOT:
+        raise ValueError("Candidate directory must use its fixed host path")
+    private_directory(ROOT, exist_ok=True)
+    private_directory(RELEASES, exist_ok=True)
     path = ROOT / "secrets.env"
-    if path.exists():
-        if path.is_symlink() or path.stat().st_mode & 0o077 or path.stat().st_uid != os.getuid():
-            raise ValueError("Invalid candidate secrets file ownership or permissions")
+    try:
+        check_secrets(path)
+    except FileNotFoundError:
+        pass
+    else:
         return
     generated = {
         "HK_PG_PASSWORD": secrets.token_hex(24),
@@ -96,7 +141,7 @@ def init():
         try:
             os.link(temp, path)
         except FileExistsError:
-            pass
+            check_secrets(path)
     finally:
         temp.unlink(missing_ok=True)
 
@@ -134,39 +179,182 @@ def inspect_image(ref):
     return json.loads(command(["docker", "image", "inspect", ref], capture=True).stdout)[0]
 
 
+def json_member(bundle, path):
+    member = bundle.getmember(path)
+    if not member.isfile() or member.size > 16 * 1024 * 1024:
+        raise ValueError("Invalid image archive metadata")
+    return bundle.extractfile(member).read()
+
+
+def docker_config(bundle, row, tag, sha):
+    tags = [ref.removeprefix("docker.io/") for ref in row.get("RepoTags") or []]
+    if tags != [tag]:
+        raise ValueError("Unexpected image tag in Docker archive")
+    raw = json_member(bundle, row["Config"])
+    config = json.loads(raw)
+    if (config.get("os"), config.get("architecture")) != ("linux", "amd64"):
+        raise ValueError("Expected a single Linux amd64 image")
+    if config.get("config", {}).get("Labels", {}).get("org.opencontainers.image.revision") != sha:
+        raise ValueError("Commit label does not match the reviewed SHA")
+    layers = row["Layers"]
+    if not isinstance(layers, list) or len(config["rootfs"]["diff_ids"]) != len(layers):
+        raise ValueError("Image layers do not match its configuration")
+    return "sha256:" + hashlib.sha256(raw).hexdigest()
+
+
+def add_bytes(bundle, name, data):
+    entry = tarfile.TarInfo(name)
+    entry.size = len(data)
+    bundle.addfile(entry, io.BytesIO(data))
+
+
+def merge_images(directory, sha):
+    """Write just Docker's two tagged manifests and referenced files; exclude OCI sidecars."""
+    manifest = []
+    ids = {}
+    output = directory / "images.tar"
+    with tarfile.open(output, "w") as result:
+        for role in ("api", "console"):
+            tag = f"supernova-hk-candidate/{role}:{sha}"
+            with tarfile.open(directory / f"{role}.tar", "r:") as source:
+                rows = json.loads(json_member(source, "manifest.json"))
+                if len(rows) != 1:
+                    raise ValueError("Expected a single image per Docker exporter")
+                row = rows[0]
+                ids[role] = docker_config(source, row, tag, sha)
+                config_path = ids[role].removeprefix("sha256:") + ".json"
+                add_bytes(result, config_path, json_member(source, row["Config"]))
+                layers = []
+                for i, path in enumerate(row["Layers"]):
+                    member = source.getmember(path)
+                    if not member.isfile():
+                        raise ValueError("Invalid layer in Docker archive")
+                    # Use safe names independent of paths in the exporter archive.
+                    entry = tarfile.TarInfo(f"{role}/{i}/layer.tar")
+                    entry.size = member.size
+                    result.addfile(entry, source.extractfile(member))
+                    layers.append(entry.name)
+                manifest.append({"Config": config_path, "RepoTags": [tag], "Layers": layers})
+        add_bytes(result, "manifest.json", json.dumps(manifest).encode())
+    return ids
+
+
+def build_bundle(context, sha, directory):
+    if not re.fullmatch(r"[0-9a-f]{40}", sha):
+        raise ValueError("Expected reviewed commit SHA")
+    directory.mkdir(parents=True, exist_ok=True)
+    builder = "hk-build-" + secrets.token_hex(8)
+    command(
+        [
+            "docker",
+            "buildx",
+            "create",
+            "--name",
+            builder,
+            "--driver",
+            "docker-container",
+        ]
+    )
+    try:
+        for role in ("api", "console"):
+            args = [
+                "docker",
+                "buildx",
+                "build",
+                "--builder",
+                builder,
+                "--platform",
+                "linux/amd64",
+                "--provenance=false",
+                "--output",
+                f"type=docker,dest={directory}/{role}.tar",
+                "--label",
+                f"org.opencontainers.image.revision={sha}",
+                "--tag",
+                f"supernova-hk-candidate/{role}:{sha}",
+            ]
+            if role == "console":
+                args.extend(["--build-arg", "VITE_API_BASE_URL=http://127.0.0.1:18182"])
+            command([*args, "-f", str(context / "apps" / role / "Dockerfile"), str(context)])
+        ids = merge_images(directory, sha)
+    finally:
+        command(["docker", "buildx", "rm", builder])
+    for role in ids:
+        (directory / f"{role}.tar").unlink()
+    archive = directory / "images.tar"
+    with archive.open("rb") as stream:
+        checksum = hashlib.file_digest(stream, "sha256").hexdigest()
+    identities = {
+        "archive_hash": checksum,
+        "api_id": ids["api"],
+        "console_id": ids["console"],
+    }
+    (directory / "identities.json").write_text(json.dumps(identities))
+
+
 def archive_check(archive, sha, checksum, app_ids):
     if not re.fullmatch(r"[0-9a-f]{40}", sha) or not re.fullmatch(r"[0-9a-f]{64}", checksum):
         raise ValueError("Expected full commit SHA and SHA-256 archive checksum")
-    if any(not re.fullmatch(r"sha256:[0-9a-f]{64}", i) for i in app_ids.values()):
+    if set(app_ids) != {"api", "console"} or any(
+        not re.fullmatch(r"sha256:[0-9a-f]{64}", i) for i in app_ids.values()
+    ):
         raise ValueError("Invalid image configuration digest")
-    digest = hashlib.sha256()
     with archive.open("rb") as stream:
-        for part in iter(lambda: stream.read(4 * 1024 * 1024), b""):
-            digest.update(part)
-    if digest.hexdigest() != checksum:
-        raise ValueError("Image archive checksum mismatch")
-    targets = {f"supernova-hk-candidate/{role}:{sha}": digest for role, digest in app_ids.items()}
-    tags = {}
+        if hashlib.file_digest(stream, "sha256").hexdigest() != checksum:
+            raise ValueError("Image archive checksum mismatch")
+    expected = {f"supernova-hk-candidate/{role}:{sha}": digest for role, digest in app_ids.items()}
     with tarfile.open(archive, mode="r:") as bundle:
-        manifest = json.load(bundle.extractfile("manifest.json"))
-        if len(manifest) != 2:
-            raise ValueError("Expected exactly the two candidate images")
-        for item in manifest:
-            conf = bundle.extractfile(item["Config"]).read(16 * 1024 * 1024)
-            image_digest = "sha256:" + hashlib.sha256(conf).hexdigest()
-            if (
-                json.loads(conf)
-                .get("config", {})
-                .get("Labels", {})
-                .get("org.opencontainers.image.revision")
-                != sha
-            ):
-                raise ValueError("Commit label does not match the reviewed SHA")
-            if len(item["RepoTags"]) != 1:
-                raise ValueError("Unexpected extra image tag")
-            tags[item["RepoTags"][0]] = image_digest
-    if tags != targets:
-        raise ValueError("Image names or configuration digests do not match the reviewed images")
+        rows = json.loads(json_member(bundle, "manifest.json"))
+        allowed = {"manifest.json"}
+        actual = {}
+        for row in rows:
+            refs = row.get("RepoTags") or []
+            if len(refs) != 1 or refs[0] not in expected or refs[0] in actual:
+                raise ValueError("Unexpected image tag in candidate archive")
+            actual[refs[0]] = docker_config(bundle, row, refs[0], sha)
+            allowed.update([row["Config"], *row["Layers"]])
+        members = bundle.getmembers()
+        if (
+            actual != expected
+            or len(members) != len(allowed)
+            or {m.name for m in members} != allowed
+            or not all(
+                m.isfile()
+                and m.name in allowed
+                and re.fullmatch(
+                    r"manifest\.json|[a-f0-9]{64}\.json|(?:api|console)/[0-9]+/layer\.tar",
+                    m.name,
+                )
+                for m in members
+            )
+        ):
+            raise ValueError("Unexpected files or image digests in candidate archive")
+
+
+def runtime_id(tag, sha, expected_config, verified_id=None):
+    inspected = inspect_image(tag)
+    actual = inspected["Id"]
+    if (
+        not re.fullmatch(r"sha256:[0-9a-f]{64}", actual)
+        or inspected.get("Os") != "linux"
+        or inspected.get("Architecture") != "amd64"
+        or inspected["Config"]["Labels"].get("org.opencontainers.image.revision") != sha
+    ):
+        raise ValueError("Loaded candidate platform, revision or runtime digest does not match")
+    if verified_id is not None:
+        if actual != verified_id:
+            raise ValueError("Saved candidate runtime digest has changed")
+    elif actual != expected_config:
+        # The containerd image store can expose an image manifest digest instead of a config ID.
+        # Bind that local digest to the exported configuration once, before persisting the slot.
+        with tempfile.TemporaryFile() as stream:
+            command(["docker", "image", "save", tag], stdout=stream)
+            stream.seek(0)
+            with tarfile.open(fileobj=stream, mode="r:") as bundle:
+                rows = json.loads(json_member(bundle, "manifest.json"))
+                if len(rows) != 1 or docker_config(bundle, rows[0], tag, sha) != expected_config:
+                    raise ValueError("Loaded image configuration digest does not match")
+    return actual
 
 
 def pin_infra(previous):
@@ -179,7 +367,12 @@ def pin_infra(previous):
     for key, ref in INFRA.items():
         repository = ref.rsplit(":", 1)[0]
         canonical = repository if "/" in repository else "library/" + repository
-        aliases = {repository, canonical, "docker.io/" + canonical, "index.docker.io/" + canonical}
+        aliases = {
+            repository,
+            canonical,
+            "docker.io/" + canonical,
+            "index.docker.io/" + canonical,
+        }
         local = command(["docker", "image", "ls", "-q", ref], capture=True).stdout.strip()
         hashes = inspect_image(ref).get("RepoDigests") or [] if local else []
         existing = [
@@ -214,13 +407,12 @@ def pin_infra(previous):
 def verify_local_images(project):
     manifest = json.loads((RELEASES / project / "manifest.json").read_text())
     for role, image_id in manifest["app_ids"].items():
-        inspected = inspect_image(manifest["image_tags"][role])
-        if (
-            inspected["Id"] != image_id
-            or inspected["Config"]["Labels"].get("org.opencontainers.image.revision")
-            != manifest["sha"]
-        ):
-            raise ValueError("Saved candidate image does not match its approved SHA/digest")
+        runtime_id(
+            manifest["image_tags"][role],
+            manifest["sha"],
+            image_id,
+            manifest.get("runtime_ids", {}).get(role),
+        )
     return manifest
 
 
@@ -229,7 +421,8 @@ def volume(project, name):
     labels = (
         json.loads(
             command(
-                ["docker", "volume", "inspect", "--format", "{{json .Labels}}", ref], capture=True
+                ["docker", "volume", "inspect", "--format", "{{json .Labels}}", ref],
+                capture=True,
             ).stdout
         )
         or {}
@@ -322,7 +515,10 @@ def activate(project):
         "240",
         *APP,
     )
-    for url in ("http://127.0.0.1:18182/health/ready", "http://127.0.0.1:18183/healthz"):
+    for url in (
+        "http://127.0.0.1:18182/health/ready",
+        "http://127.0.0.1:18183/healthz",
+    ):
         command(
             [
                 "curl",
@@ -380,7 +576,8 @@ def switch(before, after, apply):
         if len(ids) != len(APP):
             raise ValueError("Existing candidate is partially stopped; inspect it before switching")
     atomic(
-        ROOT / "pending.json", json.dumps(dict(before=before, after=after, was_running=was_running))
+        ROOT / "pending.json",
+        json.dumps(dict(before=before, after=after, was_running=was_running)),
     )
     try:
         if before:
@@ -407,17 +604,19 @@ def deploy(sha, checksum, api_id, console_id):
     command(["docker", "load", "--input", str(archive)])
     infra = pin_infra(before)
     tags = {}
+    runtime_ids = {}
     for role, expected in app_ids.items():
         src = f"supernova-hk-candidate/{role}:{sha}"
-        if inspect_image(src)["Id"] != expected:
-            raise ValueError("Loaded image does not match the approved build")
         tags[role] = f"supernova-hk-sealed/{role}:" + expected.removeprefix("sha256:")
-        command(["docker", "tag", expected, tags[role]])
+        command(["docker", "tag", src, tags[role]])
+        runtime_ids[role] = runtime_id(tags[role], sha, expected)
     after = "sn-hkc-" + sha[:12] + "-" + secrets.token_hex(6)
     folder = RELEASES / after
-    folder.mkdir()
+    private_directory(folder)
     for file in ("compose.yaml", "hk-rag-candidate-host.sh", "controller.py"):
-        shutil.copy2(HERE / file, folder / file)
+        destination = folder / file
+        shutil.copyfile(HERE / file, destination)
+        destination.chmod(0o700 if file.endswith(".sh") else 0o600)
     conf = (ROOT / "secrets.env").read_text()
     lines = {
         line.split("=", 1)[0] for line in conf.splitlines() if line and not line.startswith("#")
@@ -446,9 +645,14 @@ def deploy(sha, checksum, api_id, console_id):
                 "Storage, database and encryption credentials do not match the candidate checkpoint"
             )
 
-    variables = {**infra, "HK_API_IMAGE": tags["api"], "HK_CONSOLE_IMAGE": tags["console"]}
+    variables = {
+        **infra,
+        "HK_API_IMAGE": tags["api"],
+        "HK_CONSOLE_IMAGE": tags["console"],
+    }
     atomic(
-        folder / ".env", conf.rstrip() + "\n" + "".join(f"{k}={v}\n" for k, v in variables.items())
+        folder / ".env",
+        conf.rstrip() + "\n" + "".join(f"{k}={v}\n" for k, v in variables.items()),
     )
     atomic(
         folder / "manifest.json",
@@ -457,6 +661,7 @@ def deploy(sha, checksum, api_id, console_id):
                 "sha": sha,
                 "archive_sha256": checksum,
                 "app_ids": app_ids,
+                "runtime_ids": runtime_ids,
                 "image_tags": tags,
                 "infra": infra,
                 "previous": before,
@@ -477,8 +682,18 @@ def deploy(sha, checksum, api_id, console_id):
                     ["-v", src + ":/source:ro", "-v", dst + ":/target"],
                     'test -z "$(ls -A /target)" && cp -a /source/. /target/',
                 )
-        compose(after, "up", "-d", "--pull", "never", "--wait", "--wait-timeout", "240", *DATA)
-        with (folder / "pre-migration.dump").open("xb") as backup:
+        compose(
+            after,
+            "up",
+            "-d",
+            "--pull",
+            "never",
+            "--wait",
+            "--wait-timeout",
+            "240",
+            *DATA,
+        )
+        with open(folder / "pre-migration.dump", "xb", opener=private_opener) as backup:
             compose(
                 after,
                 "exec",
@@ -547,13 +762,20 @@ def main():
         d.add_argument(arg)
     for name in ("init", "rollback", "stop"):
         actions.add_parser(name)
+    build = actions.add_parser("build-bundle")
+    build.add_argument("context", type=Path)
+    build.add_argument("sha")
+    build.add_argument("directory", type=Path)
     args = p.parse_args()
+    if args.action == "build-bundle":
+        build_bundle(args.context.resolve(), args.sha, args.directory.resolve())
+        return
     os.umask(0o077)
     init()
     if args.action == "init":
         return
     with contextlib.ExitStack() as stack:
-        own = stack.enter_context((ROOT / ".candidate.lock").open("a"))
+        own = stack.enter_context(open(ROOT / ".candidate.lock", "a", opener=private_opener))
         acquire(own)
         if SHARED_LOCK.parent.exists():
             shared = stack.enter_context(SHARED_LOCK.open("rb"))

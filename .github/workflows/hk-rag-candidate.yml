@@ -58,45 +58,39 @@ jobs:
       api_id: ${{ steps.package.outputs.api_id }}
       console_id: ${{ steps.package.outputs.console_id }}
     steps:
+      - name: Check out trusted image packaging code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          path: control
       - name: Check out exact candidate with read-only access
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ inputs.candidate_sha }}
           persist-credentials: false
-      - name: Build API and Console without deployment credentials
-        shell: bash
-        run: |
-          set -euo pipefail
-          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ && "$(git rev-parse HEAD)" == "$CANDIDATE_SHA" ]]
-          # Keep checkout credentials and Git internals outside Docker's build context.
-          context="$RUNNER_TEMP/candidate"
-          mkdir -m 700 "$context"
-          rsync -a --exclude=/.git/ ./ "$context/"
-          for service in api console; do
-            args=(--platform linux/amd64 --label "org.opencontainers.image.revision=$CANDIDATE_SHA")
-            if [[ "$service" == console ]]; then
-              args+=(--build-arg VITE_API_BASE_URL=http://127.0.0.1:18182)
-            fi
-            docker build "${args[@]}" -f "$context/apps/$service/Dockerfile" \
-              -t "supernova-hk-candidate/$service:$CANDIDATE_SHA" "$context"
-          done
-      - name: Bind archive and image identities to this build
+          path: candidate
+      - name: Build, package and identify the two reviewed images
         id: package
         shell: bash
         run: |
           set -euo pipefail
-          archive="$RUNNER_TEMP/images.tar"
-          api="supernova-hk-candidate/api:$CANDIDATE_SHA"
-          console="supernova-hk-candidate/console:$CANDIDATE_SHA"
-          docker image save --output "$archive" "$api" "$console"
-          hash="$(sha256sum "$archive" | cut -d' ' -f1)"
-          api_id="$(docker image inspect "$api" --format '{{.Id}}')"
-          console_id="$(docker image inspect "$console" --format '{{.Id}}')"
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ && "$(git -C candidate rev-parse HEAD)" == "$CANDIDATE_SHA" ]]
+          context="$RUNNER_TEMP/app-source"
+          mkdir -m 700 "$context"
+          git -C candidate archive "$CANDIDATE_SHA" | tar -x -C "$context"
+          bundle="$RUNNER_TEMP/hk-images"
+          python3 control/deploy/hk-candidate/controller.py build-bundle "$context" "$CANDIDATE_SHA" "$bundle"
+          hash="$(jq -er .archive_hash "$bundle/identities.json")"
+          api_id="$(jq -er .api_id "$bundle/identities.json")"
+          console_id="$(jq -er .console_id "$bundle/identities.json")"
           [[ "$hash" =~ ^[0-9a-f]{64}$ ]]
           [[ "$api_id" =~ ^sha256:[0-9a-f]{64}$ && "$console_id" =~ ^sha256:[0-9a-f]{64}$ ]]
-          echo "archive_hash=$hash" >> "$GITHUB_OUTPUT"
-          echo "api_id=$api_id" >> "$GITHUB_OUTPUT"
-          echo "console_id=$console_id" >> "$GITHUB_OUTPUT"
+          {
+            echo "archive_hash=$hash"
+            echo "api_id=$api_id"
+            echo "console_id=$console_id"
+          } >> "$GITHUB_OUTPUT"
           {
             echo "PR #$PR_NUMBER — $CANDIDATE_SHA"
             echo "Archive SHA-256: $hash"
@@ -108,7 +102,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: hk-rag-images-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/images.tar
+          path: ${{ runner.temp }}/hk-images/images.tar
           compression-level: 1
           retention-days: 1
           if-no-files-found: error
