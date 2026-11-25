@@ -4,12 +4,183 @@ import time
 from html import escape
 from uuid import UUID, uuid4
 
-from sqlalchemy import and_, func, select
+from sqlalchemy import Uuid, and_, func, literal, select, union_all
 from sqlalchemy.orm import Session
 
-from app.knowledge.embeddings import embed_texts, resolve_embedding_config
-from app.models.catalog import KnowledgeBase, PersonaKnowledgeBase
-from app.models.knowledge import KnowledgeChunk, KnowledgeDocument, KnowledgeUsageRecord
+from app.knowledge.embeddings import (
+    embed_texts,
+    embedding_config_fingerprint,
+    resolve_embedding_config,
+    resolve_snapshot_embedding_config,
+)
+from app.knowledge.observations import observe_embedding_calls
+from app.models.catalog import KnowledgeBase, Persona, PersonaKnowledgeBase
+from app.models.knowledge import (
+    KnowledgeChunk,
+    KnowledgeDocument,
+    KnowledgeDocumentIndexRevision,
+    KnowledgeIndexChunk,
+    KnowledgeIndexMember,
+    KnowledgeIndexRelease,
+    KnowledgeIndexState,
+    KnowledgeUsageRecord,
+)
+
+
+def _active_release(db: Session, tenant_id: UUID, kb_id: UUID) -> KnowledgeIndexRelease | None:
+    state = db.execute(
+        select(KnowledgeIndexState.active_release_id, KnowledgeIndexRelease)
+        .outerjoin(
+            KnowledgeIndexRelease,
+            and_(
+                KnowledgeIndexRelease.tenant_id == KnowledgeIndexState.tenant_id,
+                KnowledgeIndexRelease.knowledge_base_id == KnowledgeIndexState.knowledge_base_id,
+                KnowledgeIndexRelease.id == KnowledgeIndexState.active_release_id,
+            ),
+        )
+        .where(
+            KnowledgeIndexState.tenant_id == tenant_id,
+            KnowledgeIndexState.knowledge_base_id == kb_id,
+        )
+        .execution_options(populate_existing=True)
+    ).one_or_none()
+    if state is None or state.active_release_id is None:
+        return None
+    release = state[1]
+    if release is None or release.status != "ready":
+        raise RuntimeError("knowledge_active_release_unavailable")
+    return release
+
+
+def _readable_bases(tenant_id: UUID, persona_id: UUID | None):
+    statement = select(KnowledgeBase).where(
+        KnowledgeBase.tenant_id == tenant_id,
+        KnowledgeBase.enabled.is_(True),
+    )
+    if persona_id is not None:
+        statement = (
+            statement.join(
+                PersonaKnowledgeBase,
+                and_(
+                    PersonaKnowledgeBase.tenant_id == KnowledgeBase.tenant_id,
+                    PersonaKnowledgeBase.knowledge_base_id == KnowledgeBase.id,
+                ),
+            )
+            .join(
+                Persona,
+                and_(
+                    Persona.id == PersonaKnowledgeBase.persona_id,
+                    Persona.tenant_id == PersonaKnowledgeBase.tenant_id,
+                ),
+            )
+            .where(Persona.id == persona_id, Persona.enabled.is_(True))
+        )
+    return statement
+
+
+def _legacy_profile_mismatch(tenant_id, kb_id, document_ids, fingerprint):
+    # A legacy_unknown row freezes the reader known at checkpoint time, while a
+    # generated row records the writer. Older documents without a row retain v1 behavior.
+    revision = KnowledgeDocumentIndexRevision
+    mismatch = (
+        select(revision.document_id)
+        .join(
+            KnowledgeDocument,
+            and_(
+                KnowledgeDocument.tenant_id == revision.tenant_id,
+                KnowledgeDocument.knowledge_base_id == revision.knowledge_base_id,
+                KnowledgeDocument.id == revision.document_id,
+                KnowledgeDocument.active_index_version == revision.index_version,
+            ),
+        )
+        .where(
+            revision.tenant_id == tenant_id,
+            revision.knowledge_base_id == kb_id,
+            KnowledgeDocument.status == "ready",
+            revision.reader_fingerprint != fingerprint,
+        )
+    )
+    if document_ids:
+        mismatch = mismatch.where(revision.document_id.in_(document_ids))
+    return mismatch.correlate(None).exists()
+
+
+def _ranked_candidates(
+    db: Session,
+    tenant_id: UUID,
+    kb_id: UUID,
+    release_id: UUID | None,
+    document_ids: list[UUID] | None,
+    query_vector: list[float],
+    query: str,
+    limit: int,
+    persona_id: UUID | None = None,
+    mismatched=None,
+):
+    chunk = KnowledgeIndexChunk if release_id is not None else KnowledgeChunk
+    document_join = and_(
+        KnowledgeDocument.id == chunk.document_id,
+        KnowledgeDocument.tenant_id == chunk.tenant_id,
+        KnowledgeDocument.knowledge_base_id == chunk.knowledge_base_id,
+    )
+    scope = select(chunk.id.label("chunk_id")).join(KnowledgeDocument, document_join).where(
+        chunk.tenant_id == tenant_id,
+        chunk.knowledge_base_id == kb_id,
+        KnowledgeDocument.status == "ready",
+        _readable_bases(tenant_id, persona_id).where(KnowledgeBase.id == kb_id).exists(),
+    )
+    if release_id is None:
+        scope = scope.where(chunk.index_version == KnowledgeDocument.active_index_version)
+    else:
+        scope = scope.join(
+            KnowledgeIndexMember,
+            and_(
+                KnowledgeIndexMember.release_id == chunk.release_id,
+                KnowledgeIndexMember.tenant_id == chunk.tenant_id,
+                KnowledgeIndexMember.knowledge_base_id == chunk.knowledge_base_id,
+                KnowledgeIndexMember.document_id == chunk.document_id,
+            ),
+        ).where(
+            chunk.release_id == release_id,
+            KnowledgeIndexMember.status == "ready",
+            KnowledgeIndexMember.source_version == KnowledgeDocument.active_index_version,
+            KnowledgeIndexMember.source_sha256.is_not_distinct_from(KnowledgeDocument.sha256),
+        )
+    if document_ids:
+        scope = scope.where(chunk.document_id.in_(document_ids))
+
+    # One PostgreSQL statement gives both ranking branches the same MVCC snapshot,
+    # including during a concurrent release activation or legacy document reindex.
+    guard = None
+    if mismatched is not None:
+        # A v1 worker may activate a different embedding space during the external
+        # query call. Validate once in the candidate statement's MVCC snapshot.
+        guard = select(mismatched.label("changed")).cte("legacy_profile_guard")
+        scope = scope.where(~select(guard.c.changed).scalar_subquery())
+    distance = chunk.embedding.cosine_distance(query_vector)
+    vector = scope.add_columns(literal("vector").label("kind"), distance.label("raw_score"))
+    similarity = func.similarity(chunk.content, query)
+    lexical = scope.add_columns(literal("lexical").label("kind"), similarity.label("raw_score"))
+    arms = [
+        vector.order_by(distance.asc()).limit(limit),
+        lexical.where(similarity > 0.01).order_by(similarity.desc()).limit(limit),
+    ]
+    if guard is not None:
+        arms.append(
+            select(literal(None, Uuid), literal("profile_changed"), literal(0.0))
+            .where(guard.c.changed)
+        )
+    candidates = union_all(*arms).subquery()
+    rows = db.execute(
+        select(chunk, KnowledgeDocument, candidates.c.kind, candidates.c.raw_score)
+        .select_from(candidates)
+        .outerjoin(chunk, chunk.id == candidates.c.chunk_id)
+        .outerjoin(KnowledgeDocument, document_join)
+        .execution_options(populate_existing=True)
+    ).all()
+    if any(kind == "profile_changed" for _, _, kind, _ in rows):
+        raise ValueError("index_embedding_profile_changed")
+    return rows
 
 
 def retrieve_knowledge_base(
@@ -22,6 +193,7 @@ def retrieve_knowledge_base(
     score_threshold: float | None = None,
     document_ids: list[UUID] | None = None,
     record_usage: bool = True,
+    persona_id: UUID | None = None,
 ) -> list[dict]:
     if knowledge_base.tenant_id != tenant_id or not knowledge_base.enabled:
         return []
@@ -37,8 +209,27 @@ def retrieve_knowledge_base(
         return []
 
     started = time.monotonic()
-    embedding_config = resolve_embedding_config(db, knowledge_base)
-    embedded = embed_texts(embedding_config, [query])
+    release = _active_release(db, tenant_id, knowledge_base.id)
+    release_id = release.id if release is not None else None
+    mismatched = None
+    if release is None:
+        embedding_config = resolve_embedding_config(db, knowledge_base)
+        fingerprint = embedding_config_fingerprint(knowledge_base, embedding_config)
+        mismatched = _legacy_profile_mismatch(
+            tenant_id, knowledge_base.id, document_ids, fingerprint
+        )
+        if db.scalar(select(mismatched)):
+            raise ValueError("index_embedding_profile_changed")
+    else:
+        embedding_config = resolve_snapshot_embedding_config(
+            db, knowledge_base, release.config_json.get("embedding_profile"),
+            release.embedding_fingerprint,
+        )
+    with observe_embedding_calls(
+        db, tenant_id=tenant_id, knowledge_base_id=knowledge_base.id,
+        release_id=release_id, operation="query_embedding",
+    ):
+        embedded = embed_texts(embedding_config, [query])
     if len(embedded.vectors) != 1:
         raise RuntimeError("query_embedding_failed")
     query_vector = embedded.vectors[0]
@@ -51,81 +242,33 @@ def retrieve_knowledge_base(
     )
     candidate_limit = min(100, max(limit * 4, 20))
 
-    scope = [
-        KnowledgeChunk.tenant_id == tenant_id,
-        KnowledgeChunk.knowledge_base_id == knowledge_base.id,
-        KnowledgeDocument.tenant_id == tenant_id,
-        KnowledgeDocument.knowledge_base_id == knowledge_base.id,
-        KnowledgeDocument.status == "ready",
-        KnowledgeChunk.index_version == KnowledgeDocument.active_index_version,
-    ]
-    if document_ids:
-        scope.append(KnowledgeChunk.document_id.in_(document_ids))
-
-    distance = KnowledgeChunk.embedding.cosine_distance(query_vector)
-    vector_rows = db.execute(
-        select(KnowledgeChunk, KnowledgeDocument, distance.label("distance"))
-        .join(
-            KnowledgeDocument,
-            and_(
-                KnowledgeDocument.id == KnowledgeChunk.document_id,
-                KnowledgeDocument.tenant_id == KnowledgeChunk.tenant_id,
-            ),
-        )
-        .where(*scope)
-        .order_by(distance.asc())
-        .limit(candidate_limit)
-    ).all()
-
-    lexical_score = func.similarity(KnowledgeChunk.content, query)
-    lexical_rows = db.execute(
-        select(KnowledgeChunk, KnowledgeDocument, lexical_score.label("lexical_score"))
-        .join(
-            KnowledgeDocument,
-            and_(
-                KnowledgeDocument.id == KnowledgeChunk.document_id,
-                KnowledgeDocument.tenant_id == KnowledgeChunk.tenant_id,
-            ),
-        )
-        .where(*scope, lexical_score > 0.01)
-        .order_by(lexical_score.desc())
-        .limit(candidate_limit)
-    ).all()
+    rows = _ranked_candidates(
+        db, tenant_id, knowledge_base.id, release_id, document_ids, query_vector,
+        query, candidate_limit, persona_id, mismatched,
+    )
+    by_kind: dict[str, list] = {"vector": [], "lexical": []}
+    for chunk, document, kind, raw_score in rows:
+        similarity = 1.0 - float(raw_score) if kind == "vector" else float(raw_score)
+        by_kind[kind].append((similarity, chunk, document))
 
     merged: dict[UUID, dict] = {}
-    for rank, (chunk, document, raw_distance) in enumerate(vector_rows, start=1):
-        similarity = max(0.0, min(1.0, 1.0 - float(raw_distance)))
-        item = merged.setdefault(
-            chunk.id,
-            {
-                "chunk": chunk,
-                "document": document,
-                "rrf": 0.0,
-                "score": similarity,
-                "vector_rank": None,
-                "lexical_rank": None,
-            },
-        )
-        item["rrf"] += 1.0 / (60 + rank)
-        item["score"] = max(item["score"], similarity)
-        item["vector_rank"] = rank
-
-    for rank, (chunk, document, raw_score) in enumerate(lexical_rows, start=1):
-        similarity = max(0.0, min(1.0, float(raw_score)))
-        item = merged.setdefault(
-            chunk.id,
-            {
-                "chunk": chunk,
-                "document": document,
-                "rrf": 0.0,
-                "score": similarity,
-                "vector_rank": None,
-                "lexical_rank": None,
-            },
-        )
-        item["rrf"] += 1.0 / (60 + rank)
-        item["score"] = max(item["score"], similarity)
-        item["lexical_rank"] = rank
+    for kind, candidates in by_kind.items():
+        candidates.sort(key=lambda row: (-row[0], row[1].id))
+        for rank, (similarity, chunk, document) in enumerate(candidates, start=1):
+            item = merged.setdefault(
+                chunk.id,
+                {
+                    "chunk": chunk,
+                    "document": document,
+                    "rrf": 0.0,
+                    "score": 0.0,
+                    "vector_rank": None,
+                    "lexical_rank": None,
+                },
+            )
+            item["rrf"] += 1.0 / (60 + rank)
+            item["score"] = max(item["score"], min(1.0, similarity))
+            item[f"{kind}_rank"] = rank
 
     ranked = [
         item for item in merged.values()
@@ -187,23 +330,8 @@ def retrieve_persona_context(
     query: str,
     max_context_chars: int = 14000,
 ) -> tuple[str, list[dict]]:
-    knowledge_bases = db.scalars(
-        select(KnowledgeBase)
-        .join(
-            PersonaKnowledgeBase,
-            and_(
-                PersonaKnowledgeBase.tenant_id == KnowledgeBase.tenant_id,
-                PersonaKnowledgeBase.knowledge_base_id == KnowledgeBase.id,
-            ),
-        )
-        .where(
-            PersonaKnowledgeBase.tenant_id == tenant_id,
-            PersonaKnowledgeBase.persona_id == persona_id,
-            KnowledgeBase.tenant_id == tenant_id,
-            KnowledgeBase.enabled.is_(True),
-        )
-        .order_by(KnowledgeBase.created_at.asc())
-    ).all()
+    readable = _readable_bases(tenant_id, persona_id)
+    knowledge_bases = db.scalars(readable.order_by(KnowledgeBase.created_at.asc())).all()
 
     candidates: list[dict] = []
     for knowledge_base in knowledge_bases:
@@ -232,12 +360,17 @@ def retrieve_persona_context(
             top_k=knowledge_base.retrieval_top_k,
             score_threshold=knowledge_base.retrieval_score_threshold,
             record_usage=True,
+            persona_id=persona_id,
         )
         for hit in hits:
             hit["knowledge_base_id"] = knowledge_base.id
             hit["knowledge_base_name"] = knowledge_base.name
             candidates.append(hit)
 
+    if candidates and len(knowledge_bases) > 1:
+        # An earlier binding may be revoked while a later KB's model call is in flight.
+        allowed_ids = set(db.scalars(readable.with_only_columns(KnowledgeBase.id)))
+        candidates = [hit for hit in candidates if hit["knowledge_base_id"] in allowed_ids]
     candidates.sort(key=lambda item: item["rrf_score"], reverse=True)
     context_parts: list[str] = []
     citations: list[dict] = []

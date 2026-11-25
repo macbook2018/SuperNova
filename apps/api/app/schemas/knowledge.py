@@ -138,6 +138,15 @@ class KnowledgeSearchResponse(BaseModel):
     hits: list[KnowledgeSearchHit]
 
 
+class KnowledgeOperationUsage(BaseModel):
+    operation: str
+    status: str
+    calls: int
+    known_input_tokens: int
+    known_output_tokens: int
+    unknown_calls: int = Field(description="供应商尚未返回任何 Token 用量的调用次数")
+
+
 class KnowledgeUsageSummary(BaseModel):
     document_count: int
     ready_documents: int
@@ -148,3 +157,83 @@ class KnowledgeUsageSummary(BaseModel):
     embedding_tokens: int
     embedding_requests: int
     retrieval_requests: int
+    active_release_id: UUID | None = None
+    legacy_active_chunks: int = 0
+    operation_usage: list[KnowledgeOperationUsage] = Field(
+        default_factory=list,
+        description="逐次供应商调用观测，按步骤和状态汇总。与上述兼容汇总有重叠，不应相加。",
+    )
+
+
+class IndexBuildConfig(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    parser_version: Literal["legacy"] = "legacy"
+    chunk_size: int | None = Field(default=None, ge=100, le=4000)
+    chunk_overlap: int | None = Field(default=None, ge=0, lt=4000)
+
+
+class IndexBuildRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    request_key: str = Field(min_length=1, max_length=120, pattern=r"^[A-Za-z0-9_.:-]+$")
+    expected_generation: int = Field(ge=0)
+    config: IndexBuildConfig = Field(default_factory=IndexBuildConfig)
+
+
+class IndexPublishRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    expected_generation: int = Field(ge=0)
+
+
+class IndexRollbackRequest(IndexPublishRequest):
+    target_release_id: UUID | None
+
+
+class IndexStateRead(BaseModel):
+    generation: int
+    active_release_id: UUID | None
+
+
+class IndexVersionConfigRead(BaseModel):
+    parser_version: str
+    chunk_size: int
+    chunk_overlap: int
+
+
+class IndexVersionRead(BaseModel):
+    id: UUID
+    revision: int
+    status: str
+    expected_generation: int
+    config: IndexVersionConfigRead
+    created_at: datetime
+    published_at: datetime | None
+
+
+class IndexVersionsRead(IndexStateRead):
+    versions: list[IndexVersionRead]
+
+
+class DocumentRevisionRead(BaseModel):
+    version: int
+    created_at: datetime
+    chunk_count: int
+    profile_origin: str
+
+
+class DocumentIndexStateRead(BaseModel):
+    active_index_version: int
+    generation: int
+
+
+class DocumentHistoryRead(DocumentIndexStateRead):
+    revisions: list[DocumentRevisionRead]
+
+
+class DocumentRestoreRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    expected_active_index_version: int = Field(ge=0)
+    expected_generation: int = Field(ge=0)
