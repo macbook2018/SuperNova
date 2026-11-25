@@ -22,7 +22,9 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
-ROOT = Path("/opt/supernova-hk-candidate")
+DEDICATED_ROOT = Path("/opt/supernova-hk-candidate")
+STAGING_CANDIDATE_ROOT = Path("/opt/supernova-staging/hk-rag-candidate")
+ROOT = DEDICATED_ROOT
 SHARED_LOCK = Path("/opt/supernova-staging/.deploy-staging.lock")
 HERE = Path(__file__).resolve().parent
 RELEASES = ROOT / "releases"
@@ -107,6 +109,25 @@ def check_secrets(path):
         or stat.S_IMODE(info.st_mode) != 0o600
     ):
         raise ValueError("Invalid candidate secrets file ownership or permissions")
+
+
+def candidate_root(profile):
+    # Previous deployments of either SSH profile used DEDICATED_ROOT. Keep their history.
+    try:
+        STAGING_CANDIDATE_ROOT.lstat()
+    except FileNotFoundError:
+        pass
+    except PermissionError:
+        if profile == "existing-staging":
+            raise
+        # Dedicated identities do not need access to the staging user's directory.
+    else:
+        if profile != "existing-staging" or os.path.lexists(DEDICATED_ROOT):
+            raise ValueError("Candidate root conflict: check the SSH profile and both fixed roots")
+        return STAGING_CANDIDATE_ROOT
+    if profile == "existing-staging" and not os.path.lexists(DEDICATED_ROOT):
+        return STAGING_CANDIDATE_ROOT
+    return DEDICATED_ROOT
 
 
 def init():
@@ -754,7 +775,9 @@ def acquire(file, timeout=1200):
 
 
 def main():
+    global ROOT, RELEASES
     p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--ssh-profile", choices=("candidate", "existing-staging"), default="candidate")
     actions = p.add_subparsers(dest="action", required=True)
     d = actions.add_parser("deploy")
     for arg in ("sha", "tar_checksum", "api_image_id", "console_image_id"):
@@ -769,6 +792,8 @@ def main():
     if args.action == "build-bundle":
         build_bundle(args.context.resolve(), args.sha, args.directory.resolve())
         return
+    ROOT = candidate_root(args.ssh_profile)
+    RELEASES = ROOT / "releases"
     os.umask(0o077)
     init()
     if args.action == "init":

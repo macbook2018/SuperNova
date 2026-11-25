@@ -8,7 +8,7 @@
 2. 在仓库创建 Environment `hk-rag-candidate`，部署分支只允许 `main`。有两位可用维护者时，可设置 Required reviewers、Prevent self-review 和禁止管理员跳过，并指定独立发布审核人。若仓管选择单维护者审核，由有 write/maintain/admin 权限的总控按下节输入完整确认文本。已启用的 GitHub 环境审核照常生效；同一 GitHub 账号的多个会话只算一个账号。GitHub 对环境审核名单只要求其中一人批准。[GitHub 环境审核说明](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments#required-reviewers)
 3. 默认 `ssh_profile=candidate`。在候选 Environment 配置专属的 `HK_CANDIDATE_SSH_HOST`、`HK_CANDIDATE_SSH_USER`、`HK_CANDIDATE_SSH_KEY`、`HK_CANDIDATE_SSH_KNOWN_HOSTS`，非 22 端口再设 `HK_CANDIDATE_SSH_PORT`。这些名称仅在候选 Environment 配置，经独立渠道核对主机指纹。
 4. 候选与日常 Staging 共用香港主机时，可显式选 `ssh_profile=existing-staging`。它使用日常部署已配置的仓库 Secrets `STAGING_HOST`、`STAGING_USER`、`STAGING_SSH_PRIVATE_KEY`、`STAGING_SSH_KNOWN_HOSTS` 与可选的 `STAGING_SSH_PORT`。在候选 Environment 中保持这些名称为空缺，以免遮蔽仓库配置。仅复用 SSH 连接，候选仍有独立目录、Compose 项目和数据。部署与日常 Staging 共用锁；部署身份需要有权访问该锁。
-5. 在 Linux amd64 候选机上，部署账号须能创建或访问权限 0700 的固定目录 `/opt/supernova-hk-candidate`。控制器要求可见至少两个 CPU、1600 MiB 可用物理内存，并按归档和上轮候选卷大小检查本机空间。首次部署自动初始化该目录并生成独立的数据库、Redis、Silo、JWT 和加密密钥。可提前用受信 `main` 中的 `deploy/hk-candidate/hk-rag-candidate-host.sh init` 初始化。BYOK 验收可保留初始 `secrets.env`（权限 0600）中的 `HK_ADMIN_EMAILS` 为空和 `HK_MODEL_CREDENTIALS_JSON='{}'`。验收平台池时在 `HK_MODEL_CREDENTIALS_JSON` 添加候选专属 credential ref，并在供应商侧设置用量限额。预留管理员邮箱只用于已有账号的迁移引导，空库填写它不会创建拥有管理权限的账号。就绪后在候选 Environment 启用 `HK_RAG_CANDIDATE_ENABLED=true`。
+5. Linux amd64 候选机按连接配置选择权限 0700 的固定目录。专属连接使用 `/opt/supernova-hk-candidate`，复用 Staging 连接的首次部署使用 `/opt/supernova-staging/hk-rag-candidate`。早期部署若已创建专属目录，复用连接也会沿用原目录及其所有发布历史。两个目录同时存在时须先核对归属。控制器要求可见至少两个 CPU、1600 MiB 可用物理内存，并按归档和上轮候选卷大小检查本机空间。首次部署自动初始化该目录并生成独立的数据库、Redis、Silo、JWT 和加密密钥。手动执行受信 `main` 的脚本时，按本次部署设置 `HK_SSH_PROFILE=candidate` 或 `HK_SSH_PROFILE=existing-staging`，并使用 `hk-rag-candidate-host.sh --ssh-profile "$HK_SSH_PROFILE" init`。BYOK 验收可保留初始 `secrets.env`（权限 0600）中的 `HK_ADMIN_EMAILS` 为空和 `HK_MODEL_CREDENTIALS_JSON='{}'`。验收平台池时在 `HK_MODEL_CREDENTIALS_JSON` 添加候选专属 credential ref，并在供应商侧设置用量限额。预留管理员邮箱只用于已有账号的迁移引导，空库填写它不会创建拥有管理权限的账号。就绪后在候选 Environment 启用 `HK_RAG_CANDIDATE_ENABLED=true`。
 
 ## 发起一次候选部署
 
@@ -45,9 +45,9 @@ ssh -N -o ExitOnForwardFailure=yes \
 
 ## 中止与恢复
 
-构建、校验或环境审核失败时，查看失败环节，修复后以当前获审 SHA 发起新运行。主机部署失败时先核对脚本报告和两个本地健康端点；已有成功候选时检查前一发布是否自动恢复，首次失败记录为无可恢复发布。当前候选项目记录在 `/opt/supernova-hk-candidate/current`，对应控制器与环境快照位于 `releases/<project>/`。需要手动回退时，在候选机使用来自已审核 `main` 的 `hk-rag-candidate-host.sh rollback`，再核对恢复的 SHA、健康状态和原有样本。该操作针对候选项目及其数据快照。
+构建、校验或环境审核失败时，查看失败环节，修复后以当前获审 SHA 发起新运行。主机部署失败时先核对脚本报告和两个本地健康端点；已有成功候选时检查前一发布是否自动恢复，首次失败记录为无可恢复发布。将 `HK_CANDIDATE_ROOT` 设为上文对应的实际候选目录。当前候选项目记录在 `$HK_CANDIDATE_ROOT/current`，对应控制器与环境快照位于 `releases/<project>/`。需要手动回退时，在候选机使用来自已审核 `main` 的 `hk-rag-candidate-host.sh --ssh-profile "$HK_SSH_PROFILE" rollback`，再核对恢复的 SHA、健康状态和原有样本。该操作针对候选项目及其数据快照。
 
-验收结束后关闭 SSH 隧道，用同一可信主机脚本的 `stop` 停止当前候选项目并保留卷。模型凭据通过其提供方轮换或撤销；留存旧发布配置时应考虑其中包含候选凭据。磁盘空间不足时暂停发布，由总控确认候选快照保留范围和备份后再清理。
+验收结束后关闭 SSH 隧道，用 `hk-rag-candidate-host.sh --ssh-profile "$HK_SSH_PROFILE" stop` 停止当前候选项目并保留卷。模型凭据通过其提供方轮换或撤销；留存旧发布配置时应考虑其中包含候选凭据。磁盘空间不足时暂停发布，由总控确认候选快照保留范围和备份后再清理。
 
 
 <details>
@@ -57,7 +57,7 @@ ssh -N -o ExitOnForwardFailure=yes \
 
 ```bash
 set -euo pipefail
-hk_project=$(cat /opt/supernova-hk-candidate/current)
+hk_project=$(cat "${HK_CANDIDATE_ROOT:?}/current")
 [[ "$hk_project" =~ ^sn-hkc-[0-9a-f]{12}-[0-9a-f]{12}$ ]]
 hk_pg=$(docker ps -q --filter "label=com.docker.compose.project=$hk_project" \
   --filter label=com.docker.compose.service=postgres)

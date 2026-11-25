@@ -178,6 +178,7 @@ jobs:
       - name: Transfer verified images and deploy with the trusted controller
         shell: bash
         env:
+          SSH_PROFILE: ${{ inputs.ssh_profile }}
           # Select secret names together. A missing selected value fails the checks below.
           SSH_HOST: ${{ secrets[inputs.ssh_profile == 'existing-staging' && 'STAGING_HOST' || 'HK_CANDIDATE_SSH_HOST'] }}
           SSH_USER: ${{ secrets[inputs.ssh_profile == 'existing-staging' && 'STAGING_USER' || 'HK_CANDIDATE_SSH_USER'] }}
@@ -220,4 +221,4 @@ jobs:
           # An approval can be dismissed or a head can advance during a large image transfer.
           python3 deploy/scripts/verify-hk-candidate.py
           ssh "${opts[@]}" -p "$SSH_PORT" "$target" \
-            "cd '$remote_dir' && bash ./hk-rag-candidate-host.sh deploy '$CANDIDATE_SHA' '$ARCHIVE_HASH' '$API_IMAGE_ID' '$CONSOLE_IMAGE_ID'"
+            "cd '$remote_dir' && bash ./hk-rag-candidate-host.sh --ssh-profile '$SSH_PROFILE' deploy '$CANDIDATE_SHA' '$ARCHIVE_HASH' '$API_IMAGE_ID' '$CONSOLE_IMAGE_ID'"
