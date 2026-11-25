@@ -11,6 +11,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -159,7 +160,8 @@ class CandidateControllerTests(unittest.TestCase):
         self.assertEqual(c.current(), self.a)
         self.assertEqual(self.activate.call_args.args, (self.a,))
 
-    def test_deploy_clones_only_checked_previous_candidate_volumes(self):
+    @contextmanager
+    def replacement_inputs(self):
         self.addCleanup(os.umask, os.umask(0))
         c.atomic(self.root / "current", self.a)
         temp = self.root / "upload"
@@ -198,7 +200,21 @@ class CandidateControllerTests(unittest.TestCase):
             patch.object(c, "volume", side_effect=lambda p, v: p + "_" + v) as volume,
             patch.object(c, "volume_helper") as helper,
         ):
-            c.deploy(sha, "a" * 64, *image_ids)
+            yield (sha, "a" * 64, *image_ids), volume, helper
+
+    def test_deploy_clones_only_checked_previous_candidate_volumes(self):
+        with (
+            self.replacement_inputs() as (args, volume, helper),
+            patch.object(c, "check_available_memory") as check,
+        ):
+            def assert_quiesced():
+                self.stop.assert_called_once_with(self.a)
+                self.assertTrue((self.root / "pending.json").is_file())
+                helper.assert_not_called()
+
+            check.side_effect = assert_quiesced
+            c.deploy(*args)
+            check.assert_called_once()
         after = c.current()
         self.assertNotEqual(after, self.a)
         self.assertEqual(len(helper.call_args_list), 3)
@@ -235,6 +251,57 @@ class CandidateControllerTests(unittest.TestCase):
             [arg for call in self.compose.call_args_list for arg in call.args],
         )
         self.activate.assert_called_once_with(after)
+
+    def test_replacement_refuses_low_memory_and_restores_previous_candidate(self):
+        with self.replacement_inputs() as (args, volume, helper):
+            previous_env = (self.releases / self.a / ".env").read_bytes()
+            low_memory = "MemAvailable: 1536000 kB\nSwapFree: 4194304 kB\n"
+            original_read = Path.read_text
+
+            def read(path, *args, **kwargs):
+                if path == Path("/proc/meminfo"):
+                    self.stop.assert_called_once_with(self.a)
+                    self.assertTrue((self.root / "pending.json").is_file())
+                    return low_memory
+                return original_read(path, *args, **kwargs)
+
+            with (
+                patch.object(Path, "read_text", read),
+                self.assertRaisesRegex(ValueError, "1600 MiB.*measured 1500 MiB"),
+            ):
+                c.deploy(*args)
+            self.assertEqual(c.current(), self.a)
+            self.assertEqual((self.releases / self.a / ".env").read_bytes(), previous_env)
+            self.assertFalse((self.root / "pending.json").exists())
+            self.activate.assert_called_once_with(self.a)
+            self.assertEqual(self.stop.call_count, 2)
+            self.assertNotEqual(self.stop.call_args.args[0], self.a)
+            volume.assert_not_called()
+            helper.assert_not_called()
+            self.assertFalse(
+                any(x.args[1] in ("up", "run", "exec") for x in self.compose.call_args_list)
+            )
+
+    def test_preflight_checks_fresh_ram_and_preserves_replacement_cpu_and_disk_gates(self):
+        with (
+            patch.object(c.os, "sched_getaffinity", return_value={0, 1}) as affinity,
+            patch.object(c, "check_available_memory", side_effect=ValueError("low RAM")) as check,
+            patch.object(c, "verify_local_images", return_value={"infra": c.INFRA}),
+            patch.object(c, "volume"),
+            patch.object(c, "volume_helper", return_value=Mock(stdout="0 fixture")),
+            patch.object(c.shutil, "disk_usage", return_value=Mock(free=0)),
+        ):
+            with self.assertRaisesRegex(ValueError, "low RAM"):
+                c.enough_capacity(None, 100, self.root)
+            check.assert_called_once()
+            check.reset_mock()
+            with self.assertRaisesRegex(ValueError, "Insufficient space"):
+                c.enough_capacity(self.a, 100, self.root)
+            affinity.return_value = {0}
+            with self.assertRaisesRegex(ValueError, "two CPUs"):
+                c.enough_capacity(self.a, 100, self.root)
+            check.assert_not_called()
+            self.stop.assert_not_called()
 
     def test_archive_rejects_retagging_and_false_commit_label(self):
         sha = "b" * 40
