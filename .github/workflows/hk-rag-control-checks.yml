@@ -66,13 +66,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          root=/opt/supernova-hk-candidate
+          staging=/opt/supernova-staging
+          root="$staging/hk-rag-candidate"
           transfer="$RUNNER_TEMP/controller-smoke"
           mkdir -m 700 "$transfer"
           cp control/deploy/hk-candidate/{controller.py,compose.yaml,hk-rag-candidate-host.sh} "$transfer/"
-          test ! -e "$root"
-          sudo install -d -o "$(id -u)" -g "$(id -g)" -m 0700 "$root"
-          controller=(bash "$transfer/hk-rag-candidate-host.sh")
+          test ! -e "$staging"
+          test ! -e /opt/supernova-hk-candidate
+          sudo install -d -o "$(id -u)" -g "$(id -g)" -m 0700 "$staging"
+          touch "$staging/.deploy-staging.lock"
+          printf 'staging-fixture\n' > "$staging/.env"
+          controller=(bash "$transfer/hk-rag-candidate-host.sh" --ssh-profile existing-staging)
           "${controller[@]}" init
           bundle="$RUNNER_TEMP/hk-images"
           mv "$bundle/images.tar" "$transfer/images.tar"
@@ -99,3 +103,5 @@ jobs:
           curl --noproxy '*' -fsS http://127.0.0.1:18183/healthz >/dev/null
           "${controller[@]}" stop
           test -f "$root/releases/$first/stopped"
+          test "$(cat "$staging/.env")" = staging-fixture
+          test ! -e /opt/supernova-hk-candidate

@@ -25,6 +25,10 @@ class CandidateControllerTests(unittest.TestCase):
         self.root = Path(directory.name)
         self.releases = self.root / "releases"
         self.releases.mkdir()
+        self.enterContext(patch.object(c, "DEDICATED_ROOT", self.root))
+        self.enterContext(
+            patch.object(c, "STAGING_CANDIDATE_ROOT", self.root / "staging" / "hk-rag-candidate")
+        )
         self.enterContext(patch.object(c, "ROOT", self.root))
         self.enterContext(patch.object(c, "RELEASES", self.releases))
         self.a = "sn-hkc-" + "1" * 12 + "-" + "a" * 12
@@ -72,6 +76,46 @@ class CandidateControllerTests(unittest.TestCase):
             self.skipTest("This temporary filesystem does not support POSIX default ACLs")
         self.addCleanup(os.umask, os.umask(0o077))
         self.assert_repeatable_private_init()
+
+    def test_fixed_root_follows_existing_history_and_rejects_conflicts(self):
+        shared = self.root / "staging" / "hk-rag-candidate"
+        legacy = self.root / "dedicated"
+        with patch.object(c, "DEDICATED_ROOT", legacy):
+            self.assertEqual(c.candidate_root("candidate"), legacy)
+            self.assertEqual(c.candidate_root("existing-staging"), shared)
+            legacy.mkdir()
+            (legacy / "current").write_text(self.a)
+            self.assertEqual(c.candidate_root("existing-staging"), legacy)
+            shared.mkdir(parents=True)
+            with self.assertRaisesRegex(ValueError, "root conflict"):
+                c.candidate_root("existing-staging")
+            self.assertEqual((legacy / "current").read_text(), self.a)
+
+    def test_existing_staging_cli_reuses_subdirectory_for_init_and_stop(self):
+        shared = c.STAGING_CANDIDATE_ROOT
+        shared.parent.mkdir()
+        lock = shared.parent / ".deploy-staging.lock"
+        lock.touch()
+        stable_env = shared.parent / ".env"
+        stable_env.write_text("stable configuration")
+        with (
+            patch.object(c, "DEDICATED_ROOT", self.root / "absent-dedicated"),
+            patch.object(c, "SHARED_LOCK", lock),
+            patch("sys.argv", ["ctrl", "--ssh-profile", "existing-staging", "init"]) as argv,
+        ):
+            c.main()
+            credentials = (shared / "secrets.env").read_bytes()
+            c.main()
+            self.assertEqual((shared / "secrets.env").read_bytes(), credentials)
+            (shared / "releases" / self.a).mkdir()
+            (shared / "current").write_text(self.a)
+            argv[-1] = "stop"
+            c.main()
+            self.stop.assert_called_once_with(self.a)
+            self.assertTrue((shared / "releases" / self.a / "stopped").is_file())
+            self.assertEqual(stable_env.read_text(), "stable configuration")
+            with self.assertRaisesRegex(ValueError, "root conflict"):
+                c.candidate_root("candidate")
 
     def test_first_failure_never_starts_a_previous_project(self):
         with self.assertRaisesRegex(RuntimeError, "migration"):
