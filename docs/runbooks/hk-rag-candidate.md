@@ -6,19 +6,22 @@
 
 1. 将候选部署治理 PR 单独审入受保护的默认分支 `main`。核对工作流、校验器、Compose 和主机脚本全部来自同一受信提交。候选功能 PR 保持独立，日常功能分支推送及 CI 继续沿用现有流程。
 2. 在仓库创建 Environment `hk-rag-candidate`，部署分支只允许 `main`。有两位可用维护者时，可设置 Required reviewers、Prevent self-review 和禁止管理员跳过，并指定独立发布审核人。若仓管选择单维护者审核，由有 write/maintain/admin 权限的总控按下节输入完整确认文本。已启用的 GitHub 环境审核照常生效；同一 GitHub 账号的多个会话只算一个账号。GitHub 对环境审核名单只要求其中一人批准。[GitHub 环境审核说明](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments#required-reviewers)
-3. 这些变量和秘密只配置在候选 Environment，避免仓库级或组织级同名值回退。在此 Environment 配置 `HK_CANDIDATE_SSH_HOST`、`HK_CANDIDATE_SSH_USER`、`HK_CANDIDATE_SSH_KEY`、`HK_CANDIDATE_SSH_KNOWN_HOSTS`，非 22 端口再设 `HK_CANDIDATE_SSH_PORT`。经独立渠道确认主机指纹，使用候选专属 SSH 身份和主机地址。同机运行时，卷和项目隔离仍依赖可信部署控制器；Docker 管理权限覆盖整个 daemon。若与常规 Staging 共机，给部署身份提供已有部署锁所需的访问权限，具体由主机脚本校验。
-4. 在 Linux amd64 候选机准备由部署账号拥有、权限 0700 的固定目录 `/opt/supernova-hk-candidate`。控制器要求可见至少两个 CPU、1600 MiB 可用物理内存，并按归档和上轮候选卷大小检查本机空间。从已审入 `main` 的同一提交取出 `deploy/hk-candidate/` 的 `hk-rag-candidate-host.sh`、`controller.py` 和 `compose.yaml`，在该目录执行 `bash ./hk-rag-candidate-host.sh init` 生成候选配置。在 `secrets.env`（权限 0600）中，BYOK 验收可保留 `HK_ADMIN_EMAILS` 为空和 `HK_MODEL_CREDENTIALS_JSON='{}'`。验收平台池时在 `HK_MODEL_CREDENTIALS_JSON` 添加候选专属 credential ref，并在供应商侧设置用量限额。预留管理员邮箱只用于已有账号的迁移引导，空库填写它不会创建拥有管理权限的账号。保留原文件中生成的数据库、Redis、Silo、JWT 与加密密钥。下一次受审部署会把配置写入该发布的环境快照。以上准备就绪后再启用 Environment 变量 `HK_RAG_CANDIDATE_ENABLED=true`。
+3. 默认 `ssh_profile=candidate`。在候选 Environment 配置专属的 `HK_CANDIDATE_SSH_HOST`、`HK_CANDIDATE_SSH_USER`、`HK_CANDIDATE_SSH_KEY`、`HK_CANDIDATE_SSH_KNOWN_HOSTS`，非 22 端口再设 `HK_CANDIDATE_SSH_PORT`。这些名称仅在候选 Environment 配置，经独立渠道核对主机指纹。
+4. 候选与日常 Staging 共用香港主机时，可显式选 `ssh_profile=existing-staging`。它使用日常部署已配置的仓库 Secrets `STAGING_HOST`、`STAGING_USER`、`STAGING_SSH_PRIVATE_KEY`、`STAGING_SSH_KNOWN_HOSTS` 与可选的 `STAGING_SSH_PORT`。在候选 Environment 中保持这些名称为空缺，以免遮蔽仓库配置。仅复用 SSH 连接，候选仍有独立目录、Compose 项目和数据。部署与日常 Staging 共用锁；部署身份需要有权访问该锁。
+5. 在 Linux amd64 候选机上，部署账号须能创建或访问权限 0700 的固定目录 `/opt/supernova-hk-candidate`。控制器要求可见至少两个 CPU、1600 MiB 可用物理内存，并按归档和上轮候选卷大小检查本机空间。首次部署自动初始化该目录并生成独立的数据库、Redis、Silo、JWT 和加密密钥。可提前用受信 `main` 中的 `deploy/hk-candidate/hk-rag-candidate-host.sh init` 初始化。BYOK 验收可保留初始 `secrets.env`（权限 0600）中的 `HK_ADMIN_EMAILS` 为空和 `HK_MODEL_CREDENTIALS_JSON='{}'`。验收平台池时在 `HK_MODEL_CREDENTIALS_JSON` 添加候选专属 credential ref，并在供应商侧设置用量限额。预留管理员邮箱只用于已有账号的迁移引导，空库填写它不会创建拥有管理权限的账号。就绪后在候选 Environment 启用 `HK_RAG_CANDIDATE_ENABLED=true`。
 
 ## 发起一次候选部署
 
 先查看候选 PR 的完整 40 位 head SHA、当前 base、CI 和审核。使用独立审核时，由 PR 作者以外、有 write/maintain/admin 权限的协作者在该 SHA 提交有效的 APPROVED review。总控也可在核对完整变更、CI 和上游提交后对 Draft 或待审 PR 显式确认。A1 对应 `feat/rag-65a-versioned-index`；A2 对应 `feat/rag-65a-structured-chunking`，还须核对其包含本轮 A1 的已审提交，两层 PR 的审核和 CI 都应满足入口校验。记录 PR URL、目标 SHA 和 CI run URL。候选头更新后重新核对。
 
-在 Actions → **Hong Kong RAG candidate** → **Run workflow** 选择 `main`，填入 `pr_number` 和 `candidate_sha`。也可以从有该仓库权限的终端发起同样的请求。
+在 Actions → **Hong Kong RAG candidate** → **Run workflow** 选择 `main`，填入 `pr_number` 和 `candidate_sha`，根据香港主机选择 `ssh_profile`。也可以从有该仓库权限的终端发起同样的请求。
 
 ```bash
 gh workflow run hk-rag-candidate.yml -R macbook2018/SuperNova --ref main \
   -f pr_number="$RAG_PR_NUMBER" -f candidate_sha="$RAG_HEAD_SHA"
 ```
+
+复用香港 Staging 连接时，在上面命令追加 `-f ssh_profile=existing-staging`。
 
 独立审核路径将可选输入 `review_confirmation` 留空。单维护者路径由总控本人在 Actions 中填写 `REVIEWED <candidate_sha>`；A2 填写 `REVIEWED <candidate_sha> WITH A1 <current_a1_sha>`，替换为本轮实际的完整小写 SHA。CLI 可追加 `-f review_confirmation="$RAG_REVIEW_CONFIRMATION"`。运行记录保留确认账号、源提交和输入，审核以当次 run 为准。有环境审核规则时，审核人再次核对本次 run 的 PR、SHA、CI 与环境后批准。运行采用本次构建的 API/Console 镜像、同次运行的归档 ID、镜像 ID 和 SHA-256 校验值。记录最终 run URL、镜像 ID、迁移版本及健康状态。镜像归档只短期保留，业务验收证据单独记在交付记录中。无需发布共享镜像标签。
 

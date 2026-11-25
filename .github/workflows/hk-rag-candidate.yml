@@ -12,6 +12,14 @@ on:
         required: true
         type: string
 
+      ssh_profile:
+        description: SSH connection to the Hong Kong candidate host
+        type: choice
+        required: true
+        default: candidate
+        options:
+          - candidate
+          - existing-staging
       review_confirmation:
         description: Optional maintainer sign-off. REVIEWED <candidate SHA> [WITH A1 <A1 SHA>]
         required: false
@@ -137,9 +145,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           ENABLED: ${{ vars.HK_RAG_CANDIDATE_ENABLED }}
+          SSH_PROFILE: ${{ inputs.ssh_profile }}
         run: |
           set -euo pipefail
           [[ "$ENABLED" == true && "$GITHUB_REF" == refs/heads/main ]]
+          [[ "$SSH_PROFILE" == candidate || "$SSH_PROFILE" == existing-staging ]]
           env_api="repos/$GITHUB_REPOSITORY/environments/hk-rag-candidate"
           gh api "$env_api" | jq -e '
             .name == "hk-rag-candidate" and
@@ -168,11 +178,12 @@ jobs:
       - name: Transfer verified images and deploy with the trusted controller
         shell: bash
         env:
-          SSH_HOST: ${{ secrets.HK_CANDIDATE_SSH_HOST }}
-          SSH_USER: ${{ secrets.HK_CANDIDATE_SSH_USER }}
-          SSH_PORT: ${{ secrets.HK_CANDIDATE_SSH_PORT || '22' }}
-          SSH_KEY: ${{ secrets.HK_CANDIDATE_SSH_KEY }}
-          SSH_KNOWN_HOSTS: ${{ secrets.HK_CANDIDATE_SSH_KNOWN_HOSTS }}
+          # Select secret names together. A missing selected value fails the checks below.
+          SSH_HOST: ${{ secrets[inputs.ssh_profile == 'existing-staging' && 'STAGING_HOST' || 'HK_CANDIDATE_SSH_HOST'] }}
+          SSH_USER: ${{ secrets[inputs.ssh_profile == 'existing-staging' && 'STAGING_USER' || 'HK_CANDIDATE_SSH_USER'] }}
+          SSH_PORT: ${{ secrets[inputs.ssh_profile == 'existing-staging' && 'STAGING_SSH_PORT' || 'HK_CANDIDATE_SSH_PORT'] || '22' }}
+          SSH_KEY: ${{ secrets[inputs.ssh_profile == 'existing-staging' && 'STAGING_SSH_PRIVATE_KEY' || 'HK_CANDIDATE_SSH_KEY'] }}
+          SSH_KNOWN_HOSTS: ${{ secrets[inputs.ssh_profile == 'existing-staging' && 'STAGING_SSH_KNOWN_HOSTS' || 'HK_CANDIDATE_SSH_KNOWN_HOSTS'] }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
