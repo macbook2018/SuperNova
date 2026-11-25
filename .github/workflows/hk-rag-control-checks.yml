@@ -1,0 +1,107 @@
+name: Hong Kong RAG control checks
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/hk-rag-candidate.yml'
+      - '.github/workflows/hk-rag-control-checks.yml'
+      - 'deploy/hk-candidate/**'
+      - 'deploy/scripts/verify-hk-candidate.py'
+      - 'deploy/tests/test_hk_candidate_*.py'
+      - 'docs/runbooks/hk-rag-candidate.md'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate candidate gate and service isolation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Exercise review gate and host controller decisions
+        run: |
+          set -euo pipefail
+          # Explicit files make a missing suite fail instead of discovering zero tests.
+          python3 deploy/tests/test_hk_candidate_gate.py
+          python3 deploy/tests/test_hk_candidate_controller.py
+          bash -n deploy/hk-candidate/hk-rag-candidate-host.sh
+      - name: Render Compose and verify ports, networks, volumes and credentials
+        run: python3 deploy/hk-candidate/check-compose.py
+
+  docker-smoke:
+    name: Exercise host deployment, snapshot and rollback on the runner
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      # main predates the RAG workers. Use an immutable RAG build fixture with a known API.
+      FIXTURE_SHA: ef2c1527486001d058b5ec761ef3e3421083000e
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          path: control
+      - name: Check out the public API and Console fixture
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ env.FIXTURE_SHA }}
+          path: fixture
+          persist-credentials: false
+      - name: Build the two labelled images locally
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(git -C fixture rev-parse HEAD)" == "$FIXTURE_SHA" ]]
+          context="$RUNNER_TEMP/app-source"
+          mkdir "$context"
+          git -C fixture archive "$FIXTURE_SHA" | tar -x -C "$context"
+          label="org.opencontainers.image.revision=$FIXTURE_SHA"
+          docker build --label "$label" -t "supernova-hk-candidate/api:$FIXTURE_SHA" \
+            -f "$context/apps/api/Dockerfile" "$context"
+          docker build --label "$label" -t "supernova-hk-candidate/console:$FIXTURE_SHA" \
+            --build-arg VITE_API_BASE_URL=http://127.0.0.1:18182 \
+            -f "$context/apps/console/Dockerfile" "$context"
+      - name: Start real services, clone the data and roll back on this VM
+        shell: bash
+        run: |
+          set -euo pipefail
+          root=/opt/supernova-hk-candidate
+          transfer="$RUNNER_TEMP/controller-smoke"
+          mkdir -m 700 "$transfer"
+          cp control/deploy/hk-candidate/{controller.py,compose.yaml,hk-rag-candidate-host.sh} "$transfer/"
+          test ! -e "$root"
+          sudo install -d -o "$(id -u)" -g "$(id -g)" -m 0700 "$root"
+          controller=(bash "$transfer/hk-rag-candidate-host.sh")
+          "${controller[@]}" init
+          api="supernova-hk-candidate/api:$FIXTURE_SHA"
+          console="supernova-hk-candidate/console:$FIXTURE_SHA"
+          docker image save "$api" "$console" -o "$transfer/images.tar"
+          checksum="$(sha256sum "$transfer/images.tar" | cut -d' ' -f1)"
+          deploy=(deploy "$FIXTURE_SHA" "$checksum" "$(docker inspect --format '{{.Id}}' "$api")"
+            "$(docker inspect --format '{{.Id}}' "$console")")
+          redis_probe() {
+            local project="$1"
+            shift
+            docker compose -p "$project" --env-file "$root/releases/$project/.env" \
+              -f "$root/releases/$project/compose.yaml" exec -T redis redis-cli --raw "$@"
+          }
+          "${controller[@]}" "${deploy[@]}"
+          first="$(cat "$root/current")"
+          test "$(redis_probe "$first" SET ci_slot first)" = OK
+          "${controller[@]}" "${deploy[@]}"
+          second="$(cat "$root/current")"
+          test "$first" != "$second"
+          test "$(redis_probe "$second" GET ci_slot)" = first
+          test "$(redis_probe "$second" SET ci_slot second)" = OK
+          "${controller[@]}" rollback
+          test "$(cat "$root/current")" = "$first"
+          test "$(redis_probe "$first" GET ci_slot)" = first
+          curl --noproxy '*' -fsS http://127.0.0.1:18182/health/ready >/dev/null
+          curl --noproxy '*' -fsS http://127.0.0.1:18183/healthz >/dev/null
+          "${controller[@]}" stop
+          test -f "$root/releases/$first/stopped"
