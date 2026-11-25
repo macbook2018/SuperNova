@@ -475,20 +475,23 @@ def volume_helper(image, mounts, script, *, capture=False):
     )
 
 
-def enough_capacity(previous, transfer_size, disk_root):
-    # Includes process limits plus OS headroom. Swap is excluded from the available memory.
-    mem = (
-        int(
-            next(
-                s.split()[1]
-                for s in Path("/proc/meminfo").read_text().splitlines()
-                if s.startswith("MemAvailable:")
-            )
-        )
-        * 1024
+def check_available_memory():
+    # MemAvailable includes reclaimable cache and excludes swap.
+    meminfo = Path("/proc/meminfo").read_text().splitlines()
+    available_kib = next(
+        int(line.split()[1]) for line in meminfo if line.startswith("MemAvailable:")
     )
-    if len(os.sched_getaffinity(0)) < 2 or mem < 1600 * 1024**2:
-        raise ValueError("Candidate needs two CPUs and at least 1600 MiB of available RAM")
+    available_mib = available_kib // 1024
+    if available_mib < 1600:
+        raise ValueError(f"Candidate needs 1600 MiB available RAM; measured {available_mib} MiB")
+
+
+def enough_capacity(previous, transfer_size, disk_root):
+    cpus = len(os.sched_getaffinity(0))
+    if cpus < 2:
+        raise ValueError(f"Candidate needs two CPUs; detected {cpus}")
+    if not previous:
+        check_available_memory()
     used = 0
     if previous:
         helper = verify_local_images(previous)["infra"]["HK_POSTGRES_IMAGE"]
@@ -694,6 +697,8 @@ def deploy(sha, checksum, api_id, console_id):
     compose(after, "create", "--pull", "never", *DATA, *APP)
 
     def start_new():
+        # At this point the previous candidate has stopped and its checkpoint is recoverable.
+        check_available_memory()
         if before:
             for name in VOLUMES:
                 src, dst = volume(before, name), volume(after, name)
