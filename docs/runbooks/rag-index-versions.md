@@ -6,13 +6,13 @@ Phase 6.5A 在原有知识库上增加可选的整库候选索引和单文档恢
 
 1. 上传文档并等到所有文档 ready。确认单库 `/search` 能命中一段可辨认的原文，记录其文档和切片 ID。保存一次 Persona 普通响应与流式最后一帧的引用。
 2. 读取 `GET /knowledge-bases/{kb}/index-versions`，记录 `generation` 与 `active_release_id`。初始代次为 0，活动发布为空表示读取 v1。
-3. 用同一路径 POST 创建候选，携带如下请求。尺寸和重叠按字符计算。更换配置时使用新的请求键；同键同参数可以安全重试。服务会冻结该库所用 Embedding 配置的身份和 1536 维约束。模型供应商密钥仍由现有平台池或租户 BYOK 在执行时解析。
+3. 新策略 `structured_v1` 会保留层级标题、表头、原件位置，并在同一节内合并短段。未指定新策略时使用 `legacy`。PDF 需要文本层。以相同原件建立两组候选可以比较切片效果。用同一路径 POST 创建候选，携带如下请求。尺寸和重叠按字符计算。更换配置时使用新的请求键；同键同参数可以安全重试。服务会冻结该库所用 Embedding 配置的身份和 1536 维约束。模型供应商密钥仍由现有平台池或租户 BYOK 在执行时解析。
 
    ```json
    {
      "request_key": "hk-docs-trial-01",
      "expected_generation": 0,
-     "config": {"parser_version": "legacy", "chunk_size": 600, "chunk_overlap": 80}
+     "config": {"parser_version": "structured_v1", "chunk_size": 600, "chunk_overlap": 80}
    }
    ```
 

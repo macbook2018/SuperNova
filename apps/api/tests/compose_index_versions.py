@@ -167,7 +167,12 @@ def run_smoke(client, parser_version):
     headers = {"Authorization": f"Bearer {key['secret']}"}
     chat = {"model": persona["slug"], "messages": [{"role": "user", "content": "退款多久到账？"}]}
     response = request(client, "POST", "/v1/chat/completions", headers=headers, json=chat)
-    assert response["supernova"]["citations"][0]["chunk_id"] == active_id
+    citation = response["supernova"]["citations"][0]
+    assert citation["chunk_id"] == active_id
+    if parser_version == "structured_v1":
+        assert citation["index_release_id"] == candidate["id"]
+        assert citation["heading_path"] == ["退货规则"]
+        assert citation["source_spans"] and citation["snippet"] == EVIDENCE
     stream = client.post("/v1/chat/completions", headers=headers, json={**chat, "stream": True})
     stream.raise_for_status()
     frames = [line[6:] for line in stream.text.splitlines() if line.startswith("data: ")]

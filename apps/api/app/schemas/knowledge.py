@@ -168,7 +168,7 @@ class KnowledgeUsageSummary(BaseModel):
 class IndexBuildConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
-    parser_version: Literal["legacy"] = "legacy"
+    parser_version: Literal["legacy", "structured_v1"] = "legacy"
     chunk_size: int | None = Field(default=None, ge=100, le=4000)
     chunk_overlap: int | None = Field(default=None, ge=0, lt=4000)
 

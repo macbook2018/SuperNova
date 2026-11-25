@@ -280,6 +280,8 @@ def retrieve_knowledge_base(
         chunk = item["chunk"]
         document = item["document"]
         metadata = dict(chunk.metadata_json or {})
+        if release_id is not None:
+            metadata["index_release_id"] = str(release_id)
         hits.append(
             {
                 "chunk_id": chunk.id,
@@ -388,6 +390,10 @@ def retrieve_persona_context(
             f"[{index}] 知识库：{hit['knowledge_base_name']}；"
             f"文档：{hit['document_name']}；位置：{location}"
         )
+        metadata = hit["metadata"]
+        structured = metadata.get("parser_version") == "structured_v1"
+        if structured and metadata.get("index_prefix"):
+            header += "\n结构来源：" + metadata["index_prefix"]
         text = hit["content"][:3000]
         # Retrieved document text and metadata are untrusted input. Escape XML
         # delimiters so a document cannot close or forge the surrounding
@@ -420,6 +426,11 @@ def retrieve_persona_context(
                 "snippet": hit["snippet"],
             }
         )
+        if structured:
+            # These are provenance fields, not a replacement for the original evidence snippet.
+            for key in ("index_release_id", "heading_path", "parent_section_id", "source_spans"):
+                if key in metadata:
+                    citations[-1][key] = metadata[key]
     if not context_parts:
         return "", []
     context = (
