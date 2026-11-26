@@ -1,0 +1,194 @@
+name: Accept Hong Kong RAG PR 33
+
+on: workflow_dispatch
+
+permissions: {}
+
+jobs:
+  accept:
+    name: Live RAG acceptance for PR 33 at 6e30647
+    if: github.repository == 'macbook2018/SuperNova' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: hk-rag-candidate
+    concurrency:
+      group: supernova-staging-deploy
+      queue: max
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      deployments: read
+      pull-requests: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out trusted main
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Verify the reviewed commits and deployment environment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ENABLED: ${{ vars.HK_RAG_CANDIDATE_ENABLED }}
+        run: |
+          set -euo pipefail
+          [[ "$ENABLED" == true && "$GITHUB_REF" == refs/heads/main ]]
+          repo="repos/$GITHUB_REPOSITORY"
+          env_api="$repo/environments/hk-rag-candidate"
+          gh api "$env_api" | jq -e '.deployment_branch_policy.custom_branch_policies == true' >/dev/null
+          gh api "$env_api/deployment-branch-policies?per_page=100" | jq -e '
+            .total_count == 1 and any(.branch_policies[]; .type == "branch" and .name == "main")' >/dev/null
+          gh api "$repo/pulls/32" | jq -e '.head.repo.full_name == "macbook2018/SuperNova"
+            and .head.sha == "38369cb3a4640d7976d0b66c766357d9e074c06d"' >/dev/null
+          gh api "$repo/pulls/33" | jq -e '.head.repo.full_name == "macbook2018/SuperNova"
+            and .head.sha == "6e30647e384b0f868921be9c909adc51e5a9599a"' >/dev/null
+          python3 -m venv "$RUNNER_TEMP/hk-eval-python"
+          "$RUNNER_TEMP/hk-eval-python/bin/pip" install --disable-pip-version-check httpx==0.28.1
+
+      - name: Open a pinned SSH tunnel and hold the Hong Kong deployment lock
+        env:
+          SSH_HOST: ${{ secrets.STAGING_HOST }}
+          SSH_USER: ${{ secrets.STAGING_USER }}
+          SSH_PORT: ${{ secrets.STAGING_SSH_PORT || '22' }}
+          SSH_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.STAGING_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          [[ "$SSH_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ && "$SSH_USER" =~ ^[a-z_][a-z0-9_-]*$ ]]
+          [[ "$SSH_PORT" =~ ^[1-9][0-9]{0,4}$ ]]
+          (( SSH_PORT <= 65535 ))
+          [[ -n "$SSH_KEY" && -n "$SSH_KNOWN_HOSTS" ]]
+          umask 077
+          d="$RUNNER_TEMP/hk-eval"
+          mkdir -m 700 "$d"
+          printf '%s\n' "$SSH_KEY" > "$d/key"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$d/known_hosts"
+          unset SSH_KEY SSH_KNOWN_HOSTS
+          trap 'rm -f -- "$d/key" "$d/known_hosts"' EXIT
+          lookup="$SSH_HOST"
+          if [[ "$SSH_PORT" != 22 ]]; then lookup="[$SSH_HOST]:$SSH_PORT"; fi
+          ssh-keygen -F "$lookup" -f "$d/known_hosts" >/dev/null
+          # Subsequent commands must reuse this connection. Never open an unverified fallback.
+          printf 'Host candidate\n  ControlPath %s/master\n  ProxyCommand false\n  BatchMode yes\n' "$d" > "$d/client"
+          ssh -F /dev/null -nT -M -S "$d/master" -i "$d/key" -p "$SSH_PORT" \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o "UserKnownHostsFile=$d/known_hosts" -o GlobalKnownHostsFile=/dev/null \
+            -o ForwardAgent=no -o ExitOnForwardFailure=yes -o ConnectTimeout=15 \
+            -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
+            -L 127.0.0.1:18182:127.0.0.1:18182 "$SSH_USER@$SSH_HOST" '
+              set -eu
+              exec 9</opt/supernova-staging/.deploy-staging.lock
+              flock --shared --wait 60 9
+              echo locked
+              while sleep 5; do echo held || exit; done' > "$d/lock-status" 2> "$d/ssh-error" &
+          echo "$!" > "$d/tunnel-pid"
+          for attempt in {1..80}; do
+            if grep -qx locked "$d/lock-status"; then break; fi
+            kill -0 "$(cat "$d/tunnel-pid")" || { echo "::error::Hong Kong tunnel or deployment lock unavailable"; exit 1; }
+            sleep 1
+          done
+          grep -qx locked "$d/lock-status"
+          ssh -F "$d/client" -O check candidate
+
+      - name: Match the active release, bound ports and running images
+        id: verify
+        run: |
+          set -euo pipefail
+          d="$RUNNER_TEMP/hk-eval"
+          cat > "$d/check-release.py" <<'PY'
+          import json
+          import re
+          import subprocess
+          from pathlib import Path
+
+          def require(ok, message):
+              if not ok:
+                  raise SystemExit(message)
+
+          def docker(*args):
+              return subprocess.check_output(["docker", *args], text=True).strip()
+
+          root = Path("/opt/supernova-staging/hk-rag-candidate")
+          sha = "6e30647e384b0f868921be9c909adc51e5a9599a"
+          require(root.resolve(strict=True) == root, "Unexpected candidate root")
+          project = (root / "current").read_text().strip()
+          require(re.fullmatch(r"sn-hkc-" + sha[:12] + "-[a-f0-9]{12}", project), "Unexpected candidate slot")
+          require(not (root / "pending.json").exists(), "Candidate switch is incomplete")
+          manifest = json.loads((root / "releases" / project / "manifest.json").read_text())
+          require(manifest["sha"] == sha, "Candidate manifest revision changed")
+          for role, private_port, host_port in [("api", 8000, 18182), ("console", 8080, 18183)]:
+              ids = docker("ps", "--no-trunc", "-q", "--filter", f"label=com.docker.compose.project={project}",
+                           "--filter", f"label=com.docker.compose.service={role}").splitlines()
+              require(len(ids) == 1, f"Expected one running {role} service")
+              cid = ids[0]
+              state = docker("inspect", "--format", "{{.State.Health.Status}} {{.Image}}", cid)
+              require(state == "healthy " + manifest["runtime_ids"][role], f"Unexpected {role} image/health")
+              revision = docker("image", "inspect", "--format",
+                                '{{index .Config.Labels "org.opencontainers.image.revision"}}', manifest["runtime_ids"][role])
+              require(revision == sha, f"Unexpected {role} revision")
+              require(docker("port", cid, f"{private_port}/tcp") == f"127.0.0.1:{host_port}", "Unexpected port")
+              if role == "api":
+                  api_id = cid
+          for port, path in [(18182, "/health/ready"), (18183, "/healthz")]:
+              subprocess.run(["curl", "--fail", "--silent", "--noproxy", "*", "--max-time", "8",
+                              f"http://127.0.0.1:{port}{path}"], check=True, stdout=subprocess.DEVNULL)
+          print(project, api_id)
+          PY
+          ssh -F "$d/client" candidate 'python3 -' < "$d/check-release.py" > "$d/identity"
+          grep -Eq '^sn-hkc-6e30647e384b-[0-9a-f]{12} [0-9a-f]{64}$' "$d/identity"
+          curl --fail --silent --noproxy '*' --max-time 8 http://127.0.0.1:18182/health/ready >/dev/null
+
+      - name: Discover eligible candidate platform models
+        run: |
+          set -euo pipefail
+          d="$RUNNER_TEMP/hk-eval"
+          read -r project cid < "$d/identity"
+          [[ "$cid" =~ ^[a-f0-9]{64}$ ]]
+          ssh -F "$d/client" candidate "docker exec -i '$cid' python - --platform-probe" \
+            < deploy/scripts/accept-hk-rag.py > "$d/catalog.json"
+          # Only two lists of model IDs may leave the probe. Do not print provider configuration.
+          jq -ce 'select(type == "object" and keys == ["chat_ids","embedding_ids"]
+            and all(.[]; type == "array" and all(.[]; type == "string" and
+              test("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"))))' \
+            "$d/catalog.json" > "$d/platform.json"
+          test -s "$d/platform.json"
+          jq -r '"Eligible candidate platform models: \(.embedding_ids | length) embedding, \(.chat_ids | length) chat."' \
+            "$d/platform.json" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Run live customer-support acceptance on the candidate
+        # Optional, dedicated candidate Environment secret, without a Staging provider fallback.
+        env:
+          HK_RAG_EVAL_PROVIDER_JSON: ${{ secrets.HK_RAG_EVAL_PROVIDER_JSON }}
+        run: |
+          set -euo pipefail
+          d="$RUNNER_TEMP/hk-eval"
+          export HK_RAG_EVAL_PLATFORM_JSON
+          HK_RAG_EVAL_PLATFORM_JSON=$(cat "$d/platform.json")
+          result=0
+          "$RUNNER_TEMP/hk-eval-python/bin/python" deploy/scripts/accept-hk-rag.py \
+            --accept --api http://127.0.0.1:18182 || result=$?
+          case "$result" in
+            0) echo "Live provider acceptance passed on the pinned candidate." >> "$GITHUB_STEP_SUMMARY" ;;
+            2) echo "Live acceptance blocked. See the runner's redacted prerequisite result." >> "$GITHUB_STEP_SUMMARY" ;;
+            *) echo "Live acceptance failed. See the runner's redacted checks." >> "$GITHUB_STEP_SUMMARY" ;;
+          esac
+          exit "$result"
+
+      - name: Confirm the same running release after testing
+        if: always() && steps.verify.outcome == 'success'
+        run: |
+          set -euo pipefail
+          d="$RUNNER_TEMP/hk-eval"
+          ssh -F "$d/client" candidate 'python3 -' < "$d/check-release.py" > "$d/after-identity"
+          cmp "$d/identity" "$d/after-identity"
+          curl --fail --silent --noproxy '*' --max-time 8 http://127.0.0.1:18182/health/ready >/dev/null
+
+      - name: Close the tunnel and release the deployment lock
+        if: always()
+        run: |
+          d="$RUNNER_TEMP/hk-eval"
+          if [[ -S "$d/master" ]]; then ssh -F "$d/client" -O exit candidate || true; fi
+          rm -f -- "$d/key" "$d/known_hosts"
