@@ -8,23 +8,31 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
 from fastapi.responses import Response
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import CurrentPrincipal, DatabaseSession
+from app.api.knowledge_versions import document_history_router
+from app.api.knowledge_versions import router as index_versions_router
 from app.core.config import get_settings
+from app.knowledge.indexing import prepare_legacy_change
+from app.knowledge.legacy_revisions import next_document_index_version
 from app.knowledge.parsers import validate_document_bytes
 from app.knowledge.retrieval import retrieve_knowledge_base
 from app.knowledge.storage import delete_object, get_object, put_object
 from app.models.catalog import KnowledgeBase
 from app.models.knowledge import (
     KnowledgeDocument,
+    KnowledgeIndexMember,
+    KnowledgeIndexObservation,
+    KnowledgeIndexState,
     KnowledgeIngestionJob,
     KnowledgeUsageRecord,
 )
 from app.schemas.knowledge import (
     KnowledgeDocumentRead,
     KnowledgeImportUrlRequest,
+    KnowledgeOperationUsage,
     KnowledgeSearchHit,
     KnowledgeSearchRequest,
     KnowledgeSearchResponse,
@@ -32,15 +40,20 @@ from app.schemas.knowledge import (
 )
 
 router = APIRouter(tags=["知识库文档"])
+router.include_router(index_versions_router)
+router.include_router(document_history_router)
 
 
-def _get_knowledge_base(db, tenant_id: UUID, knowledge_base_id: UUID) -> KnowledgeBase:
-    record = db.scalar(
-        select(KnowledgeBase).where(
-            KnowledgeBase.id == knowledge_base_id,
-            KnowledgeBase.tenant_id == tenant_id,
-        )
+def _get_knowledge_base(
+    db, tenant_id: UUID, knowledge_base_id: UUID, *, lock: bool = False
+) -> KnowledgeBase:
+    query = select(KnowledgeBase).where(
+        KnowledgeBase.id == knowledge_base_id,
+        KnowledgeBase.tenant_id == tenant_id,
     )
+    if lock:
+        query = query.with_for_update().execution_options(populate_existing=True)
+    record = db.scalar(query)
     if record is None:
         raise HTTPException(
             status_code=404,
@@ -98,6 +111,82 @@ def _enqueue_job(
     return job
 
 
+def _lock_document(db, tenant_id, knowledge_base_id, document_id):
+    document = db.scalar(
+        select(KnowledgeDocument).where(
+            KnowledgeDocument.id == document_id,
+            KnowledgeDocument.tenant_id == tenant_id,
+            KnowledgeDocument.knowledge_base_id == knowledge_base_id,
+        ).with_for_update().execution_options(populate_existing=True)
+    )
+    if document is None:
+        raise HTTPException(404, detail={"code": "document_not_found", "message": "文档不存在"})
+    return document
+
+
+def _has_pending_job(db, document, job_types):
+    return db.scalar(select(KnowledgeIngestionJob.id).where(
+        KnowledgeIngestionJob.tenant_id == document.tenant_id,
+        KnowledgeIngestionJob.knowledge_base_id == document.knowledge_base_id,
+        KnowledgeIngestionJob.document_id == document.id,
+        KnowledgeIngestionJob.job_type.in_(job_types),
+        KnowledgeIngestionJob.status.in_(("queued", "running", "retry_wait")),
+    ).limit(1)) is not None
+
+
+def _initial_rebuild_in_progress(db, document):
+    return (
+        document.status in {"queued", "processing"}
+        and (document.pending_index_version or 0) > 1
+        and _has_pending_job(db, document, ("ingest", "reindex"))
+    )
+
+
+def _schedule_reindex(db, document):
+    if _has_pending_job(db, document, ("ingest", "reindex")):
+        return False
+    next_version = next_document_index_version(db, document)
+    document.pending_index_version = next_version
+    document.status = "ready" if document.active_index_version else "queued"
+    document.error_code = None
+    document.error_message = None
+    _enqueue_job(
+        db,
+        tenant_id=document.tenant_id,
+        knowledge_base_id=document.knowledge_base_id,
+        document_id=document.id,
+        job_type="reindex" if document.active_index_version else "ingest",
+        index_version=next_version,
+        dedupe_key=f"reindex:{document.id}:{next_version}",
+    )
+    return True
+
+
+def _schedule_delete(db, document):
+    if _has_pending_job(db, document, ("delete",)):
+        return False
+    db.query(KnowledgeIngestionJob).filter(
+        KnowledgeIngestionJob.tenant_id == document.tenant_id,
+        KnowledgeIngestionJob.knowledge_base_id == document.knowledge_base_id,
+        KnowledgeIngestionJob.document_id == document.id,
+        KnowledgeIngestionJob.job_type.in_(("ingest", "reindex")),
+        KnowledgeIngestionJob.status.in_(("queued", "retry_wait")),
+    ).update({"status": "cancelled"}, synchronize_session=False)
+    document.status = "deleting"
+    document.error_code = None
+    document.error_message = None
+    _enqueue_job(
+        db,
+        tenant_id=document.tenant_id,
+        knowledge_base_id=document.knowledge_base_id,
+        document_id=document.id,
+        job_type="delete",
+        index_version=document.active_index_version,
+        dedupe_key=f"delete:{document.id}:{uuid4().hex}",
+    )
+    return True
+
+
 @router.get(
     "/knowledge-bases/{knowledge_base_id}/documents",
     response_model=list[KnowledgeDocumentRead],
@@ -131,7 +220,7 @@ def upload_knowledge_document(
     db: DatabaseSession,
     file: Annotated[UploadFile, File()],
 ) -> KnowledgeDocumentRead:
-    knowledge_base = _get_knowledge_base(db, principal.tenant.id, knowledge_base_id)
+    knowledge_base = _get_knowledge_base(db, principal.tenant.id, knowledge_base_id, lock=True)
     settings = get_settings()
     filename = (file.filename or "upload").replace("\\", "/").split("/")[-1].strip()
     if not filename or len(filename) > 255:
@@ -194,17 +283,19 @@ def upload_knowledge_document(
         active_index_version=0,
         pending_index_version=1,
     )
+    prepare_legacy_change(db, principal.tenant.id, knowledge_base_id)
     db.add(document)
-    _enqueue_job(
-        db,
-        tenant_id=principal.tenant.id,
-        knowledge_base_id=knowledge_base.id,
-        document_id=document.id,
-        job_type="ingest",
-        index_version=1,
-        dedupe_key=f"ingest:{document.id}:1",
-    )
     try:
+        db.flush()
+        _enqueue_job(
+            db,
+            tenant_id=principal.tenant.id,
+            knowledge_base_id=knowledge_base.id,
+            document_id=document.id,
+            job_type="ingest",
+            index_version=1,
+            dedupe_key=f"ingest:{document.id}:1",
+        )
         db.commit()
     except IntegrityError:
         db.rollback()
@@ -240,7 +331,7 @@ def import_knowledge_url(
     principal: CurrentPrincipal,
     db: DatabaseSession,
 ) -> KnowledgeDocumentRead:
-    knowledge_base = _get_knowledge_base(db, principal.tenant.id, knowledge_base_id)
+    knowledge_base = _get_knowledge_base(db, principal.tenant.id, knowledge_base_id, lock=True)
     existing = db.scalar(
         select(KnowledgeDocument).where(
             KnowledgeDocument.tenant_id == principal.tenant.id,
@@ -272,7 +363,9 @@ def import_knowledge_url(
         active_index_version=0,
         pending_index_version=1,
     )
+    prepare_legacy_change(db, principal.tenant.id, knowledge_base_id)
     db.add(document)
+    db.flush()
     _enqueue_job(
         db,
         tenant_id=principal.tenant.id,
@@ -298,19 +391,10 @@ def retry_knowledge_document(
     principal: CurrentPrincipal,
     db: DatabaseSession,
 ) -> KnowledgeDocumentRead:
-    _get_knowledge_base(db, principal.tenant.id, knowledge_base_id)
-    document = db.scalar(
-        select(KnowledgeDocument).where(
-            KnowledgeDocument.id == document_id,
-            KnowledgeDocument.tenant_id == principal.tenant.id,
-            KnowledgeDocument.knowledge_base_id == knowledge_base_id,
-        )
-    )
-    if document is None:
-        raise HTTPException(
-            status_code=404,
-            detail={"code": "document_not_found", "message": "文档不存在"},
-        )
+    _get_knowledge_base(db, principal.tenant.id, knowledge_base_id, lock=True)
+    document = _lock_document(db, principal.tenant.id, knowledge_base_id, document_id)
+    if _initial_rebuild_in_progress(db, document):
+        return _document_read(document)
     if document.status not in {"failed", "deleting"}:
         raise HTTPException(
             status_code=409,
@@ -319,24 +403,12 @@ def retry_knowledge_document(
                 "message": "只有失败或删除失败的文档可以重试",
             },
         )
-    retry_delete = document.status == "deleting"
-    document.status = "deleting" if retry_delete else "queued"
-    document.error_code = None
-    document.error_message = None
-    document.pending_index_version = max(1, document.active_index_version + 1)
-    _enqueue_job(
-        db,
-        tenant_id=principal.tenant.id,
-        knowledge_base_id=knowledge_base_id,
-        document_id=document.id,
-        job_type="delete" if retry_delete else "ingest",
-        index_version=(
-            document.active_index_version
-            if retry_delete
-            else document.pending_index_version
-        ),
-        dedupe_key=f"retry:{document.id}:{uuid4().hex}",
+    changed = (
+        _schedule_delete(db, document)
+        if document.status == "deleting" else _schedule_reindex(db, document)
     )
+    if changed:
+        prepare_legacy_change(db, principal.tenant.id, knowledge_base_id)
     db.commit()
     db.refresh(document)
     return _document_read(document)
@@ -353,37 +425,19 @@ def reindex_knowledge_document(
     principal: CurrentPrincipal,
     db: DatabaseSession,
 ) -> KnowledgeDocumentRead:
-    _get_knowledge_base(db, principal.tenant.id, knowledge_base_id)
-    document = db.scalar(
-        select(KnowledgeDocument).where(
-            KnowledgeDocument.id == document_id,
-            KnowledgeDocument.tenant_id == principal.tenant.id,
-            KnowledgeDocument.knowledge_base_id == knowledge_base_id,
-        )
-    )
-    if document is None or document.status == "deleted":
-        raise HTTPException(
-            status_code=404,
-            detail={"code": "document_not_found", "message": "文档不存在"},
-        )
+    _get_knowledge_base(db, principal.tenant.id, knowledge_base_id, lock=True)
+    document = _lock_document(db, principal.tenant.id, knowledge_base_id, document_id)
+    if _initial_rebuild_in_progress(db, document):
+        return _document_read(document)
+    if document.status == "deleted":
+        raise HTTPException(404, detail={"code": "document_not_found", "message": "文档不存在"})
     if document.status not in {"ready", "failed"}:
         raise HTTPException(
             status_code=409,
             detail={"code": "document_not_ready", "message": "文档当前状态不允许重建索引"},
         )
-    document.status = "ready" if document.active_index_version else "queued"
-    document.error_code = None
-    document.error_message = None
-    document.pending_index_version = max(1, document.active_index_version + 1)
-    _enqueue_job(
-        db,
-        tenant_id=principal.tenant.id,
-        knowledge_base_id=knowledge_base_id,
-        document_id=document.id,
-        job_type="reindex",
-        index_version=document.pending_index_version,
-        dedupe_key=f"reindex:{document.id}:{document.pending_index_version}:{uuid4().hex}",
-    )
+    if _schedule_reindex(db, document):
+        prepare_legacy_change(db, principal.tenant.id, knowledge_base_id)
     db.commit()
     db.refresh(document)
     return _document_read(document)
@@ -399,36 +453,12 @@ def delete_knowledge_document(
     principal: CurrentPrincipal,
     db: DatabaseSession,
 ) -> dict:
-    _get_knowledge_base(db, principal.tenant.id, knowledge_base_id)
-    document = db.scalar(
-        select(KnowledgeDocument).where(
-            KnowledgeDocument.id == document_id,
-            KnowledgeDocument.tenant_id == principal.tenant.id,
-            KnowledgeDocument.knowledge_base_id == knowledge_base_id,
-        )
-    )
-    if document is None:
-        raise HTTPException(
-            status_code=404,
-            detail={"code": "document_not_found", "message": "文档不存在"},
-        )
+    _get_knowledge_base(db, principal.tenant.id, knowledge_base_id, lock=True)
+    document = _lock_document(db, principal.tenant.id, knowledge_base_id, document_id)
     if document.status == "deleted":
         return {"status": "deleted"}
-    db.query(KnowledgeIngestionJob).filter(
-        KnowledgeIngestionJob.tenant_id == principal.tenant.id,
-        KnowledgeIngestionJob.document_id == document.id,
-        KnowledgeIngestionJob.status.in_(("queued", "retry_wait")),
-    ).update({"status": "cancelled"}, synchronize_session=False)
-    document.status = "deleting"
-    _enqueue_job(
-        db,
-        tenant_id=principal.tenant.id,
-        knowledge_base_id=knowledge_base_id,
-        document_id=document.id,
-        job_type="delete",
-        index_version=document.active_index_version,
-        dedupe_key=f"delete:{document.id}:{uuid4().hex}",
-    )
+    if _schedule_delete(db, document):
+        prepare_legacy_change(db, principal.tenant.id, knowledge_base_id)
     db.commit()
     return {"status": "deleting", "document_id": str(document.id)}
 
@@ -443,44 +473,104 @@ def get_knowledge_usage(
     db: DatabaseSession,
 ) -> KnowledgeUsageSummary:
     _get_knowledge_base(db, principal.tenant.id, knowledge_base_id)
-    documents = db.scalars(
-        select(KnowledgeDocument).where(
-            KnowledgeDocument.tenant_id == principal.tenant.id,
-            KnowledgeDocument.knowledge_base_id == knowledge_base_id,
-            KnowledgeDocument.status != "deleted",
+    tenant_id = principal.tenant.id
+    doc, member, state = KnowledgeDocument, KnowledgeIndexMember, KnowledgeIndexState
+    # Read the active pointer and both chunk counts in the same statement snapshot.
+    counts = db.execute(
+        select(
+            state.active_release_id,
+            func.count(doc.id).label("documents"),
+            func.count(doc.id).filter(doc.status == "ready").label("ready"),
+            func.count(doc.id)
+            .filter(doc.status.in_(("queued", "processing", "deleting")))
+            .label("queued"),
+            func.count(doc.id).filter(doc.status == "failed").label("failed"),
+            func.coalesce(func.sum(doc.file_size_bytes), 0).label("storage"),
+            func.coalesce(func.sum(doc.chunk_count).filter(doc.status == "ready"), 0).label(
+                "legacy_chunks"
+            ),
+            func.coalesce(func.sum(member.chunk_count), 0).label("release_chunks"),
         )
-    ).all()
+        .select_from(KnowledgeBase)
+        .outerjoin(
+            state,
+            and_(
+                state.tenant_id == KnowledgeBase.tenant_id,
+                state.knowledge_base_id == KnowledgeBase.id,
+            ),
+        )
+        .outerjoin(
+            doc,
+            and_(
+                doc.tenant_id == KnowledgeBase.tenant_id,
+                doc.knowledge_base_id == KnowledgeBase.id,
+                doc.status != "deleted",
+            ),
+        )
+        .outerjoin(
+            member,
+            and_(
+                member.tenant_id == doc.tenant_id,
+                member.knowledge_base_id == doc.knowledge_base_id,
+                member.document_id == doc.id,
+                member.release_id == state.active_release_id,
+                member.status == "ready",
+                doc.status == "ready",
+                member.source_version == doc.active_index_version,
+                member.source_sha256.is_not_distinct_from(doc.sha256),
+            ),
+        )
+        .where(KnowledgeBase.tenant_id == tenant_id, KnowledgeBase.id == knowledge_base_id)
+        .group_by(state.active_release_id)
+    ).one_or_none()
+    if counts is None:
+        raise HTTPException(
+            404, detail={"code": "knowledge_base_not_found", "message": "知识库不存在"}
+        )
+
+    legacy = KnowledgeUsageRecord
     usage = db.execute(
         select(
-            func.coalesce(func.sum(KnowledgeUsageRecord.input_tokens), 0),
-            func.coalesce(func.sum(KnowledgeUsageRecord.request_count), 0),
+            func.coalesce(func.sum(legacy.input_tokens), 0).label("tokens"),
+            func.coalesce(func.sum(legacy.request_count), 0).label("requests"),
+            func.count(legacy.id).filter(legacy.operation == "retrieval").label("retrievals"),
         ).where(
-            KnowledgeUsageRecord.tenant_id == principal.tenant.id,
-            KnowledgeUsageRecord.knowledge_base_id == knowledge_base_id,
+            legacy.tenant_id == tenant_id,
+            legacy.knowledge_base_id == knowledge_base_id,
+            legacy.operation.in_(("ingest", "reindex", "retrieval")),
         )
     ).one()
-    retrieval_requests = int(
-        db.scalar(
-            select(func.count(KnowledgeUsageRecord.id)).where(
-                KnowledgeUsageRecord.tenant_id == principal.tenant.id,
-                KnowledgeUsageRecord.knowledge_base_id == knowledge_base_id,
-                KnowledgeUsageRecord.operation == "retrieval",
-            )
+    observation = KnowledgeIndexObservation
+    steps = db.execute(
+        select(
+            observation.operation,
+            observation.status,
+            func.count().label("calls"),
+            func.coalesce(func.sum(observation.input_tokens), 0).label("known_input_tokens"),
+            func.coalesce(func.sum(observation.output_tokens), 0).label("known_output_tokens"),
+            func.count()
+            .filter(observation.input_tokens.is_(None), observation.output_tokens.is_(None))
+            .label("unknown_calls"),
         )
-        or 0
-    )
+        .where(
+            observation.tenant_id == tenant_id, observation.knowledge_base_id == knowledge_base_id
+        )
+        .group_by(observation.operation, observation.status)
+        .order_by(observation.operation, observation.status)
+    ).mappings()
     return KnowledgeUsageSummary(
-        document_count=len(documents),
-        ready_documents=sum(item.status == "ready" for item in documents),
-        queued_documents=sum(
-            item.status in {"queued", "processing", "deleting"} for item in documents
-        ),
-        failed_documents=sum(item.status == "failed" for item in documents),
-        storage_bytes=sum(item.file_size_bytes for item in documents),
-        active_chunks=sum(item.chunk_count for item in documents if item.status == "ready"),
-        embedding_tokens=int(usage[0] or 0),
-        embedding_requests=int(usage[1] or 0),
-        retrieval_requests=retrieval_requests,
+        document_count=counts.documents,
+        ready_documents=counts.ready,
+        queued_documents=counts.queued,
+        failed_documents=counts.failed,
+        storage_bytes=counts.storage,
+        active_chunks=counts.release_chunks if counts.active_release_id else counts.legacy_chunks,
+        active_release_id=counts.active_release_id,
+        legacy_active_chunks=counts.legacy_chunks,
+        embedding_tokens=usage.tokens,
+        embedding_requests=usage.requests,
+        retrieval_requests=usage.retrievals,
+        operation_usage=[KnowledgeOperationUsage(**step) for step in steps],
     )
 
 
@@ -506,9 +596,11 @@ def search_knowledge_base(
             document_ids=payload.document_ids or None,
         )
     except ValueError as exc:
+        message = "知识库 Embedding 配置不可用，请检查模型配置"
+        if str(exc) == "index_embedding_profile_changed":
+            message = "当前 Embedding 与索引不匹配，请恢复原模型配置或使用新模型重建索引"
         raise HTTPException(
-            status_code=409,
-            detail={"code": str(exc), "message": "知识库 Embedding 配置不可用，请检查模型配置"},
+            status_code=409, detail={"code": str(exc), "message": message}
         ) from None
     except Exception:
         raise HTTPException(
@@ -551,32 +643,17 @@ def reindex_knowledge_base(
     principal: CurrentPrincipal,
     db: DatabaseSession,
 ) -> dict:
-    _get_knowledge_base(db, principal.tenant.id, knowledge_base_id)
+    _get_knowledge_base(db, principal.tenant.id, knowledge_base_id, lock=True)
     documents = db.scalars(
         select(KnowledgeDocument).where(
             KnowledgeDocument.tenant_id == principal.tenant.id,
             KnowledgeDocument.knowledge_base_id == knowledge_base_id,
             KnowledgeDocument.status.in_(("ready", "failed")),
-        )
+        ).order_by(KnowledgeDocument.id).with_for_update().execution_options(populate_existing=True)
     ).all()
-    queued = 0
-    for document in documents:
-        next_version = max(1, document.active_index_version + 1)
-        job_type = "reindex" if document.active_index_version > 0 else "ingest"
-        document.pending_index_version = next_version
-        document.status = "ready" if document.active_index_version > 0 else "queued"
-        document.error_code = None
-        document.error_message = None
-        _enqueue_job(
-            db,
-            tenant_id=principal.tenant.id,
-            knowledge_base_id=knowledge_base_id,
-            document_id=document.id,
-            job_type=job_type,
-            index_version=next_version,
-            dedupe_key=f"reindex-all:{document.id}:{next_version}:{uuid4().hex}",
-        )
-        queued += 1
+    queued = sum(_schedule_reindex(db, document) for document in documents)
+    if queued:
+        prepare_legacy_change(db, principal.tenant.id, knowledge_base_id)
     db.commit()
     return {"queued_documents": queued, "status": "queued"}
 

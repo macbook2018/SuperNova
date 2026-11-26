@@ -13,6 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from app.api.deps import CurrentPrincipal, DatabaseSession
 from app.billing.credentials import resolve_platform_api_key
 from app.core.secret_encryption import decrypt_provider_api_key
+from app.knowledge.indexing import prepare_legacy_change
 from app.knowledge.network import validate_public_service_url
 from app.knowledge.storage import put_object
 from app.models.billing import PlatformModel
@@ -169,13 +170,14 @@ def _get_persona_draft(db, tenant_id: UUID, draft_id: UUID) -> PersonaDraft:
     return draft
 
 
-def _get_faq_candidate(db, tenant_id: UUID, candidate_id: UUID) -> FaqCandidate:
-    candidate = db.scalar(
-        select(FaqCandidate).where(
-            FaqCandidate.id == candidate_id,
-            FaqCandidate.tenant_id == tenant_id,
-        )
+def _get_faq_candidate(db, tenant_id: UUID, candidate_id: UUID, *, lock=False) -> FaqCandidate:
+    query = select(FaqCandidate).where(
+        FaqCandidate.id == candidate_id,
+        FaqCandidate.tenant_id == tenant_id,
     )
+    if lock:
+        query = query.with_for_update().execution_options(populate_existing=True)
+    candidate = db.scalar(query)
     if candidate is None:
         raise _not_found("faq_candidate_not_found", "FAQ 候选知识不存在")
     return candidate
@@ -668,7 +670,7 @@ def publish_faq_candidate(
     principal: CurrentPrincipal,
     db: DatabaseSession,
 ) -> FaqCandidateRead:
-    candidate = _get_faq_candidate(db, principal.tenant.id, candidate_id)
+    candidate = _get_faq_candidate(db, principal.tenant.id, candidate_id, lock=True)
     if candidate.status == "published":
         return _faq_candidate_read(candidate)
     if candidate.status != "approved":
@@ -679,7 +681,7 @@ def publish_faq_candidate(
             KnowledgeBase.id == payload.knowledge_base_id,
             KnowledgeBase.tenant_id == principal.tenant.id,
             KnowledgeBase.enabled.is_(True),
-        )
+        ).with_for_update().execution_options(populate_existing=True)
     )
     if knowledge_base is None:
         raise _not_found("knowledge_base_not_found", "目标知识库不存在或已停用")
@@ -766,6 +768,7 @@ def publish_faq_candidate(
         index_version=1,
     )
     try:
+        prepare_legacy_change(db, principal.tenant.id, knowledge_base.id)
         db.add(document)
         # Persist the document before rows that reference it through foreign keys.
         db.flush()

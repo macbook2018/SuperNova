@@ -93,13 +93,16 @@ def _get_knowledge_base(
     db: Session,
     principal: Principal,
     knowledge_base_id: UUID,
+    *,
+    lock: bool = False,
 ) -> KnowledgeBase:
-    knowledge_base = db.scalar(
-        select(KnowledgeBase).where(
-            KnowledgeBase.id == knowledge_base_id,
-            KnowledgeBase.tenant_id == principal.tenant.id,
-        )
+    query = select(KnowledgeBase).where(
+        KnowledgeBase.id == knowledge_base_id,
+        KnowledgeBase.tenant_id == principal.tenant.id,
     )
+    if lock:
+        query = query.with_for_update().execution_options(populate_existing=True)
+    knowledge_base = db.scalar(query)
     if knowledge_base is None:
         raise _not_found("knowledge_base")
     return knowledge_base
@@ -510,7 +513,7 @@ def update_knowledge_base(
     principal: CurrentPrincipal,
     db: DatabaseSession,
 ) -> KnowledgeBaseRead:
-    record = _get_knowledge_base(db, principal, knowledge_base_id)
+    record = _get_knowledge_base(db, principal, knowledge_base_id, lock=True)
     updates = payload.model_dump(exclude_unset=True)
     _reject_null_updates(
         updates,
@@ -581,7 +584,7 @@ def delete_knowledge_base(
     principal: CurrentPrincipal,
     db: DatabaseSession,
 ):
-    record = _get_knowledge_base(db, principal, knowledge_base_id)
+    record = _get_knowledge_base(db, principal, knowledge_base_id, lock=True)
     remaining_documents = db.scalar(
         select(func.count(KnowledgeDocument.id)).where(
             KnowledgeDocument.tenant_id == principal.tenant.id,

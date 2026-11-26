@@ -10,19 +10,24 @@ from uuid import UUID, uuid4
 
 import httpx
 import structlog
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, update
 
 from app.core.config import get_settings
 from app.db.session import SessionLocal
+from app.knowledge import index_worker
 from app.knowledge.chunking import chunk_blocks
 from app.knowledge.embeddings import embed_texts, resolve_embedding_config
+from app.knowledge.indexing import lock_index_kb, prepare_legacy_change
+from app.knowledge.legacy_revisions import record_revisions
 from app.knowledge.network import validate_public_service_url
+from app.knowledge.observations import observe_embedding_calls
 from app.knowledge.parsers import parse_document, validate_document_bytes
 from app.knowledge.storage import delete_object, get_object, put_object
 from app.models.catalog import KnowledgeBase
 from app.models.knowledge import (
     KnowledgeChunk,
     KnowledgeDocument,
+    KnowledgeIndexChunk,
     KnowledgeIngestionJob,
     KnowledgeUsageRecord,
 )
@@ -31,24 +36,75 @@ logger = structlog.get_logger()
 WORKER_ID = f"knowledge-{socket.gethostname()}-{uuid4().hex[:8]}"
 
 
+class LostLegacyLease(Exception):
+    pass
+
+
+def _document_is_current(document, job):
+    if job.job_type == "delete":
+        return document.status == "deleting"
+    return (
+        document.status not in {"deleted", "deleting"}
+        and document.pending_index_version == job.index_version
+    )
+
+
+def _owned_job(job_id, attempt):
+    return (
+        KnowledgeIngestionJob.id == job_id,
+        KnowledgeIngestionJob.worker_id == WORKER_ID,
+        KnowledgeIngestionJob.attempts == attempt,
+        KnowledgeIngestionJob.status == "running",
+        KnowledgeIngestionJob.lease_expires_at > datetime.now(UTC),
+    )
+
+
+def _locked_target(db, job, attempt):
+    kb = lock_index_kb(db, job.tenant_id, job.knowledge_base_id)
+    current = db.scalar(
+        select(KnowledgeIngestionJob)
+        .where(*_owned_job(job.id, attempt))
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if current is None:
+        raise LostLegacyLease
+    doc = db.scalar(
+        select(KnowledgeDocument)
+        .where(
+            KnowledgeDocument.id == current.document_id,
+            KnowledgeDocument.tenant_id == current.tenant_id,
+            KnowledgeDocument.knowledge_base_id == current.knowledge_base_id,
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if (
+        doc is None
+        or not _document_is_current(doc, current)
+        or (current.job_type != "delete" and doc.active_index_version >= current.index_version)
+    ):
+        current.status = "cancelled"
+        current.worker_id = None
+        current.lease_expires_at = None
+        db.commit()
+        raise LostLegacyLease
+    return kb, doc
+
+
 def _claim_job() -> UUID | None:
     settings = get_settings()
     now = datetime.now(UTC)
     with SessionLocal() as db:
+        eligible = or_(
+            KnowledgeIngestionJob.status.in_(("queued", "retry_wait"))
+            & (KnowledgeIngestionJob.available_at <= now),
+            (KnowledgeIngestionJob.status == "running")
+            & (KnowledgeIngestionJob.lease_expires_at <= now),
+        )
         job = db.scalar(
             select(KnowledgeIngestionJob)
-            .where(
-                or_(
-                    (
-                        KnowledgeIngestionJob.status.in_(("queued", "retry_wait"))
-                        & (KnowledgeIngestionJob.available_at <= now)
-                    ),
-                    (
-                        (KnowledgeIngestionJob.status == "running")
-                        & (KnowledgeIngestionJob.lease_expires_at < now)
-                    ),
-                )
-            )
+            .where(eligible)
             .order_by(KnowledgeIngestionJob.available_at, KnowledgeIngestionJob.created_at)
             .with_for_update(skip_locked=True)
             .limit(1)
@@ -56,13 +112,40 @@ def _claim_job() -> UUID | None:
         if job is None:
             return None
         if job.attempts >= job.max_attempts:
+            job_id, tenant_id, kb_id = job.id, job.tenant_id, job.knowledge_base_id
+            db.rollback()
+            # All worker finalizers and source writers acquire the KB before a job/document.
+            try:
+                lock_index_kb(db, tenant_id, kb_id)
+            except LookupError:
+                return None
+            job = db.scalar(
+                select(KnowledgeIngestionJob)
+                .where(
+                    KnowledgeIngestionJob.id == job_id,
+                    eligible,
+                    KnowledgeIngestionJob.attempts >= KnowledgeIngestionJob.max_attempts,
+                )
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            if job is None:
+                return None
             job.status = "dead_letter"
             job.last_error = "knowledge_max_attempts_exceeded"
             job.worker_id = None
             job.locked_at = None
             job.lease_expires_at = None
-            document = db.get(KnowledgeDocument, job.document_id)
-            if document is not None:
+            document = db.scalar(
+                select(KnowledgeDocument)
+                .where(
+                    KnowledgeDocument.id == job.document_id,
+                    KnowledgeDocument.tenant_id == job.tenant_id,
+                    KnowledgeDocument.knowledge_base_id == job.knowledge_base_id,
+                )
+                .with_for_update()
+            )
+            if document is not None and _document_is_current(document, job):
                 if job.job_type != "delete":
                     if job.job_type == "reindex" and document.active_index_version > 0:
                         document.status = "ready"
@@ -82,16 +165,19 @@ def _claim_job() -> UUID | None:
         return job.id
 
 
-def _extend_job_lease(job_id) -> None:
+def _extend_job_lease(job_id, attempt) -> None:
     settings = get_settings()
-    with SessionLocal() as db:
-        job = db.get(KnowledgeIngestionJob, job_id)
-        if job is None or job.status != "running" or job.worker_id != WORKER_ID:
-            return
-        job.lease_expires_at = datetime.now(UTC) + timedelta(
-            seconds=settings.knowledge_worker_lease_seconds
+    with SessionLocal.begin() as db:
+        changed = db.execute(
+            update(KnowledgeIngestionJob)
+            .where(*_owned_job(job_id, attempt))
+            .values(
+                lease_expires_at=datetime.now(UTC)
+                + timedelta(seconds=settings.knowledge_worker_lease_seconds),
+            )
         )
-        db.commit()
+        if changed.rowcount != 1:
+            raise LostLegacyLease
 
 
 def _filename_from_response(url: str, content_type: str) -> str:
@@ -152,7 +238,11 @@ def _process_delete(db, job: KnowledgeIngestionJob, document: KnowledgeDocument)
         KnowledgeChunk.knowledge_base_id == job.knowledge_base_id,
         KnowledgeChunk.document_id == document.id,
     ).delete(synchronize_session=False)
-    db.commit()
+    db.query(KnowledgeIndexChunk).filter(
+        KnowledgeIndexChunk.tenant_id == job.tenant_id,
+        KnowledgeIndexChunk.knowledge_base_id == job.knowledge_base_id,
+        KnowledgeIndexChunk.document_id == document.id,
+    ).delete(synchronize_session=False)
     delete_object(document.object_key)
     document.status = "deleted"
     document.sha256 = None
@@ -171,6 +261,7 @@ def _process_ingest(
     document: KnowledgeDocument,
     kb: KnowledgeBase,
 ) -> None:
+    attempt = job.attempts
     started = time.monotonic()
     settings = get_settings()
     if document.source_type == "url" and document.sha256 is None:
@@ -178,16 +269,19 @@ def _process_ingest(
         mime_type = validate_document_bytes(filename, response_type, body)
         digest = hashlib.sha256(body).hexdigest()
         duplicate = db.scalar(
-            select(KnowledgeDocument.id).where(
+            select(KnowledgeDocument.id)
+            .where(
                 KnowledgeDocument.tenant_id == document.tenant_id,
                 KnowledgeDocument.knowledge_base_id == document.knowledge_base_id,
                 KnowledgeDocument.sha256 == digest,
                 KnowledgeDocument.id != document.id,
                 KnowledgeDocument.status != "deleted",
-            ).limit(1)
+            )
+            .limit(1)
         )
         if duplicate is not None:
             raise ValueError("duplicate_document_content")
+        _locked_target(db, job, attempt)
         put_object(document.object_key, body, mime_type)
         document.original_filename = filename
         document.mime_type = mime_type
@@ -208,39 +302,27 @@ def _process_ingest(
         raise ValueError("document_chunk_limit_exceeded")
 
     embedding_config = resolve_embedding_config(db, kb)
-    batch = embed_texts(
-        embedding_config,
-        [item["content"] for item in chunks],
-        on_batch=lambda: _extend_job_lease(job.id),
-    )
+    db.commit()
+    _extend_job_lease(job.id, attempt)
+    with observe_embedding_calls(
+        db,
+        tenant_id=job.tenant_id,
+        knowledge_base_id=job.knowledge_base_id,
+        operation="index_embedding",
+        request_id=str(job.id),
+        document_id=document.id,
+    ):
+        batch = embed_texts(
+            embedding_config,
+            [item["content"] for item in chunks],
+            on_batch=lambda: _extend_job_lease(job.id, attempt),
+        )
     if len(batch.vectors) != len(chunks):
         raise ValueError("embedding_count_mismatch")
 
-    # Serialize the final index switch with delete requests. If deletion won the
-    # race while embeddings were being generated, discard this batch.
-    latest_document = db.scalar(
-        select(KnowledgeDocument)
-        .where(
-            KnowledgeDocument.id == document.id,
-            KnowledgeDocument.tenant_id == job.tenant_id,
-            KnowledgeDocument.knowledge_base_id == job.knowledge_base_id,
-        )
-        .with_for_update()
-    )
-    if latest_document is None or latest_document.status == "deleting":
-        job.status = "cancelled"
-        job.worker_id = None
-        job.lease_expires_at = None
-        db.commit()
-        return
-    document = latest_document
+    kb, document = _locked_target(db, job, attempt)
+    prepare_legacy_change(db, job.tenant_id, job.knowledge_base_id)
 
-    db.query(KnowledgeChunk).filter(
-        KnowledgeChunk.tenant_id == job.tenant_id,
-        KnowledgeChunk.knowledge_base_id == job.knowledge_base_id,
-        KnowledgeChunk.document_id == document.id,
-        KnowledgeChunk.index_version == job.index_version,
-    ).delete(synchronize_session=False)
     records = []
     for index, (item, vector) in enumerate(zip(chunks, batch.vectors, strict=True)):
         records.append(
@@ -257,15 +339,11 @@ def _process_ingest(
                 metadata_json=item["metadata"],
             )
         )
+    # Keep previously published v1 rows and their citation IDs; retrieval filters by active version.
+    record_revisions(
+        db, document, kb, embedding_config, new_version=job.index_version, new_count=len(records)
+    )
     db.add_all(records)
-    db.flush()
-    db.query(KnowledgeChunk).filter(
-        KnowledgeChunk.tenant_id == job.tenant_id,
-        KnowledgeChunk.knowledge_base_id == job.knowledge_base_id,
-        KnowledgeChunk.document_id == document.id,
-        KnowledgeChunk.index_version != job.index_version,
-    ).delete(synchronize_session=False)
-
     document.active_index_version = job.index_version
     document.pending_index_version = job.index_version
     document.chunk_count = len(records)
@@ -295,12 +373,15 @@ def _process_ingest(
     db.commit()
 
 
-def _handle_failure(job_id: UUID, error: Exception) -> None:
+def _handle_failure(job_id: UUID, attempt: int, error: Exception) -> None:
     with SessionLocal() as db:
         job = db.get(KnowledgeIngestionJob, job_id)
         if job is None:
             return
-        document = db.get(KnowledgeDocument, job.document_id)
+        try:
+            _, document = _locked_target(db, job, attempt)
+        except (LookupError, LostLegacyLease):
+            return
         message = (
             str(error).splitlines()[0][:500]
             if isinstance(error, (ValueError, RuntimeError))
@@ -337,30 +418,27 @@ def _handle_failure(job_id: UUID, error: Exception) -> None:
 
 
 def process_job(job_id: UUID) -> None:
+    attempt = None
     try:
         with SessionLocal() as db:
             job = db.get(KnowledgeIngestionJob, job_id)
             if job is None or job.status != "running" or job.worker_id != WORKER_ID:
                 return
-            document = db.get(KnowledgeDocument, job.document_id)
-            kb = db.get(KnowledgeBase, job.knowledge_base_id)
-            if document is None or kb is None:
-                raise ValueError("knowledge_resource_not_found")
-            if document.status == "deleting" and job.job_type != "delete":
-                job.status = "cancelled"
-                job.worker_id = None
-                job.lease_expires_at = None
-                db.commit()
-                return
+            attempt = job.attempts
+            kb, document = _locked_target(db, job, attempt)
             if job.job_type == "delete":
+                prepare_legacy_change(db, job.tenant_id, job.knowledge_base_id)
                 _process_delete(db, job, document)
             else:
                 if job.job_type != "reindex" or document.active_index_version == 0:
                     document.status = "processing"
-                    db.commit()
+                db.commit()
                 _process_ingest(db, job, document, kb)
+    except (LookupError, LostLegacyLease):
+        return
     except Exception as exc:
-        _handle_failure(job_id, exc)
+        if attempt is not None:
+            _handle_failure(job_id, attempt, exc)
 
 
 def run_forever() -> None:
@@ -368,10 +446,13 @@ def run_forever() -> None:
     logger.info("knowledge_worker_started", worker_id=WORKER_ID)
     while True:
         job_id = _claim_job()
-        if job_id is None:
+        if job_id is not None:
+            process_job(job_id)
+        candidate = index_worker.claim()
+        if candidate is not None:
+            index_worker.process(*candidate)
+        if job_id is None and candidate is None:
             time.sleep(settings.knowledge_worker_poll_seconds)
-            continue
-        process_job(job_id)
 
 
 def main() -> None:

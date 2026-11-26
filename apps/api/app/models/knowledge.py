@@ -23,6 +23,7 @@ from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
+from app.db.knowledge_triggers_0015 import CREATE_LEGACY_GUARDS, DROP_LEGACY_GUARDS
 
 # Test and metadata-driven schema creation may bypass Alembic migrations.
 event.listen(
@@ -74,6 +75,7 @@ class KnowledgeDocument(Base):
     __tablename__ = "knowledge_documents"
     __table_args__ = (
         UniqueConstraint("tenant_id", "id", name="uq_knowledge_documents_tenant_id"),
+        UniqueConstraint("tenant_id", "knowledge_base_id", "id", name="uq_ki_document_scope"),
         UniqueConstraint(
             "tenant_id", "knowledge_base_id", "sha256",
             name="uq_knowledge_documents_kb_sha256",
@@ -257,4 +259,354 @@ class KnowledgeUsageRecord(Base):
     status: Mapped[str] = mapped_column(String(20), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class KnowledgeDocumentIndexRevision(Base):
+    __tablename__ = "knowledge_document_index_revisions"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "knowledge_base_id", "document_id"],
+            [
+                "knowledge_documents.tenant_id",
+                "knowledge_documents.knowledge_base_id",
+                "knowledge_documents.id",
+            ],
+            ondelete="CASCADE",
+            name="fk_ki_doc_revision_scope",
+        ),
+        CheckConstraint("index_version > 0 AND chunk_count > 0", name="ck_ki_doc_revision_counts"),
+        CheckConstraint(
+            "profile_origin IN ('generated','legacy_unknown')", name="ck_ki_doc_revision_origin"
+        ),
+    )
+    tenant_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    knowledge_base_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    document_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    index_version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    chunk_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    reader_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    profile_origin: Mapped[str] = mapped_column(String(16), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+# V2 builds use their own tables so deployed v1 workers cannot claim a shadow job
+# or collect a retained release. A missing state row (or a null pointer) selects v1.
+class KnowledgeIndexRelease(Base):
+    __tablename__ = "knowledge_index_releases"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "knowledge_base_id"],
+            ["knowledge_bases.tenant_id", "knowledge_bases.id"],
+            ondelete="CASCADE",
+            name="fk_ki_release_kb",
+        ),
+        UniqueConstraint("tenant_id", "knowledge_base_id", "id", name="uq_ki_release_scope"),
+        UniqueConstraint("tenant_id", "knowledge_base_id", "revision", name="uq_ki_release_rev"),
+        UniqueConstraint("tenant_id", "knowledge_base_id", "request_key", name="uq_ki_release_req"),
+        CheckConstraint("revision > 0 AND expected_generation >= 0", name="ck_ki_release_rev"),
+        CheckConstraint(
+            "status IN ('building','ready','failed','retired')", name="ck_ki_release_status"
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+    knowledge_base_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+    revision: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    expected_generation: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    request_key: Mapped[str] = mapped_column(String(180), nullable=False)
+    config_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    embedding_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="building", server_default="building")
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class KnowledgeIndexState(Base):
+    __tablename__ = "knowledge_index_states"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "knowledge_base_id"],
+            ["knowledge_bases.tenant_id", "knowledge_bases.id"],
+            ondelete="CASCADE",
+            name="fk_ki_state_kb",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "knowledge_base_id", "active_release_id"],
+            [
+                "knowledge_index_releases.tenant_id",
+                "knowledge_index_releases.knowledge_base_id",
+                "knowledge_index_releases.id",
+            ],
+            name="fk_ki_state_release",
+        ),
+        CheckConstraint("last_revision >= 0 AND generation >= 0", name="ck_ki_state_generation"),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    knowledge_base_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    active_release_id: Mapped[UUID | None] = mapped_column(Uuid)
+    last_revision: Mapped[int] = mapped_column(BigInteger, default=0, server_default="0")
+    generation: Mapped[int] = mapped_column(BigInteger, default=0, server_default="0")
+
+
+class KnowledgeIndexMember(Base):
+    __tablename__ = "knowledge_index_members"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "knowledge_base_id", "release_id"],
+            [
+                "knowledge_index_releases.tenant_id",
+                "knowledge_index_releases.knowledge_base_id",
+                "knowledge_index_releases.id",
+            ],
+            ondelete="CASCADE",
+            name="fk_ki_member_release",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "knowledge_base_id", "document_id"],
+            [
+                "knowledge_documents.tenant_id",
+                "knowledge_documents.knowledge_base_id",
+                "knowledge_documents.id",
+            ],
+            ondelete="CASCADE",
+            name="fk_ki_member_document",
+        ),
+        CheckConstraint("status IN ('pending','ready','failed')", name="ck_ki_member_status"),
+        CheckConstraint("source_version >= 0 AND chunk_count >= 0", name="ck_ki_member_counts"),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    knowledge_base_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    release_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    document_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    source_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_sha256: Mapped[str | None] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(12), default="pending", server_default="pending")
+    chunk_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+
+
+class KnowledgeIndexChunk(Base):
+    __tablename__ = "knowledge_index_chunks"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "knowledge_base_id", "release_id", "document_id"],
+            [
+                "knowledge_index_members.tenant_id",
+                "knowledge_index_members.knowledge_base_id",
+                "knowledge_index_members.release_id",
+                "knowledge_index_members.document_id",
+            ],
+            ondelete="CASCADE",
+            name="fk_ki_chunk_member",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "knowledge_base_id",
+            "release_id",
+            "document_id",
+            "chunk_index",
+            name="uq_ki_chunk_index",
+        ),
+        CheckConstraint("chunk_index >= 0", name="ck_ki_chunk_index"),
+        Index(
+            "ix_ki_chunk_hnsw",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+        ),
+        Index(
+            "ix_ki_chunk_trgm",
+            "content",
+            postgresql_using="gin",
+            postgresql_ops={"content": "gin_trgm_ops"},
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+    knowledge_base_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+    release_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+    document_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    embedding: Mapped[list[float]] = mapped_column(Vector(1536), nullable=False)
+    metadata_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+
+
+class KnowledgeIndexBuildJob(Base):
+    __tablename__ = "knowledge_index_build_jobs"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "knowledge_base_id", "release_id", "document_id"],
+            [
+                "knowledge_index_members.tenant_id",
+                "knowledge_index_members.knowledge_base_id",
+                "knowledge_index_members.release_id",
+                "knowledge_index_members.document_id",
+            ],
+            ondelete="CASCADE",
+            name="fk_ki_job_member",
+        ),
+        UniqueConstraint(
+            "tenant_id", "knowledge_base_id", "release_id", "document_id", name="uq_ki_job_member"
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "knowledge_base_id",
+            "release_id",
+            "document_id",
+            "id",
+            name="uq_ki_job_scope_id",
+        ),
+        CheckConstraint(
+            "status IN ('queued','running','retry_wait','succeeded','dead_letter','cancelled')",
+            name="ck_ki_job_status",
+        ),
+        CheckConstraint("attempts >= 0 AND max_attempts > 0", name="ck_ki_job_attempts"),
+        CheckConstraint(
+            "(status = 'running' AND lease_token IS NOT NULL AND lease_expires_at IS NOT NULL) "
+            "OR (status <> 'running' AND lease_token IS NULL AND lease_expires_at IS NULL)",
+            name="ck_ki_job_lease",
+        ),
+        Index("ix_ki_job_claim", "status", "available_at", "lease_expires_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+    knowledge_base_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+    release_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+    document_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="queued", server_default="queued")
+    attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    max_attempts: Mapped[int] = mapped_column(Integer, default=5, server_default="5")
+    available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    lease_token: Mapped[UUID | None] = mapped_column(Uuid)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(String(1000))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class KnowledgeIndexObservation(Base):
+    __tablename__ = "knowledge_index_observations"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "knowledge_base_id"],
+            ["knowledge_bases.tenant_id", "knowledge_bases.id"],
+            ondelete="CASCADE",
+            name="fk_ki_obs_kb",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "knowledge_base_id", "release_id"],
+            [
+                "knowledge_index_releases.tenant_id",
+                "knowledge_index_releases.knowledge_base_id",
+                "knowledge_index_releases.id",
+            ],
+            name="fk_ki_obs_release",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "knowledge_base_id", "document_id"],
+            [
+                "knowledge_documents.tenant_id",
+                "knowledge_documents.knowledge_base_id",
+                "knowledge_documents.id",
+            ],
+            name="fk_ki_obs_document",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "knowledge_base_id", "release_id", "document_id", "job_id"],
+            [
+                "knowledge_index_build_jobs.tenant_id",
+                "knowledge_index_build_jobs.knowledge_base_id",
+                "knowledge_index_build_jobs.release_id",
+                "knowledge_index_build_jobs.document_id",
+                "knowledge_index_build_jobs.id",
+            ],
+            name="fk_ki_obs_job",
+        ),
+        CheckConstraint(
+            "job_id IS NULL OR (document_id IS NOT NULL AND release_id IS NOT NULL)",
+            name="ck_ki_obs_job_scope",
+        ),
+        CheckConstraint(
+            "status IN ('started','succeeded','failed','unknown')", name="ck_ki_obs_status"
+        ),
+        CheckConstraint("input_tokens >= 0 AND output_tokens >= 0", name="ck_ki_obs_tokens"),
+        Index("ix_ki_obs_scope_created", "tenant_id", "knowledge_base_id", "created_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+    knowledge_base_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+    release_id: Mapped[UUID | None] = mapped_column(Uuid)
+    document_id: Mapped[UUID | None] = mapped_column(Uuid)
+    job_id: Mapped[UUID | None] = mapped_column(Uuid)
+    request_id: Mapped[str | None] = mapped_column(String(180))
+    operation: Mapped[str] = mapped_column(String(32), nullable=False)
+    model_name: Mapped[str | None] = mapped_column(String(120))
+    status: Mapped[str] = mapped_column(String(16), default="started", server_default="started")
+    input_tokens: Mapped[int | None] = mapped_column(BigInteger)
+    output_tokens: Mapped[int | None] = mapped_column(BigInteger)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+# The candidate's identity and semantic configuration are write-once. The service
+# changes only its lifecycle status and the timestamp of its first publication.
+_RELEASE_GUARD_FUNCTION = """
+CREATE FUNCTION sn_ki_guard_release() RETURNS trigger AS $$
+BEGIN
+    IF (OLD.id, OLD.tenant_id, OLD.knowledge_base_id, OLD.revision,
+        OLD.expected_generation, OLD.request_key, OLD.embedding_fingerprint, OLD.config_json::jsonb)
+       IS DISTINCT FROM
+       (NEW.id, NEW.tenant_id, NEW.knowledge_base_id, NEW.revision,
+        NEW.expected_generation, NEW.request_key, NEW.embedding_fingerprint, NEW.config_json::jsonb)
+       OR (OLD.published_at IS NOT NULL AND OLD.published_at IS DISTINCT FROM NEW.published_at)
+    THEN
+        RAISE EXCEPTION 'knowledge index release identity and configuration are immutable';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql
+"""
+_RELEASE_GUARD_TRIGGER = """
+CREATE TRIGGER ki_guard_release BEFORE UPDATE ON knowledge_index_releases
+FOR EACH ROW EXECUTE FUNCTION sn_ki_guard_release()
+"""
+event.listen(
+    KnowledgeIndexRelease.__table__,
+    "after_create",
+    DDL(_RELEASE_GUARD_FUNCTION).execute_if(dialect="postgresql"),
+)
+event.listen(
+    KnowledgeIndexRelease.__table__,
+    "after_create",
+    DDL(_RELEASE_GUARD_TRIGGER).execute_if(dialect="postgresql"),
+)
+event.listen(
+    KnowledgeIndexRelease.__table__,
+    "after_drop",
+    DDL("DROP FUNCTION sn_ki_guard_release()").execute_if(dialect="postgresql"),
+)
+
+
+# Observation is downstream of the v2 build tables. Its creation is the last
+# step at which a legacy writer can acquire its version-aware database triggers.
+for statement in CREATE_LEGACY_GUARDS:
+    event.listen(
+        KnowledgeIndexObservation.__table__,
+        "after_create",
+        DDL(statement).execute_if(dialect="postgresql"),
+    )
+for statement in DROP_LEGACY_GUARDS:
+    event.listen(
+        KnowledgeIndexObservation.__table__,
+        "before_drop",
+        DDL(statement).execute_if(dialect="postgresql"),
     )
