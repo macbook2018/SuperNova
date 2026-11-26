@@ -26,7 +26,7 @@ from app.models.knowledge import (
     KnowledgeIngestionJob,
 )
 
-SUPPORTED_PARSER_VERSIONS = frozenset({"legacy"})
+SUPPORTED_PARSER_VERSIONS = frozenset({"legacy", "structured_v1"})
 
 
 class IndexConflict(ValueError):

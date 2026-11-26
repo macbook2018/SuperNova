@@ -220,9 +220,11 @@ def process(job_id: UUID, token: UUID) -> None:
                 raise ValueError("index_source_hash_mismatch")
             mime = validate_document_bytes(doc.original_filename, doc.mime_type, body)
             config = release.config_json
-            blocks = parse_document(doc.original_filename, mime, body)
+            strategy = config["parser_version"]
+            blocks = parse_document(doc.original_filename, mime, body, strategy=strategy)
             chunks = chunk_blocks(
-                blocks, chunk_size=config["chunk_size"], chunk_overlap=config["chunk_overlap"]
+                blocks, chunk_size=config["chunk_size"], chunk_overlap=config["chunk_overlap"],
+                strategy=strategy,
             )
             if not chunks or len(chunks) > 5000:
                 raise ValueError("document_chunk_limit_exceeded")

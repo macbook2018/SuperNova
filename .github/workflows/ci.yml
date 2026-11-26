@@ -165,7 +165,7 @@ jobs:
             "${compose[@]}" cp apps/api/tests/compose_index_versions.py "$service:/tmp/index_smoke.py"
             "${compose[@]}" exec -d -T "$service" python /tmp/index_smoke.py --serve
           done
-          "${compose[@]}" exec -T api python /tmp/index_smoke.py
+          "${compose[@]}" exec -T api python /tmp/index_smoke.py --parser-version structured_v1
 
       - name: Verify Chinese console
         run: |

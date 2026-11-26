@@ -72,7 +72,16 @@ def validate_document_bytes(filename: str, content_type: str, body: bytes) -> st
     return "text/plain"
 
 
-def parse_document(filename: str, content_type: str, body: bytes) -> list[ExtractedBlock]:
+def parse_document(
+    filename: str, content_type: str, body: bytes, *, strategy: str = "legacy"
+) -> list[ExtractedBlock]:
+    if strategy == "structured_v1":
+        from app.knowledge.structured_parsers import parse_structured
+
+        return parse_structured(filename, body)
+    if strategy != "legacy":
+        raise ValueError("unsupported_knowledge_strategy")
+
     suffix = PurePosixPath(filename.replace("\\", "/")).suffix.lower()
     blocks: list[ExtractedBlock] = []
     if suffix == ".pdf":
