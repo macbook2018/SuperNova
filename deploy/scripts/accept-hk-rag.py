@@ -7,6 +7,7 @@ import secrets
 import signal
 import sys
 import time
+import unicodedata
 from uuid import UUID, uuid4
 
 import httpx
@@ -216,7 +217,7 @@ def test_run(client, other, own, cfg, pins, report):
     })
     base = "/knowledge-bases/" + kb["id"]
     own["kb"] = base
-    code = "SN-" + secrets.token_hex(3).upper()
+    code = "SN-" + "".join(secrets.choice("ABCDEFGHJKMNPQRSTUVWXYZ") for _ in range(6))
     amount = str(1000 + secrets.randbelow(9000))
     heading = "香港验收价目"
     fact = f"产品 {code} 的活动价为人民币 {amount} 元。"
@@ -288,7 +289,11 @@ def test_run(client, other, own, cfg, pins, report):
             result = resp.json()
             answer = result["choices"][0]["message"]["content"] or ""
             sources = result.get("supernova", {}).get("citations", [])
-        check(re.search(r"(?<![0-9])" + amount + r"(?![0-9])", answer), "answer_price_mismatch")
+        normalized = unicodedata.normalize("NFKC", answer).replace(code, "")
+        normalized = re.sub(r"(?<=\d),(?=\d{3}(?:\D|$))", "", normalized)
+        amounts = re.findall(r"(?<![0-9.])([0-9]+(?:\.[0-9]+)?)(?![0-9])", normalized)
+        check(bool(amounts) and all(re.fullmatch(amount + r"(?:\.0+)?", n) for n in amounts),
+              "answer_price_mismatch")
         check(any(c.get("chunk_id") == active_id and c.get("document_id") == doc["id"]
                   and c.get("index_release_id") == release["id"] and c.get("heading_path") == [heading]
                   and c.get("source_spans") and fact in c.get("snippet", "") for c in sources),

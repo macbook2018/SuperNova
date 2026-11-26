@@ -83,7 +83,7 @@ jobs:
               exec 9</opt/supernova-staging/.deploy-staging.lock
               flock --shared --wait 60 9
               echo locked
-              while sleep 5; do echo held || exit; done' > "$d/lock-status" 2> "$d/ssh-error" &
+              for tick in $(seq 1 240); do sleep 5; echo held || exit; done' > "$d/lock-status" 2> "$d/ssh-error" &
           echo "$!" > "$d/tunnel-pid"
           for attempt in {1..80}; do
             if grep -qx locked "$d/lock-status"; then break; fi
