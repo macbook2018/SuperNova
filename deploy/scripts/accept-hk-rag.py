@@ -309,7 +309,14 @@ def test_run(client, other, own, cfg, pins, report):
     records = api(client, "GET", "/usage/records")
     matched = [r for r in records if r["request_id"] in request_ids and r["status"] == "succeeded"]
     check(len({r["request_id"] for r in matched}) == 2, "chat_usage_missing")
-    report.update(embedding_requests=use["embedding_requests"], embedding_tokens=use["embedding_tokens"],
+    # Legacy counters and per-operation observations overlap. Report each independently.
+    report["embedding_operations"] = [
+        {field: row[field] for field in ("operation", "status", "calls", "known_input_tokens",
+                                        "known_output_tokens", "unknown_calls")}
+        for row in use["operation_usage"]
+    ]
+    report.update(legacy_embedding_requests=use["embedding_requests"],
+                  legacy_embedding_tokens=use["embedding_tokens"],
                   successful_chats=2, chat_tokens_reported=sum(r["total_tokens"] or 0 for r in matched),
                   chat_unknown_usage_count=sum(r["total_tokens"] is None for r in matched))
 
