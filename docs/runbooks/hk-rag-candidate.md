@@ -25,6 +25,25 @@ gh workflow run hk-rag-candidate.yml -R macbook2018/SuperNova --ref main \
 
 独立审核路径将可选输入 `review_confirmation` 留空。单维护者路径由总控本人在 Actions 中填写 `REVIEWED <candidate_sha>`；A2 填写 `REVIEWED <candidate_sha> WITH A1 <current_a1_sha>`，替换为本轮实际的完整小写 SHA。CLI 可追加 `-f review_confirmation="$RAG_REVIEW_CONFIRMATION"`。运行记录保留确认账号、源提交和输入，审核以当次 run 为准。有环境审核规则时，审核人再次核对本次 run 的 PR、SHA、CI 与环境后批准。运行采用本次构建的 API/Console 镜像、同次运行的归档 ID、镜像 ID 和 SHA-256 校验值。记录最终 run URL、镜像 ID、迁移版本及健康状态。镜像归档只短期保留，业务验收证据单独记在交付记录中。无需发布共享镜像标签。
 
+## #33 香港实测
+
+在 GitHub Actions 打开 **Accept Hong Kong RAG PR 33**，选择 `main` 并运行。工作流复用香港部署连接，核对运行中的候选版本，通过回环地址访问候选 API。候选平台池中已启用且可用的对话模型和 1536 维 `Qwen/Qwen3-Embedding-8B` 可直接参与验收。
+
+需要使用专用测试凭据时，在 `hk-rag-candidate` Environment 创建 Secret `HK_RAG_EVAL_PROVIDER_JSON`，只填写候选缺少的供应商配置。以下模板的占位内容须在 GitHub 的 Secret 表单中替换。聊天模型 ID 应填测试账号实际可调用的模型。
+
+```json
+{
+  "embedding_api_key": "<候选硅基流动测试 Key>",
+  "chat_base_url": "https://api.deepseek.com/v1",
+  "chat_model": "<对话模型 ID>",
+  "chat_api_key": "<候选 DeepSeek 测试 Key>"
+}
+```
+
+如果两种模型均由同一个硅基流动测试账号提供，将 `chat_base_url` 设为 `https://api.siliconflow.cn/v1`，填写对应 `chat_model`，将 `chat_api_key` 替换为 `"reuse_embedding_key_for_chat": true`。测试发送合成商品价格和问句，请使用允许少量外部模型调用的测试凭据。
+
+验收覆盖索引发布前后检索、普通和流式回答的金额与原文引用、跨租户拒绝访问、回滚后原切片 ID 及用量记录。运行结束会撤销测试 API Key、清理供应商凭据和测试资料，保留合成租户及用量审计记录。只有 `passed` 表示本次真实业务验收通过。若结果为 `missing_candidate_model_access`，请在候选平台启用所需模型或配置上述 Secret 后重新运行。
+
 ## 业务验收
 
 通过 SSH 隧道在验收人员本机访问 API 和 Console。将 `HK_SSH_ALIAS` 设为已有 SSH 配置中的候选机别名，在浏览器打开 `http://127.0.0.1:18183`。
