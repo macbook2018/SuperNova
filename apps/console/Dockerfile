@@ -7,7 +7,7 @@ RUN npm install --no-audit --no-fund
 
 COPY apps/console/ ./
 
-ARG VITE_API_BASE_URL=https://api.ai-supernova.com
+ARG VITE_API_BASE_URL=https://api.wet001.com
 ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
 
 RUN npm run build

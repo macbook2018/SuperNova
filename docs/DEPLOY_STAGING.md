@@ -1,10 +1,10 @@
-# SuperNova staging deployment — Hong Kong
+# SuperNova staging deployment on JD Cloud
 
 This is a temporary, low-concurrency staging deployment. It is isolated from the existing Docker projects and must not stop or modify Activation Manager, Website Watch, EmbedEaseAI, OpenClaw or other sites.
 
 ## Target topology
 
-- Host: the Hong Kong staging host, Debian 12, 2 vCPU, 4 GB RAM.
+- Host: the original JD Cloud staging host.
 - Existing host Nginx (Baota) remains the only public HTTP/HTTPS entry point.
 - Console: 127.0.0.1:18083, served by a small Nginx container.
 - API: 127.0.0.1:18082.
@@ -16,18 +16,18 @@ The core Compose memory limits total about 976 MiB, plus the separately managed 
 
 ## Domains (confirmed)
 
-- Console: bot.ai-supernova.com
-- API: api.ai-supernova.com
+- Console: bot.wet001.com
+- API: api.wet001.com
 
-Create A records for both names pointing to the Hong Kong staging host's public IP. Do not change existing DNS records.
+Verify the A records for these two names point to the JD Cloud staging host. Check any AAAA or CNAME records for the same names before cutover.
 
 In Baota:
-1. Add a site for bot.ai-supernova.com, issue/attach its HTTPS certificate, and reverse-proxy / to http://127.0.0.1:18083.
-2. Add a site for api.ai-supernova.com, issue/attach its HTTPS certificate, and reverse-proxy / to http://127.0.0.1:18082.
+1. Use the bot.wet001.com site with a valid HTTPS certificate and proxy / to http://127.0.0.1:18083.
+2. Use the api.wet001.com site with a valid HTTPS certificate and proxy / to http://127.0.0.1:18082.
 3. For the API site, set client_max_body_size 45m and proxy read/send timeouts to at least 300 seconds.
 4. Preserve all existing vhost files. Do not replace the global Nginx configuration.
 
-The Console image is built with VITE_API_BASE_URL; set the GitHub repository variable STAGING_API_BASE_URL to the exact HTTPS API origin.
+The staging Console image uses the API origin checked into its Dockerfile. Set the GitHub repository variable `STAGING_API_BASE_URL` to the same origin, `https://api.wet001.com`, to enable SSH deployment. A mismatched origin skips SSH and the verified SHA-tagged images remain available for deployment from the destination console. Set `SUPERNOVA_CORS_ORIGINS` in the destination .env to include `https://bot.wet001.com`. Verify the public API readiness response, a CORS preflight from the Console origin and the API origin in the deployed Console bundle.
 
 ## Object storage preparation
 
@@ -40,7 +40,7 @@ Keep root credentials under /opt/supernova-storage with mode 600. The applicatio
 
 Create a dedicated deploy account. Docker-group membership is effectively root-equivalent; protect its SSH key accordingly.
 
-As root on the Hong Kong staging host:
+As root on the JD Cloud staging host:
 
 ~~~bash
 useradd --create-home --shell /bin/bash supernova-deploy 2>/dev/null || true
@@ -96,14 +96,18 @@ Repository: Settings -> Secrets and variables -> Actions.
 Variables:
 - STAGING_DEPLOY_ENABLED = true (set this only after one-time server setup and GitHub Actions runner checks).
 - STAGING_DEPLOY_PATH = /opt/supernova-staging.
-- STAGING_API_BASE_URL = https://api.ai-supernova.com (change if another API domain is selected).
+- STAGING_API_BASE_URL = https://api.wet001.com (change if another API domain is selected).
 
-Secrets:
-- STAGING_HOST = the Hong Kong staging host public IP.
+For the JD Cloud SSH connection, set the following five secrets on the `jd-staging` GitHub environment. The Hong Kong candidate workflows have separate deployment access.
+
+- STAGING_HOST = the JD Cloud staging host public IP.
 - STAGING_USER = supernova-deploy.
 - STAGING_SSH_PORT = SSH port (usually 22).
 - STAGING_SSH_PRIVATE_KEY = private half of the dedicated deployment key.
 - STAGING_SSH_KNOWN_HOSTS = trusted host-key line(s) for the target SSH server, obtained via an already authenticated server console; for port 22 use IP followed by the contents of /etc/ssh/ssh_host_ed25519_key.pub (key type and public key only).
+
+The image publisher reads the repository secrets below.
+
 - DOCKERHUB_USERNAME = macbook201808.
 - DOCKERHUB_TOKEN = Docker Hub publishing token.
 
@@ -111,7 +115,7 @@ The workflow publishes SHA-tagged images with the existing Docker Hub credential
 
 ## CI and automatic deployment
 
-The staging deployment job depends on all three existing CI jobs (Console build, API lint/tests/migrations, Compose smoke test). It runs only on feat/phase-6-knowledge-base-rag and only when STAGING_DEPLOY_ENABLED=true.
+On feat/phase-6-knowledge-base-rag with STAGING_DEPLOY_ENABLED=true, image publication follows the Console build, API tests and Compose smoke checks. The SSH job then checks the configured origin and confirms that the SSH address belongs to the API domain before connecting with the pinned SSH host key.
 
 Before enabling deployment, verify GitHub Actions can actually allocate hosted runners and execute steps. A recent run for commit f67759b4eff273d891ef4f8487638c4d6a90f1b2 ended in failure with zero steps and no runner name; that is a runner/platform issue to resolve, not evidence of a code test failure.
 
@@ -123,7 +127,7 @@ Before enabling deployment, verify GitHub Actions can actually allocate hosted r
 - API, Console, Knowledge Worker and Chat Import Worker health checks must pass before the new SHA is recorded as the last successful deployment.
 - On failure, inspect logs and the backup. The script does not automatically restore database data.
 - Application image rollback is available with ./rollback-staging.sh (or pass an explicit SHA). It does not reverse Alembic migrations or restore database contents. Use it only when the previous application version is compatible with the current schema.
-- Never run docker compose down -v, docker system prune -a, or global volume/image cleanup on the Hong Kong staging host.
+- Never run docker compose down -v, docker system prune -a, or global volume/image cleanup on the JD Cloud staging host.
 
 ## Resource monitoring
 
