@@ -98,12 +98,16 @@ Variables:
 - STAGING_DEPLOY_PATH = /opt/supernova-staging.
 - STAGING_API_BASE_URL = https://api.wet001.com (change if another API domain is selected).
 
-Secrets:
+For the JD Cloud SSH connection, set the following five secrets on the `jd-staging` GitHub environment. The Hong Kong candidate workflows have separate deployment access.
+
 - STAGING_HOST = the JD Cloud staging host public IP.
 - STAGING_USER = supernova-deploy.
 - STAGING_SSH_PORT = SSH port (usually 22).
 - STAGING_SSH_PRIVATE_KEY = private half of the dedicated deployment key.
 - STAGING_SSH_KNOWN_HOSTS = trusted host-key line(s) for the target SSH server, obtained via an already authenticated server console; for port 22 use IP followed by the contents of /etc/ssh/ssh_host_ed25519_key.pub (key type and public key only).
+
+The image publisher reads the repository secrets below.
+
 - DOCKERHUB_USERNAME = macbook201808.
 - DOCKERHUB_TOKEN = Docker Hub publishing token.
 

@@ -240,6 +240,7 @@ jobs:
 
   staging-deploy:
     name: Transfer and deploy staging images
+    environment: jd-staging
     needs: staging-images
     # A previous host may still be configured while the new release is being staged.
     if: vars.STAGING_API_BASE_URL == needs.staging-images.outputs.api_origin
