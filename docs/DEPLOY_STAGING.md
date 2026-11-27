@@ -1,11 +1,11 @@
-# SuperNova staging deployment on JD Cloud
+# SuperNova staging deployment on Alibaba Cloud
 
 This is a temporary, low-concurrency staging deployment. It is isolated from the existing Docker projects and must not stop or modify Activation Manager, Website Watch, EmbedEaseAI, OpenClaw or other sites.
 
 ## Target topology
 
-- Host: the original JD Cloud staging host.
-- Existing host Nginx (Baota) remains the only public HTTP/HTTPS entry point.
+- Host: the Alibaba Cloud instance selected for SuperNova.
+- Keep the existing host reverse proxy as the public HTTP/HTTPS entry point. Where Baota manages Nginx, use the two site configurations below.
 - Console: 127.0.0.1:18083, served by a small Nginx container.
 - API: 127.0.0.1:18082.
 - PostgreSQL/pgvector and Redis are private to the Compose network.
@@ -16,18 +16,22 @@ The core Compose memory limits total about 976 MiB, plus the separately managed 
 
 ## Domains (confirmed)
 
-- Console: bot.wet001.com
-- API: api.wet001.com
+- Console: bot.siyubot.com
+- API: api.siyubot.com
 
-Verify the A records for these two names point to the JD Cloud staging host. Check any AAAA or CNAME records for the same names before cutover.
+Verify the A records for these two names point to the Alibaba Cloud staging host. Check any AAAA or CNAME records for the same names before cutover.
 
 In Baota:
-1. Use the bot.wet001.com site with a valid HTTPS certificate and proxy / to http://127.0.0.1:18083.
-2. Use the api.wet001.com site with a valid HTTPS certificate and proxy / to http://127.0.0.1:18082.
+1. Use the bot.siyubot.com site with a valid HTTPS certificate and proxy / to http://127.0.0.1:18083.
+2. Use the api.siyubot.com site with a valid HTTPS certificate and proxy / to http://127.0.0.1:18082.
 3. For the API site, set client_max_body_size 45m and proxy read/send timeouts to at least 300 seconds.
 4. Preserve all existing vhost files. Do not replace the global Nginx configuration.
 
-The staging Console image uses the API origin checked into its Dockerfile. Set the GitHub repository variable `STAGING_API_BASE_URL` to the same origin, `https://api.wet001.com`, to enable SSH deployment. A mismatched origin skips SSH and the verified SHA-tagged images remain available for deployment from the destination console. Set `SUPERNOVA_CORS_ORIGINS` in the destination .env to include `https://bot.wet001.com`. Verify the public API readiness response, a CORS preflight from the Console origin and the API origin in the deployed Console bundle.
+The staging Console image uses the API origin checked into its Dockerfile. Set the GitHub repository variable `STAGING_API_BASE_URL` to the same origin, `https://api.siyubot.com`, to enable SSH deployment. A mismatched origin skips SSH and the verified SHA-tagged images remain available for deployment from the destination console. Set `SUPERNOVA_CORS_ORIGINS` in the destination .env to include `https://bot.siyubot.com`. Verify the public API readiness response, a CORS preflight from the Console origin and the API origin in the deployed Console bundle.
+
+## Migrating the existing installation
+
+Use the selected JD Cloud installation as the data source. Take the final database and application-bucket backups together during the cutover. Transfer them directly to the authenticated Alibaba Cloud instance. Restore into separate destination storage, retain the original JWT and encryption keys, and set the destination storage credentials and Console origin. Compare the accounts, API key records, personas and stored document contents before directing clients to the new API.
 
 ## Object storage preparation
 
@@ -40,7 +44,7 @@ Keep root credentials under /opt/supernova-storage with mode 600. The applicatio
 
 Create a dedicated deploy account. Docker-group membership is effectively root-equivalent; protect its SSH key accordingly.
 
-As root on the JD Cloud staging host:
+As root on the Alibaba Cloud staging host:
 
 ~~~bash
 useradd --create-home --shell /bin/bash supernova-deploy 2>/dev/null || true
@@ -51,7 +55,7 @@ install -d -o supernova-deploy -g supernova-deploy -m 700 /home/supernova-deploy
 
 Add the public half of a dedicated Ed25519 deployment key to:
  /home/supernova-deploy/.ssh/authorized_keys
-and set owner supernova-deploy:supernova-deploy, mode 600. The private key goes only into the GitHub Actions secret STAGING_SSH_PRIVATE_KEY.
+and set owner supernova-deploy:supernova-deploy, mode 600. The private key goes only into the GitHub Actions secret ALIYUN_STAGING_SSH_PRIVATE_KEY.
 
 The deployment account must be able to run Docker commands and write to /opt/supernova-staging.
 
@@ -96,15 +100,15 @@ Repository: Settings -> Secrets and variables -> Actions.
 Variables:
 - STAGING_DEPLOY_ENABLED = true (set this only after one-time server setup and GitHub Actions runner checks).
 - STAGING_DEPLOY_PATH = /opt/supernova-staging.
-- STAGING_API_BASE_URL = https://api.wet001.com (change if another API domain is selected).
+- STAGING_API_BASE_URL = https://api.siyubot.com (change if another API domain is selected).
 
-For the JD Cloud SSH connection, set the following five secrets on the `jd-staging` GitHub environment. The Hong Kong candidate workflows have separate deployment access.
+For the Alibaba Cloud SSH connection, set the following five secrets on the `aliyun-staging` GitHub environment. The Hong Kong candidate workflows have separate deployment access.
 
-- STAGING_HOST = the JD Cloud staging host public IP.
-- STAGING_USER = supernova-deploy.
-- STAGING_SSH_PORT = SSH port (usually 22).
-- STAGING_SSH_PRIVATE_KEY = private half of the dedicated deployment key.
-- STAGING_SSH_KNOWN_HOSTS = trusted host-key line(s) for the target SSH server, obtained via an already authenticated server console; for port 22 use IP followed by the contents of /etc/ssh/ssh_host_ed25519_key.pub (key type and public key only).
+- ALIYUN_STAGING_HOST = the Alibaba Cloud staging host public IP.
+- ALIYUN_STAGING_USER = supernova-deploy.
+- ALIYUN_STAGING_SSH_PORT = SSH port (usually 22).
+- ALIYUN_STAGING_SSH_PRIVATE_KEY = private half of the dedicated deployment key.
+- ALIYUN_STAGING_SSH_KNOWN_HOSTS = trusted host-key line(s) for the target SSH server, obtained via an already authenticated server console; for port 22 use IP followed by the contents of /etc/ssh/ssh_host_ed25519_key.pub (key type and public key only).
 
 The image publisher reads the repository secrets below.
 
@@ -127,7 +131,7 @@ Before enabling deployment, verify GitHub Actions can actually allocate hosted r
 - API, Console, Knowledge Worker and Chat Import Worker health checks must pass before the new SHA is recorded as the last successful deployment.
 - On failure, inspect logs and the backup. The script does not automatically restore database data.
 - Application image rollback is available with ./rollback-staging.sh (or pass an explicit SHA). It does not reverse Alembic migrations or restore database contents. Use it only when the previous application version is compatible with the current schema.
-- Never run docker compose down -v, docker system prune -a, or global volume/image cleanup on the JD Cloud staging host.
+- Never run docker compose down -v, docker system prune -a, or global volume/image cleanup on the Alibaba Cloud staging host.
 
 ## Resource monitoring
 
