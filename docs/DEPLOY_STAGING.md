@@ -27,7 +27,7 @@ In Baota:
 3. For the API site, set client_max_body_size 45m and proxy read/send timeouts to at least 300 seconds.
 4. Preserve all existing vhost files. Do not replace the global Nginx configuration.
 
-Set the GitHub repository variable `STAGING_API_BASE_URL` to `https://api.wet001.com` before building the Console. Set `SUPERNOVA_CORS_ORIGINS` in the destination .env to include `https://bot.wet001.com`. Verify the public API readiness response, a CORS preflight from the Console origin and the API origin in the deployed Console bundle.
+The staging Console image uses the API origin checked into its Dockerfile. Set the GitHub repository variable `STAGING_API_BASE_URL` to the same origin, `https://api.wet001.com`, to enable SSH deployment. A mismatched origin skips SSH and the verified SHA-tagged images remain available for deployment from the destination console. Set `SUPERNOVA_CORS_ORIGINS` in the destination .env to include `https://bot.wet001.com`. Verify the public API readiness response, a CORS preflight from the Console origin and the API origin in the deployed Console bundle.
 
 ## Object storage preparation
 
@@ -111,7 +111,7 @@ The workflow publishes SHA-tagged images with the existing Docker Hub credential
 
 ## CI and automatic deployment
 
-The staging deployment job depends on all three existing CI jobs (Console build, API lint/tests/migrations, Compose smoke test). It runs only on feat/phase-6-knowledge-base-rag and only when STAGING_DEPLOY_ENABLED=true.
+On feat/phase-6-knowledge-base-rag with STAGING_DEPLOY_ENABLED=true, image publication follows the Console build, API tests and Compose smoke checks. The SSH job then checks the configured origin and confirms that the SSH address belongs to the API domain before connecting with the pinned SSH host key.
 
 Before enabling deployment, verify GitHub Actions can actually allocate hosted runners and execute steps. A recent run for commit f67759b4eff273d891ef4f8487638c4d6a90f1b2 ended in failure with zero steps and no runner name; that is a runner/platform issue to resolve, not evidence of a code test failure.
 
