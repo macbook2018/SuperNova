@@ -15,6 +15,7 @@ from app.models.knowledge import (
     KnowledgeDocument,
     KnowledgeDocumentIndexRevision,
     KnowledgeIndexBuildJob,
+    KnowledgeIndexChunk,
     KnowledgeIndexMember,
     KnowledgeIndexObservation,
     KnowledgeIndexRelease,
@@ -425,3 +426,94 @@ def test_legacy_rebuild_recovers_high_water_from_retained_history(workspace, all
     assert result.status_code == 202, result.text
     with db_session() as db:
         assert db.get(KnowledgeDocument, doc_id).pending_index_version == 8
+
+
+def test_chunk_preview_pages_only_the_active_document_and_binds_version(workspace):
+    client, auth, base, db_session = workspace
+    doc_id = _ready_document(client, auth, base, db_session)
+    url = f"{base}/documents/{doc_id}/chunks"
+    with db_session() as db:
+        doc = db.get(KnowledgeDocument, doc_id)
+        for version, index, text in ((1, 1, "Second page"), (2, 0, "Rebuilt document")):
+            db.add(KnowledgeChunk(
+                tenant_id=doc.tenant_id, knowledge_base_id=doc.knowledge_base_id,
+                document_id=doc_id, index_version=version, chunk_index=index,
+                content=text, content_hash=doc.sha256, embedding=[0.1] * 1536,
+                metadata_json={"page_number": 4, "internal_key": "never-in-response"},
+            ))
+        db.commit()
+    first = client.get(url, headers=auth, params={"limit": 1}).json()
+    assert first["has_more"] and first["release_revision"] is None
+    assert first["items"][0]["content"] == "The shipping policy"
+    assert first["items"][0]["locations"] == []
+    params = {"limit": 1, "offset": 1, "snapshot": first["snapshot"]}
+    second = client.get(url, headers=auth, params=params).json()
+    assert not second["has_more"]
+    item = second["items"][0]
+    assert item["locations"] == [{"page_number": 4}] and item["content"] == "Second page"
+    assert set(item) == {"id", "content", "chunk_index", "heading_path", "locations"}
+    assert client.get(url, headers=auth, params={**params, "offset": 2}).json()["items"] == []
+    assert client.get(url, headers=auth, params={"offset": 1}).status_code == 422
+    assert client.get(url, headers=auth, params={"limit": 51}).status_code == 422
+    with db_session() as db:
+        db.get(KnowledgeDocument, doc_id).active_index_version = 2
+        db.commit()
+    change = client.get(url, headers=auth, params=params)
+    assert change.status_code == 409
+    assert change.json()["detail"]["code"] == "preview_version_changed"
+    assert client.get(url, headers=auth).json()["items"][0]["content"] == "Rebuilt document"
+
+
+def test_chunk_preview_honours_scope_lifecycle_and_published_manifest(workspace, monkeypatch):
+    client, auth, base, db_session = workspace
+    doc_id = _ready_document(client, auth, base, db_session)
+    url = f"{base}/documents/{doc_id}/chunks"
+    other = register(client, "outsider-preview@example.com")
+    other_base = create_kb(client, other)["id"]
+    assert client.get(url).status_code == 401
+    assert client.get(url, headers=headers(other)).status_code == 404
+    assert client.get(
+        f"/knowledge-bases/{other_base}/documents/{doc_id}/chunks", headers=headers(other)
+    ).status_code == 404
+    sibling = client.post("/knowledge-bases", headers=auth, json={"name": "Sibling KB"})
+    assert sibling.status_code == 201
+    wrong_kb = f"/knowledge-bases/{sibling.json()['id']}/documents/{doc_id}/chunks"
+    assert client.get(wrong_kb, headers=auth).status_code == 404
+    versions = base + "/index-versions"
+    release_id = UUID(client.post(versions, headers=auth, json={
+        "request_key": "preview", "expected_generation": 0,
+    }).json()["id"])
+    with db_session() as db:
+        release = db.get(KnowledgeIndexRelease, release_id)
+        release.status = "ready"
+        member_key = (release.tenant_id, release.knowledge_base_id, release_id, doc_id)
+        member = db.get(KnowledgeIndexMember, member_key)
+        member.status, member.chunk_count = "ready", 1
+        db.add(KnowledgeIndexChunk(
+            tenant_id=release.tenant_id, knowledge_base_id=release.knowledge_base_id,
+            release_id=release_id, document_id=doc_id, chunk_index=0, content="原文",
+            content_hash="a" * 64, embedding=[0.1] * 1536, metadata_json={
+                "heading_path": ["政策"], "source_spans": [{"line_start": 4, "line_end": 5}],
+                "index_prefix": "仅供检索",
+            },
+        ))
+        db.commit()
+    legacy = client.get(url, headers=auth).json()
+    assert legacy["items"][0]["content"] == "The shipping policy"
+    monkeypatch.setattr("app.knowledge.indexing.resolve_snapshot_embedding_config", lambda *_: None)
+    assert client.post(f"{versions}/{release_id}/publish", headers=auth,
+                       json={"expected_generation": 0}).status_code == 200
+    assert client.get(url, headers=auth, params={"snapshot": legacy["snapshot"]}).status_code == 409
+    page = client.get(url, headers=auth).json()
+    assert page["active_release_id"] == str(release_id) and page["release_revision"] == 1
+    assert page["items"][0]["content"] == "原文"
+    assert page["items"][0]["heading_path"] == ["政策"]
+    assert page["items"][0]["locations"] == [{"line_start": 4, "line_end": 5}]
+    with db_session() as db:
+        db.get(KnowledgeIndexMember, member_key).source_sha256 = "0" * 64
+        db.commit()
+    assert client.get(url, headers=auth).status_code == 409
+    with db_session() as db:
+        db.get(KnowledgeDocument, doc_id).status = "deleting"
+        db.commit()
+    assert client.get(url, headers=auth).status_code == 404
