@@ -46,8 +46,10 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
         path=request.url.path,
         request_id=request_id,
     )
+    headers = {"X-Request-ID": request_id} if request_id else None
     return JSONResponse(
         status_code=500,
+        headers=headers,
         content={
             "error": {
                 "code": "internal_error",
