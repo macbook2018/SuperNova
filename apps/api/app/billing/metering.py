@@ -60,14 +60,14 @@ def fingerprint_gateway_request(
     upstream_payload: dict,
     *,
     api_key_id: UUID,
-    persona_id: UUID,
+    persona_id: UUID | None,
     model_source: str,
     price_version_id: UUID | None,
 ) -> str:
     canonical = {
         "payload": upstream_payload,
         "api_key_id": str(api_key_id),
-        "persona_id": str(persona_id),
+        "persona_id": str(persona_id) if persona_id is not None else None,
         "model_source": model_source,
         "price_version_id": str(price_version_id) if price_version_id else None,
     }
@@ -185,6 +185,24 @@ def _existing_decision(
     raise HTTPException(status_code=409, detail={"code": code, "message": message})
 
 
+def find_existing_gateway_request(
+    db: Session,
+    *,
+    tenant_id: UUID,
+    idempotency_key: str,
+    request_hash: str,
+) -> ReservationDecision | None:
+    reservation = db.scalar(
+        select(BillingReservation).where(
+            BillingReservation.tenant_id == tenant_id,
+            BillingReservation.event_key == idempotency_key,
+        )
+    )
+    if reservation is None:
+        return None
+    return _existing_decision(reservation, request_hash)
+
+
 def reserve_gateway_request(
     db: Session,
     *,
@@ -195,6 +213,8 @@ def reserve_gateway_request(
     input_token_reservation: int,
     output_token_reservation: int,
     price_version_id: UUID | None,
+    reserve_platform_tokens: bool = True,
+    require_active_subscription: bool = True,
 ) -> ReservationDecision:
     """Atomically reserve request/token quotas and claim an idempotency key.
 
@@ -227,7 +247,7 @@ def reserve_gateway_request(
     )
     current = _current_subscription_for_update(db, tenant_id, now)
     legacy_byok = policy is None and model_source == "byok"
-    if current is None and not legacy_byok:
+    if current is None and require_active_subscription and not legacy_byok:
         raise HTTPException(
             status_code=403,
             detail={
@@ -253,13 +273,14 @@ def reserve_gateway_request(
 
     requested: dict[str, int] = {"api_requests": 1}
     if model_source == "platform":
-        requested.update(
-            {
-                "platform_model_requests": 1,
-                "platform_input_tokens": max(1, input_token_reservation),
-                "platform_output_tokens": max(1, output_token_reservation),
-            }
-        )
+        requested["platform_model_requests"] = 1
+        if reserve_platform_tokens:
+            requested.update(
+                {
+                    "platform_input_tokens": max(1, input_token_reservation),
+                    "platform_output_tokens": max(1, output_token_reservation),
+                }
+            )
 
     if subscription is not None and plan is not None:
         for resource_code, units in requested.items():
@@ -621,8 +642,8 @@ def finalize_gateway_request(
             quantity=1,
             currency=currency,
             plan_id=plan_id,
-            state="included",
-            included_units=1,
+            state="included" if plan_id else "unmetered",
+            included_units=1 if plan_id else 0,
         )
 
     item_by_code = {

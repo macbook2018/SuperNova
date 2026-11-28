@@ -1,14 +1,25 @@
 from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from uuid import UUID, uuid4
 
 import pytest
-from app.api import platform_admin
 from app.billing import credentials
 from app.billing.money import currency_minor_unit_exponent
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
+from app.models.billing import (
+    BillingLedgerAccount,
+    BillingLedgerPosting,
+    BillingLedgerTransaction,
+)
+from app.models.platform_rbac import (
+    PlatformPermission,
+    PlatformRole,
+    PlatformRolePermission,
+    PlatformUserRole,
+)
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
@@ -42,13 +53,40 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient, None, None]
             yield session
 
     app.dependency_overrides[get_db] = override_get_db
-    monkeypatch.setattr(
-        platform_admin,
-        "get_settings",
-        lambda: SimpleNamespace(
-            platform_admin_email_set=frozenset({"admin@example.com"})
-        ),
-    )
+    with testing_session() as session:
+        admin_role = PlatformRole(
+            id=uuid4(), code="super_admin", name="超级管理员",
+            description="测试平台超级管理员", is_system=True,
+        )
+        finance_role = PlatformRole(
+            id=uuid4(), code="finance", name="财务管理员",
+            description="测试财务管理员", is_system=True,
+        )
+        admin_permissions = [
+            PlatformPermission(id=uuid4(), code=code, description=code)
+            for code in (
+                "platform.admin",
+                "platform.rbac.manage",
+                "platform.models.read",
+                "platform.models.manage",
+                "platform.billing.read",
+                "platform.billing.manage",
+                "platform.audit.read",
+            )
+        ]
+        session.add_all([admin_role, finance_role, *admin_permissions])
+        session.flush()
+        session.add_all([
+            PlatformRolePermission(role_id=admin_role.id, permission_id=item.id)
+            for item in admin_permissions
+        ])
+        finance_permission = next(
+            item for item in admin_permissions if item.code == "platform.billing.read"
+        )
+        session.add(
+            PlatformRolePermission(role_id=finance_role.id, permission_id=finance_permission.id)
+        )
+        session.commit()
     monkeypatch.setattr(
         credentials,
         "get_settings",
@@ -73,7 +111,26 @@ def register(client: TestClient, email: str = "admin@example.com") -> dict:
         },
     )
     assert response.status_code == 201, response.text
-    return response.json()
+    tokens = response.json()
+    if email == "admin@example.com":
+        generator = app.dependency_overrides[get_db]()
+        session = next(generator)
+        try:
+            role = session.query(PlatformRole).filter_by(code="super_admin").one()
+            session.add(
+                PlatformUserRole(
+                    id=uuid4(),
+                    user_id=UUID(tokens["user"]["id"]),
+                    role_id=role.id,
+                )
+            )
+            session.commit()
+        finally:
+            try:
+                next(generator)
+            except StopIteration:
+                pass
+    return tokens
 
 
 def headers(tokens: dict) -> dict[str, str]:
@@ -188,7 +245,7 @@ def test_non_admin_cannot_manage_plans_or_platform_models(client: TestClient) ->
         },
     )
     assert denied_plan.status_code == 403
-    assert denied_plan.json()["detail"]["code"] == "platform_admin_required"
+    assert denied_plan.json()["detail"]["code"] == "platform_permission_required"
 
     denied_model = client.get("/admin/platform/models", headers=headers(customer))
     assert denied_model.status_code == 403
@@ -342,7 +399,7 @@ def test_platform_admin_can_run_shadow_reconciliation_and_non_admin_is_denied(
         },
     )
     assert denied.status_code == 403
-    assert denied.json()["detail"]["code"] == "platform_admin_required"
+    assert denied.json()["detail"]["code"] == "platform_permission_required"
 
     response = client.post(
         "/admin/billing/reconciliation/run",
@@ -374,3 +431,167 @@ def test_currency_minor_unit_precision_matches_iso_currency_exponents() -> None:
     assert currency_minor_unit_exponent("KRW") == 0
     assert currency_minor_unit_exponent("KWD") == 3
     assert currency_minor_unit_exponent("CLF") == 4
+
+
+def test_platform_rbac_grant_revoke_and_audit(client: TestClient) -> None:
+    admin = register(client)
+    customer = register(client, "customer@example.com")
+
+    access = client.get("/admin/platform/access", headers=headers(admin))
+    assert access.status_code == 200
+    assert "super_admin" in access.json()["roles"]
+    assert "platform.rbac.manage" in access.json()["permissions"]
+
+    granted = client.post(
+        f"/admin/platform/users/{customer['user']['id']}/roles/finance",
+        headers=headers(admin),
+        json={"reason": "财务岗位职责需要"},
+    )
+    assert granted.status_code == 201, granted.text
+    assert granted.json()["role"] == "finance"
+
+    assigned_roles = client.get(
+        f"/admin/platform/users/{customer['user']['id']}/roles",
+        headers=headers(admin),
+    )
+    assert assigned_roles.status_code == 200
+    assert assigned_roles.json()[0]["role"] == "finance"
+    assert assigned_roles.json()[0]["active"] is True
+
+    customer_access = client.get(
+        "/admin/platform/access", headers=headers(customer)
+    )
+    assert customer_access.status_code == 200
+    assert "finance" in customer_access.json()["roles"]
+    assert "platform.billing.read" in customer_access.json()["permissions"]
+
+    denied_model_admin = client.get(
+        "/admin/platform/models", headers=headers(customer)
+    )
+    assert denied_model_admin.status_code == 403
+    denied_billing_write = client.post(
+        "/admin/billing/plans",
+        headers=headers(customer),
+        json={
+            "code": "finance-forbidden",
+            "revision": 1,
+            "name": "无权创建",
+            "billing_interval": "month",
+            "currency": "CNY",
+            "subscription_price_minor": 100,
+            "status": "active",
+            "entitlements": [{
+                "resource_code": "api_requests",
+                "unit": "requests",
+                "included_units": 10,
+                "overage_rate_minor_per_unit": "0",
+            }],
+        },
+    )
+    assert denied_billing_write.status_code == 403
+
+    revoked = client.request(
+        "DELETE",
+        f"/admin/platform/users/{customer['user']['id']}/roles/finance",
+        headers=headers(admin),
+        json={"reason": "岗位调整"},
+    )
+    assert revoked.status_code == 200, revoked.text
+
+    audit_response = client.get("/admin/platform/audit-logs", headers=headers(admin))
+    assert audit_response.status_code == 200
+    assert {item["action"] for item in audit_response.json()} >= {
+        "platform.role.grant",
+        "platform.role.revoke",
+    }
+
+    after_revoke = client.get("/admin/platform/access", headers=headers(customer))
+    assert after_revoke.json()["roles"] == []
+    assert after_revoke.json()["permissions"] == []
+
+    generator = app.dependency_overrides[get_db]()
+    session = next(generator)
+    try:
+        from app.models.platform_rbac import PlatformAdminAuditLog
+
+        events = session.query(PlatformAdminAuditLog).all()
+        assert {event.action for event in events} >= {
+            "platform.role.grant",
+            "platform.role.revoke",
+        }
+    finally:
+        try:
+            next(generator)
+        except StopIteration:
+            pass
+
+
+def test_last_super_admin_cannot_revoke_own_role(client: TestClient) -> None:
+    admin = register(client)
+    response = client.request(
+        "DELETE",
+        f"/admin/platform/users/{admin['user']['id']}/roles/super_admin",
+        headers=headers(admin),
+        json={"reason": "测试最后管理员保护"},
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "last_super_admin"
+
+
+def test_non_admin_cannot_grant_platform_roles(client: TestClient) -> None:
+    customer = register(client, "customer@example.com")
+    other = register(client, "other@example.com")
+    denied = client.post(
+        f"/admin/platform/users/{other['user']['id']}/roles/finance",
+        headers=headers(customer),
+        json={"reason": "不应获得权限"},
+    )
+    assert denied.status_code == 403
+    assert denied.json()["detail"]["code"] == "platform_permission_required"
+
+
+def test_billing_ledger_query_does_not_apply_distinct_to_json_metadata(
+    client: TestClient,
+) -> None:
+    customer = register(client, "ledger-customer@example.com")
+    tenant_id = UUID(customer["tenant"]["id"])
+    generator = app.dependency_overrides[get_db]()
+    session = next(generator)
+    try:
+        transaction = BillingLedgerTransaction(
+            id=uuid4(),
+            idempotency_key="ledger-json-regression",
+            kind="usage",
+            mode="shadow",
+            currency="CNY",
+            reference_id="regression-test",
+            metadata_json={"source": "postgres-json"},
+        )
+        account = BillingLedgerAccount(
+            id=uuid4(),
+            account_key=f"tenant:{tenant_id}:usage",
+            tenant_id=tenant_id,
+            currency="CNY",
+            kind="usage",
+        )
+        session.add_all([transaction, account])
+        session.flush()
+        session.add(
+            BillingLedgerPosting(
+                id=uuid4(),
+                transaction_id=transaction.id,
+                account_id=account.id,
+                amount_minor=-100,
+            )
+        )
+        session.commit()
+    finally:
+        try:
+            next(generator)
+        except StopIteration:
+            pass
+
+    response = client.get("/billing/ledger", headers=headers(customer))
+    assert response.status_code == 200, response.text
+    assert len(response.json()) == 1
+    assert response.json()[0]["reference_id"] == "regression-test"

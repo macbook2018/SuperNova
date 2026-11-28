@@ -37,12 +37,13 @@ def postgres_session_factory():
 
     engine = create_engine(
         database_url,
-        connect_args={"options": f"-c search_path={schema}"},
+        connect_args={"options": f"-c search_path={schema},public"},
         pool_size=8,
         max_overflow=0,
         pool_pre_ping=True,
     )
-    Base.metadata.create_all(engine)
+    # This schema is fresh. A same-named table in public must not satisfy the check.
+    Base.metadata.create_all(engine, checkfirst=False)
     factory = sessionmaker(
         bind=engine,
         autoflush=False,

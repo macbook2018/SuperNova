@@ -29,6 +29,7 @@ class UsageRecordRead(BaseModel):
     provider_type: str
     model_name: str
     model_source: str = "byok"
+    request_type: str = "chat"
     platform_model_id: UUID | None = None
     status: str
     prompt_tokens: int | None

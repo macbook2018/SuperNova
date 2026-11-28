@@ -1,12 +1,12 @@
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Header, HTTPException, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import CurrentPrincipal, DatabaseSession
-from app.api.platform_admin import require_platform_admin
+from app.api.platform_admin import record_platform_audit, require_platform_permission
 from app.billing.credentials import resolve_platform_api_key
 from app.models.billing import PlatformModel, PlatformModelPrice, TenantBillingPolicy
 from app.schemas.platform_models import (
@@ -96,7 +96,7 @@ def list_admin_platform_models(
     principal: CurrentPrincipal,
     db: DatabaseSession,
 ) -> list[PlatformModelAdminRead]:
-    require_platform_admin(principal)
+    require_platform_permission(principal, "platform.models.read")
     models = db.scalars(
         select(PlatformModel).order_by(PlatformModel.created_at.desc())
     ).all()
@@ -112,8 +112,9 @@ def create_platform_model(
     payload: PlatformModelCreate,
     principal: CurrentPrincipal,
     db: DatabaseSession,
+    request_id: str | None = Header(default=None, alias="X-Request-ID"),
 ) -> PlatformModelAdminRead:
-    require_platform_admin(principal)
+    require_platform_permission(principal, "platform.models.manage")
     model = PlatformModel(
         id=uuid4(),
         code=payload.code,
@@ -125,6 +126,12 @@ def create_platform_model(
         enabled=payload.enabled,
     )
     db.add(model)
+    record_platform_audit(
+        db, actor_user_id=principal.user.id, target_user_id=None,
+        action="platform.model.create", resource_type="platform_model",
+        resource_id=model.code, reason="创建平台模型", request_id=request_id,
+        details={"provider_type": model.provider_type, "enabled": model.enabled},
+    )
     try:
         db.commit()
     except IntegrityError:
@@ -146,8 +153,9 @@ def update_platform_model(
     payload: PlatformModelUpdate,
     principal: CurrentPrincipal,
     db: DatabaseSession,
+    request_id: str | None = Header(default=None, alias="X-Request-ID"),
 ) -> PlatformModelAdminRead:
-    require_platform_admin(principal)
+    require_platform_permission(principal, "platform.models.manage")
     model = db.get(PlatformModel, model_id)
     if model is None:
         raise _not_found()
@@ -159,6 +167,12 @@ def update_platform_model(
         )
     for field, value in updates.items():
         setattr(model, field, value)
+    record_platform_audit(
+        db, actor_user_id=principal.user.id, target_user_id=None,
+        action="platform.model.update", resource_type="platform_model",
+        resource_id=str(model.id), reason="修改平台模型", request_id=request_id,
+        details={"changed_fields": sorted(updates)},
+    )
     db.commit()
     db.refresh(model)
     return _admin_read(model)
@@ -173,7 +187,7 @@ def list_platform_model_prices(
     principal: CurrentPrincipal,
     db: DatabaseSession,
 ) -> list[PlatformModelPriceRead]:
-    require_platform_admin(principal)
+    require_platform_permission(principal, "platform.models.read")
     if db.get(PlatformModel, model_id) is None:
         raise _not_found()
     prices = db.scalars(
@@ -194,8 +208,9 @@ def create_platform_model_price(
     payload: PlatformModelPriceCreate,
     principal: CurrentPrincipal,
     db: DatabaseSession,
+    request_id: str | None = Header(default=None, alias="X-Request-ID"),
 ) -> PlatformModelPriceRead:
-    require_platform_admin(principal)
+    require_platform_permission(principal, "platform.models.manage")
     if db.get(PlatformModel, model_id) is None:
         raise _not_found()
 
@@ -257,6 +272,17 @@ def create_platform_model_price(
         effective_until=payload.effective_until,
     )
     db.add(price)
+    record_platform_audit(
+        db, actor_user_id=principal.user.id, target_user_id=None,
+        action="platform.model.price.create", resource_type="platform_model_price",
+        resource_id=str(price.id), reason="创建模型价格版本", request_id=request_id,
+        details={
+            "platform_model_id": str(model_id), "revision": revision,
+            "currency": price.currency,
+            "input_per_million_minor": str(price.input_per_million_minor),
+            "output_per_million_minor": str(price.output_per_million_minor),
+        },
+    )
     db.commit()
     db.refresh(price)
     return PlatformModelPriceRead.model_validate(price)

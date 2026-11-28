@@ -14,7 +14,7 @@ def resolve_platform_api_key(credential_ref: str | None) -> str:
                 "message": "平台模型凭据未配置，请联系平台管理员",
             },
         )
-    raw = get_settings().platform_credentials_json
+    raw = get_settings().platform_credentials_json or "{}"
     try:
         credentials = json.loads(raw)
     except (TypeError, ValueError):

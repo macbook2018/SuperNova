@@ -12,9 +12,16 @@ from app.api.api_keys import router as api_keys_router
 from app.api.auth import router as auth_router
 from app.api.billing import router as billing_router
 from app.api.catalog import router as catalog_router
+from app.api.chat_analysis import router as chat_analysis_router
+from app.api.chat_import import router as chat_import_router
+from app.api.embedding_models import router as embedding_models_router
 from app.api.gateway import router as gateway_router
 from app.api.health import router as health_router
+from app.api.knowledge import router as knowledge_router
+from app.api.platform_admin import router as platform_admin_router
+from app.api.platform_analytics import router as platform_analytics_router
 from app.api.platform_models import router as platform_models_router
+from app.api.platform_operations import router as platform_operations_router
 from app.api.usage import router as usage_router
 from app.core.config import get_settings
 from app.core.logging import configure_logging
@@ -30,11 +37,18 @@ app = FastAPI(
 )
 app.state.settings = settings
 app.include_router(health_router)
+app.include_router(knowledge_router)
+app.include_router(chat_import_router)
+app.include_router(chat_analysis_router)
 app.include_router(auth_router)
 app.include_router(api_keys_router)
 app.include_router(catalog_router)
+app.include_router(platform_admin_router)
+app.include_router(platform_analytics_router)
 app.include_router(platform_models_router)
+app.include_router(platform_operations_router)
 app.include_router(billing_router)
+app.include_router(embedding_models_router)
 app.include_router(gateway_router)
 app.include_router(usage_router)
 

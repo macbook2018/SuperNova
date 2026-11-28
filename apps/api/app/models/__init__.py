@@ -16,7 +16,40 @@ from app.models.billing import (
     TenantSubscription,
 )
 from app.models.catalog import KnowledgeBase, ModelProvider, Persona, PersonaKnowledgeBase
+from app.models.chat_analysis import (
+    ChatAnalysisJob,
+    ChatAnalysisReviewEvent,
+    FaqCandidate,
+    PersonaDraft,
+)
+from app.models.chat_import import (
+    ChatImportFile,
+    ChatImportJob,
+    ChatImportSenderSummary,
+    ChatSource,
+)
 from app.models.identity import ApiKey, RefreshSession, Tenant, TenantMembership, User
+from app.models.knowledge import (
+    KnowledgeChunk,
+    KnowledgeDocument,
+    KnowledgeDocumentIndexRevision,
+    KnowledgeIndexBuildJob,
+    KnowledgeIndexChunk,
+    KnowledgeIndexMember,
+    KnowledgeIndexObservation,
+    KnowledgeIndexRelease,
+    KnowledgeIndexState,
+    KnowledgeIngestionJob,
+    KnowledgeUsageRecord,
+    PlatformEmbeddingModel,
+)
+from app.models.platform_rbac import (
+    PlatformAdminAuditLog,
+    PlatformPermission,
+    PlatformRole,
+    PlatformRolePermission,
+    PlatformUserRole,
+)
 from app.models.usage import UsageRecord
 
 __all__ = [
@@ -32,7 +65,32 @@ __all__ = [
     "BillingReservation",
     "BillingReservationItem",
     "BillingUsageEvent",
+    "ChatAnalysisJob",
+    "ChatAnalysisReviewEvent",
+    "FaqCandidate",
+    "PersonaDraft",
+    "ChatImportFile",
+    "ChatImportJob",
+    "ChatImportSenderSummary",
+    "ChatSource",
     "KnowledgeBase",
+    "KnowledgeChunk",
+    "KnowledgeDocument",
+    "KnowledgeDocumentIndexRevision",
+    "KnowledgeIndexBuildJob",
+    "KnowledgeIndexChunk",
+    "KnowledgeIndexMember",
+    "KnowledgeIndexObservation",
+    "KnowledgeIndexRelease",
+    "KnowledgeIndexState",
+    "KnowledgeIngestionJob",
+    "KnowledgeUsageRecord",
+    "PlatformEmbeddingModel",
+    "PlatformAdminAuditLog",
+    "PlatformPermission",
+    "PlatformRole",
+    "PlatformRolePermission",
+    "PlatformUserRole",
     "ModelProvider",
     "Persona",
     "PersonaKnowledgeBase",

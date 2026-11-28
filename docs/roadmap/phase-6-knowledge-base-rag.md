@@ -1,0 +1,272 @@
+# Phase 6：完整知识库与 RAG 检索实施规格
+
+- 开发分支：`feat/phase-6-knowledge-base-rag`
+
+## 当前实现状态（2026-11-22）
+
+本路线文档同时作为实施规格和验收基准。当前代码已实现以下主链路：
+
+- Phase 6A：文档上传/URL 导入、持久化摄取任务、对象存储、解析切片、幂等和 Worker 租约/重试。
+- Phase 6B：平台/BYOK Embedding、pgvector 索引及索引版本管理。
+- Phase 6C：向量与词法混合检索、RRF、Persona 关联知识库检索、Chat Completions RAG 上下文及 citations。
+- Phase 6D：Console 知识库与文档管理、导入任务状态、检索调试和用量展示。
+- 聊天文本分析增量：Persona 学习、FAQ 提取、人工审核及 FAQ 发布到知识库已实现；详见 `docs/phase-6-chat-import-design.md`。
+
+当前收尾重点是端到端验收：聊天 ZIP 导入 → 明确确认本人 → Persona/FAQ 分析 → 人工审核 → FAQ 发布 → Knowledge Worker 索引完成 → 检索 API 与 Persona Chat Completions 返回真实引用。单元/集成测试中使用 Mock 的模型、Embedding 或检索组件必须明确标记，不能据此宣称真实上游模型或生产环境已经验收。
+
+Phase 6 尚未最终关闭。最终关闭条件为全量 CI、PostgreSQL/pgvector 集成、Console 构建、Docker Worker 冒烟及 Staging 用户流程验收均通过，并生成 `docs/phase-6-final-acceptance-report.md`。
+
+- 基线：Phase 5C（`feat/phase-5c-idempotent-metering-settlement`）
+- 状态：6A/6B/6C 基础代码已开始落地；最终状态以 CI 和端到端验收为准
+- 商业化边界：不接支付、不扣余额、不产生真实 Embedding 费用
+
+## 1. 产品目标
+
+将现有仅有“知识库名称/描述/Persona 关联”的空壳，升级为可投入 AI 客服和多租户 Agent 使用的完整知识库系统：
+
+1. 用户可以创建知识库，配置 Embedding 模型、切片和检索策略。
+2. 用户可以上传文件或导入公开网页 URL。
+3. 文件原件安全存入 S3 兼容对象存储，后台 Worker 异步解析、切片、向量化。
+4. 用户可查看文档状态、处理日志摘要、重试、重新索引和删除。
+5. 用户可直接检索并查看命中片段及其来源。
+6. Persona 关联知识库后，OpenAI 兼容 Chat Completions 自动执行 RAG。
+7. 回答可返回真实来源引用，非流式与 SSE 语义一致。
+8. 严格执行 tenant / knowledge_base / document 级隔离。
+
+## 2. 现有基础与缺口
+
+已存在：
+- `knowledge_bases`：租户级知识库基本信息。
+- `persona_knowledge_bases`：Persona 与知识库的多对多关系，数据库约束已限制同租户引用。
+- PostgreSQL 16 + pgvector 扩展已在初始迁移启用。
+- S3 兼容对象存储服务（开发 Compose 中为 Silo）。
+- 已有用户级 ModelProvider（加密 API Key）和平台模型凭据托管机制。
+- Persona 已可绑定多个知识库。
+
+尚缺：
+- 文档、文档版本、导入任务、切片和 Embedding 数据表。
+- S3 存储封装、上传与 URL 导入。
+- 可靠的异步 Worker 与任务重试/租约。
+- 文件解析器、chunker、embedding provider。
+- 向量/词法混合检索、RAG 网关注入和引用输出。
+- 知识库管理、文档状态、检索调试控制台。
+
+## 3. 目标架构
+
+```text
+Console / Client
+  ├─ Upload file / Import URL
+  ├─ Knowledge base settings
+  └─ Search playground
+       │
+       ▼
+FastAPI Control Plane
+  ├─ Tenant-scoped Knowledge API
+  ├─ Document API + private object download proxy
+  ├─ Search API
+  └─ OpenAI-compatible Gateway
+       │
+       ├──────── PostgreSQL + pgvector
+       │           ├─ knowledge_bases
+       │           ├─ knowledge_documents
+       │           ├─ knowledge_ingestion_jobs
+       │           ├─ knowledge_chunks
+       │           └─ knowledge_usage_records
+       │
+       ├──────── S3-compatible object storage
+       │           └─ original files / extracted artifacts
+       │
+       └──────── Worker service
+                   ├─ safe URL fetch
+                   ├─ parsers
+                   ├─ chunking
+                   ├─ embedding batches
+                   └─ retry / dead-letter handling
+
+Chat Completions
+  ├─ Resolve Persona and its authorized KBs
+  ├─ Retrieve (vector + lexical)
+  ├─ Reciprocal Rank Fusion
+  ├─ Build untrusted reference context
+  ├─ Call chat model
+  └─ Return citations in SuperNova response extension
+```
+
+## 4. Embedding 模型与凭据
+
+- Embedding 与 Chat 是不同模型能力，不能把 Chat 模型目录误当成 Embedding 模型目录。
+- 支持平台托管 Embedding 模型（credential_ref 由服务端解析）和 BYOK Embedding（复用当前租户加密保存的 ModelProvider）。
+- 知识库保存 embedding_source、模型引用、上游模型名、维度和模型配置版本。
+- 首个版本的 pgvector 列固定为 1536 维；平台与 BYOK Embedding 必须返回 1536 维。单个知识库的所有 chunks 必须使用同一模型配置和维度；切换模型时建立新索引版本，完成后原子切换，禁止混合不同向量空间。
+- Embedding 请求使用 OpenAI-compatible `POST /embeddings`；必须校验响应条数、向量长度、有限数值和 usage。
+- 不将密钥返回控制台、写入日志或写入文档元数据。
+- Embedding 用量先写独立的知识库用量记录，仅作运营与 shadow 统计。
+
+## 5. 文档生命周期与异步任务
+
+状态机：
+- document：queued → processing → ready / failed；删除时进入 deleting → deleted。
+- job：queued → running → succeeded / retry_wait / dead_letter / cancelled。
+- Worker 使用 PostgreSQL `FOR UPDATE SKIP LOCKED` 领取任务，写入 worker_id、lease_until、attempts 和 heartbeat。
+- 任务过期可重新领取；达到最大重试次数进入 dead_letter。
+- API 不依赖进程内 BackgroundTasks 保证任务持久性。
+- 每个文件以 SHA-256 幂等；重复文件不重复切片/向量化。
+- 重新索引采用 index_version；新版本成功后切换 active_index_version，失败不破坏当前可用索引。
+
+## 6. 支持的内容类型
+
+第一批：
+- PDF（保留页码）
+- DOCX（标题/段落/表格）
+- PPTX（幻灯片编号）
+- XLSX（工作表/单元格范围）
+- TXT、Markdown、CSV
+- HTML 和公开网页 URL
+
+明确限制：
+- 不执行宏、脚本或嵌入式可执行内容。
+- 不在 API 进程中同步解析大文件。
+- 文件扩展名与文件签名/文本编码校验；不信任客户端提供的 MIME。
+- 对上传字节、网页下载字节、页面数量、解析时间和 chunk 数设置上限。
+- 旧版二进制 DOC、加密 PDF、扫描件 OCR 作为后续可插拔能力；当前版本明确报不支持或需要 OCR，不静默生成空文档。
+
+## 7. 切片与元数据
+
+- 按结构优先切分：标题、段落、表格、页、幻灯片、工作表。
+- 可配置 chunk_size、chunk_overlap、separator 策略。
+- chunk metadata 至少包含 document_id、document_version、index_version、chunk_index、page、sheet、slide、heading_path、source_url。
+- 不同文档类型的来源字段可为空，但引用必须能定位原始文件和对应位置。
+- 生成稳定 chunk hash，重试与重复导入不产生重复活动索引。
+
+## 8. 检索与 RAG
+
+- 语义检索：pgvector cosine distance。
+- 词法检索：PostgreSQL trigram / 关键词检索，兼顾中文和英文。
+- 混合排序：Reciprocal Rank Fusion；保留 vector_rank、lexical_rank、final_score。
+- 参数：top_k、score_threshold、candidate_k、document_ids；元数据过滤留待扩展。
+- Reranker 为可插拔接口；初版可以关闭，不强制额外模型调用。
+- 检索只访问 Persona 显式关联且当前租户拥有的知识库。
+- RAG 上下文标注为不可信引用材料，并明确禁止遵从文档内的指令或提示词注入。
+- 返回 citations：document_id、document_name、page/sheet/slide、chunk_id、score、snippet、source_url。
+- 非流式响应返回 `supernova.citations`；SSE 在最终完成 chunk 返回相同扩展信息。
+- 无命中时 citations 为空；不得虚构来源。
+- 关联知识库存在文档但尚无 ready 索引时，默认 fail-closed 返回明确错误；空知识库不阻断聊天。不跨租户、不静默使用其他资料。
+
+## 9. 安全要求
+
+- 所有 document/chunk/job/search 查询都同时带 tenant_id 与 knowledge_base_id 过滤。
+- 复合外键确保 document、chunk、job 与 KB 属于同一租户。
+- URL 导入只允许 HTTP(S) 公网地址；阻止 loopback、私网、链路本地、保留地址和云元数据地址；禁止自动跟随重定向或逐跳重新校验。
+- 使用 `trust_env=False`，限制响应大小和超时。
+- S3 object key 使用服务端生成的随机标识，不直接使用用户文件名作为路径。
+- 删除文档时先使其不可检索，再异步删除对象与索引；保留审计事件，不记录正文。
+- 不把原始文档、完整 chunk、API Key、签名 URL写入普通日志。
+- 文档内容视为不可信输入，RAG prompt 明确隔离指令注入。
+
+## 10. 资源计量边界
+
+Phase 6 仅记录：
+- 原始文件 bytes、对象存储 bytes。
+- 成功/失败导入次数、解析耗时。
+- Embedding tokens、Embedding 请求次数。
+- 活动 chunks、检索次数、命中数。
+- RAG chat 请求数与引用数。
+
+这些数据不自动转化为应收款。支付、充值、余额扣减、超额结算留到 Phase 5D 最后实施。
+
+## 11. 分批交付与验收
+
+### Phase 6A — 数据层与可靠文档摄取
+- Alembic 新增文档、任务、chunk、usage、索引版本表。
+- S3 storage adapter 与配置。
+- 上传/URL 导入、文档列表/详情/删除/重试。
+- Worker 租约、重试、死信、健康检查。
+- 解析器、结构化 chunking、SHA-256 幂等。
+- 验收：文件上传/URL 导入可完整走到 ready；API/Worker 重启不丢任务；跨租户访问返回 404。
+
+### Phase 6B — Embedding 与索引
+- 平台/BYOK Embedding Provider resolver。
+- 批量 Embedding、维度/响应校验、模型版本快照。
+- pgvector 持久化、索引版本切换、删除与重建。
+- 验收：Embedding 失败可重试；不同模型维度不会混用；旧版本索引在新版本成功前持续可用。
+
+### Phase 6C — 混合检索与 RAG 网关
+- Search API、向量/词法检索、RRF、来源定位。
+- Chat Completions 自动检索并注入；非流式/SSE 引用一致。
+- 检索调试接口和 prompt-injection 防护。
+- 验收：中文/英文检索集 Recall@K、MRR、引用准确率和租户隔离测试通过。
+
+### Phase 6D — 控制台与生产验收
+- 知识库配置页、文件管理、任务状态、失败重试、检索调试。
+- 管理员用量、队列与失败任务监控。
+- 端到端测试、Docker Compose Worker 冒烟、迁移升级/回滚说明。
+- 验收：完整用户流程可在控制台完成；CI 测试、构建和迁移通过。
+
+## 12. 不在 Phase 6 的事项
+
+- 支付网关、充值、钱包、真实扣费、退款和发票。
+- AstrBot Worker 运行时及微信渠道自动化。
+- OCR、音视频转录、复杂表格 Agent、图像多模态索引（先留扩展点）。
+
+
+## 13. 部署与平台 Embedding 模型配置
+
+### 环境变量
+
+API 与 Worker 必须使用相同的对象存储和平台凭据配置：
+
+- `SUPERNOVA_S3_ENDPOINT_URL`
+- `SUPERNOVA_S3_ACCESS_KEY`
+- `SUPERNOVA_S3_SECRET_KEY`
+- `SUPERNOVA_S3_BUCKET`
+- `SUPERNOVA_PLATFORM_CREDENTIALS_JSON`
+- `SUPERNOVA_PLATFORM_ADMIN_EMAILS`
+- `SUPERNOVA_KNOWLEDGE_MAX_UPLOAD_BYTES`
+- `SUPERNOVA_KNOWLEDGE_MAX_URL_BYTES`
+
+平台 API Key 只通过 credential reference 映射到服务端环境变量，不提交到平台模型 API：
+
+```bash
+SUPERNOVA_PLATFORM_CREDENTIALS_JSON='{"openai-embedding-prod":"<server-side-api-key>"}'
+SUPERNOVA_PLATFORM_ADMIN_EMAILS='admin@example.com'
+```
+
+### 发布平台 Embedding 模型
+
+使用平台管理员账号调用 `POST /admin/platform/embedding-models`：
+
+```json
+{
+  "code": "platform-embedding-small",
+  "display_name": "平台 Embedding Small",
+  "provider_type": "openai_compatible",
+  "upstream_model_name": "text-embedding-3-small",
+  "base_url": "https://api.openai.com/v1",
+  "credential_ref": "openai-embedding-prod",
+  "dimensions": 1536,
+  "enabled": true
+}
+```
+
+普通租户通过 `GET /platform/embedding-models` 获取可选目录。响应不包含 credential_ref 或 API Key。
+
+BYOK 知识库复用当前租户的 ModelProvider 加密 Key；供应商必须支持 OpenAI-compatible Embeddings API，并返回 1536 维向量。
+
+### 数据库与 Worker
+
+```bash
+alembic -c apps/api/alembic.ini upgrade head
+docker compose -f deploy/docker/compose.yaml up -d --build api worker minio
+```
+
+Worker 使用 PostgreSQL 持久化任务、行锁、租约、重试和死信状态。不要通过 FastAPI 进程内 BackgroundTasks 替代 Worker。
+
+公网网页导入必须使用 HTTPS；Worker 禁止代理环境变量和 HTTP 重定向，并拒绝解析到非公网地址的目标。生产部署还应在网络层限制 Worker 的出站访问范围。
+
+### 当前实现边界
+
+- pgvector 首发固定 1536 维；有文档后不允许直接切换 Embedding 模型或切片参数，避免新旧向量空间混用。当前安全路径是新建知识库并重新导入资料；后续可增加双索引配置版本迁移。
+- URL 导入当前抓取单个页面，不做站点递归爬取。
+- 扫描件 OCR、旧版 DOC、音视频转录和图像多模态索引尚未实现。
+- 词法检索使用 pg_trgm；Reranker 和元数据过滤暂未开放。
+- 当前计量只写知识库用量记录，不执行钱包扣款、超额收费或支付。

@@ -1,0 +1,210 @@
+name: supernova-staging
+
+x-app-environment: &app-environment
+  SUPERNOVA_ENVIRONMENT: production
+  # Keep gateway access available until Phase 5D launches commercial subscriptions.
+  SUPERNOVA_BILLING_SUBSCRIPTION_ENFORCEMENT_ENABLED: ${SUPERNOVA_BILLING_SUBSCRIPTION_ENFORCEMENT_ENABLED:-false}
+  SUPERNOVA_LOG_LEVEL: ${SUPERNOVA_LOG_LEVEL:-INFO}
+  SUPERNOVA_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-supernova}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-supernova}
+  SUPERNOVA_REDIS_URL: redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}@redis:6379/0
+  SUPERNOVA_JWT_SECRET: ${SUPERNOVA_JWT_SECRET:?Set SUPERNOVA_JWT_SECRET in .env}
+  SUPERNOVA_ENCRYPTION_KEY: ${SUPERNOVA_ENCRYPTION_KEY:?Set SUPERNOVA_ENCRYPTION_KEY in .env}
+  SUPERNOVA_ACCESS_TOKEN_TTL_MINUTES: ${SUPERNOVA_ACCESS_TOKEN_TTL_MINUTES:-15}
+  SUPERNOVA_REFRESH_TOKEN_TTL_DAYS: ${SUPERNOVA_REFRESH_TOKEN_TTL_DAYS:-30}
+  SUPERNOVA_PLATFORM_ADMIN_EMAILS: ${SUPERNOVA_PLATFORM_ADMIN_EMAILS:?Set SUPERNOVA_PLATFORM_ADMIN_EMAILS in .env}
+  SUPERNOVA_PLATFORM_CREDENTIALS_JSON: ${SUPERNOVA_PLATFORM_CREDENTIALS_JSON:-}
+  SUPERNOVA_CORS_ORIGINS: ${SUPERNOVA_CORS_ORIGINS:?Set SUPERNOVA_CORS_ORIGINS in .env}
+  SUPERNOVA_S3_ENDPOINT_URL: ${SUPERNOVA_S3_ENDPOINT_URL:-http://host.docker.internal:9000}
+  SUPERNOVA_S3_ACCESS_KEY: ${SUPERNOVA_S3_ACCESS_KEY:?Set SUPERNOVA_S3_ACCESS_KEY in .env}
+  SUPERNOVA_S3_SECRET_KEY: ${SUPERNOVA_S3_SECRET_KEY:?Set SUPERNOVA_S3_SECRET_KEY in .env}
+  SUPERNOVA_S3_BUCKET: ${SUPERNOVA_S3_BUCKET:-supernova-staging}
+  SUPERNOVA_S3_REGION: ${SUPERNOVA_S3_REGION:-us-east-1}
+  SUPERNOVA_KNOWLEDGE_MAX_UPLOAD_BYTES: ${SUPERNOVA_KNOWLEDGE_MAX_UPLOAD_BYTES:-10485760}
+  SUPERNOVA_KNOWLEDGE_MAX_URL_BYTES: ${SUPERNOVA_KNOWLEDGE_MAX_URL_BYTES:-10485760}
+  SUPERNOVA_KNOWLEDGE_WORKER_POLL_SECONDS: ${SUPERNOVA_KNOWLEDGE_WORKER_POLL_SECONDS:-2}
+  SUPERNOVA_KNOWLEDGE_WORKER_LEASE_SECONDS: ${SUPERNOVA_KNOWLEDGE_WORKER_LEASE_SECONDS:-900}
+  SUPERNOVA_EMBEDDING_TIMEOUT_SECONDS: ${SUPERNOVA_EMBEDDING_TIMEOUT_SECONDS:-60}
+  SUPERNOVA_CHAT_IMPORT_MAX_FILE_BYTES: ${SUPERNOVA_CHAT_IMPORT_MAX_FILE_BYTES:-20971520}
+  SUPERNOVA_CHAT_IMPORT_MAX_BATCH_BYTES: ${SUPERNOVA_CHAT_IMPORT_MAX_BATCH_BYTES:-41943040}
+  SUPERNOVA_CHAT_IMPORT_MAX_FILES: ${SUPERNOVA_CHAT_IMPORT_MAX_FILES:-10}
+  SUPERNOVA_CHAT_IMPORT_WORKER_POLL_SECONDS: ${SUPERNOVA_CHAT_IMPORT_WORKER_POLL_SECONDS:-2}
+  SUPERNOVA_CHAT_IMPORT_WORKER_LEASE_SECONDS: ${SUPERNOVA_CHAT_IMPORT_WORKER_LEASE_SECONDS:-180}
+  SUPERNOVA_CHAT_IMPORT_BATCH_SIZE: ${SUPERNOVA_CHAT_IMPORT_BATCH_SIZE:-500}
+  SUPERNOVA_CHAT_IMPORT_TEMP_TTL_HOURS: ${SUPERNOVA_CHAT_IMPORT_TEMP_TTL_HOURS:-24}
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    mem_limit: 320m
+    cpus: 0.50
+    shm_size: 64mb
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-supernova}
+      POSTGRES_USER: ${POSTGRES_USER:-supernova}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    command:
+      - postgres
+      - -c
+      - shared_buffers=96MB
+      - -c
+      - max_connections=30
+      - -c
+      - work_mem=2MB
+      - -c
+      - maintenance_work_mem=32MB
+      - -c
+      - max_wal_size=512MB
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-supernova} -d ${POSTGRES_DB:-supernova}"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    mem_limit: 48m
+    cpus: 0.10
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --requirepass
+      - ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
+      - --maxmemory
+      - 32mb
+      - --maxmemory-policy
+      - noeviction
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: "2"
+
+  api:
+    image: macbook201808/supernova:api-${SUPERNOVA_IMAGE_TAG:-staging-latest}
+    restart: unless-stopped
+    init: true
+    mem_limit: 256m
+    cpus: 0.50
+    environment:
+      <<: *app-environment
+      SUPERNOVA_AUDIO_TRANSCRIPTION_BASE_URL: "${SUPERNOVA_AUDIO_TRANSCRIPTION_BASE_URL:-}"
+      SUPERNOVA_AUDIO_TRANSCRIPTION_MODEL: "${SUPERNOVA_AUDIO_TRANSCRIPTION_MODEL:-}"
+      SUPERNOVA_AUDIO_TRANSCRIPTION_CREDENTIAL_REF: "${SUPERNOVA_AUDIO_TRANSCRIPTION_CREDENTIAL_REF:-}"
+      SUPERNOVA_AUDIO_TRANSCRIPTION_MAX_FILE_BYTES: "${SUPERNOVA_AUDIO_TRANSCRIPTION_MAX_FILE_BYTES:-26214400}"
+      SUPERNOVA_AUDIO_TRANSCRIPTION_TIMEOUT_SECONDS: "${SUPERNOVA_AUDIO_TRANSCRIPTION_TIMEOUT_SECONDS:-120}"
+      SUPERNOVA_AUDIO_TRANSCRIPTION_SAMPLE_RATE: "${SUPERNOVA_AUDIO_TRANSCRIPTION_SAMPLE_RATE:-24000}"
+      SUPERNOVA_AUDIO_TRANSCRIPTION_MAX_DECODED_BYTES: "${SUPERNOVA_AUDIO_TRANSCRIPTION_MAX_DECODED_BYTES:-67108864}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:18082:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  knowledge-worker:
+    image: macbook201808/supernova:api-${SUPERNOVA_IMAGE_TAG:-staging-latest}
+    restart: unless-stopped
+    init: true
+    command: ["python", "-m", "app.knowledge.worker"]
+    mem_limit: 160m
+    cpus: 0.25
+    environment: *app-environment
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.healthcheck", "--process-module", "app.knowledge.worker", "--check-database"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 45s
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: "2"
+
+  chat-import-worker:
+    image: macbook201808/supernova:api-${SUPERNOVA_IMAGE_TAG:-staging-latest}
+    restart: unless-stopped
+    init: true
+    command: ["python", "-m", "app.chat_import.worker"]
+    mem_limit: 160m
+    cpus: 0.25
+    environment: *app-environment
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.healthcheck", "--process-module", "app.chat_import.worker", "--check-database"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 45s
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: "2"
+
+  console:
+    image: macbook201808/supernova:console-${SUPERNOVA_IMAGE_TAG:-staging-latest}
+    restart: unless-stopped
+    mem_limit: 32m
+    cpus: 0.10
+    ports:
+      - "127.0.0.1:18083:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 3s
+      retries: 10
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: "2"
+
+volumes:
+  postgres_data:
+    name: supernova_staging_postgres_data
+  redis_data:
+    name: supernova_staging_redis_data

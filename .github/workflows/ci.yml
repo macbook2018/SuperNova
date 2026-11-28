@@ -5,6 +5,7 @@ on:
     branches: [main, "feat/**", "fix/**"]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -89,6 +90,52 @@ jobs:
       - name: Validate Compose
         run: docker compose -f deploy/docker/compose.yaml config --quiet
 
+      - name: Validate staging Compose and deployment scripts
+        env:
+          POSTGRES_PASSWORD: ci-postgres-password
+          REDIS_PASSWORD: ci-redis-password
+          SUPERNOVA_JWT_SECRET: ci-supernova-jwt-secret-at-least-32-characters
+          SUPERNOVA_ENCRYPTION_KEY: MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=
+          SUPERNOVA_PLATFORM_ADMIN_EMAILS: ci@example.com
+          SUPERNOVA_CORS_ORIGINS: https://bot.siyubot.com
+          SUPERNOVA_S3_ACCESS_KEY: ci-supernova
+          SUPERNOVA_S3_SECRET_KEY: ci-supernova-secret-key-123456
+        run: |
+          bash -n deploy/scripts/bootstrap-staging.sh
+          bash -n deploy/scripts/deploy-staging.sh
+          bash -n deploy/scripts/rollback-staging.sh
+          docker compose --project-name supernova-staging -f deploy/docker/compose.staging.yaml config --quiet
+
+      - name: Test bootstrap with punctuation in MinIO secret
+        run: |
+          tmpdir="$(mktemp -d)"
+          trap 'rm -rf "$tmpdir"' EXIT
+          cp deploy/scripts/bootstrap-staging.sh "$tmpdir/bootstrap-staging.sh"
+          python3 - "$tmpdir/bootstrap-staging.sh" <<'PY'
+          import subprocess
+          import sys
+
+          values = [
+              "",
+              "ci@example.com",
+              "",
+              "ci_access_key",
+              "Abc123!@#_-45",  # 13 characters: existing MinIO password length
+              "",
+          ]
+          subprocess.run(
+              ["bash", sys.argv[1]],
+              input="\n".join(values),
+              text=True,
+              stdout=subprocess.DEVNULL,
+              check=True,
+          )
+          PY
+          test "$(stat -c '%a' "$tmpdir/.env")" = "600"
+          docker compose --project-name supernova-staging \
+            --env-file "$tmpdir/.env" \
+            -f deploy/docker/compose.staging.yaml config --quiet
+
       - name: Start stack
         run: docker compose -f deploy/docker/compose.yaml up --build -d
 
@@ -111,6 +158,15 @@ jobs:
           test "$(docker compose -f deploy/docker/compose.yaml exec -T api id -u)" != "0"
           docker compose -f deploy/docker/compose.yaml exec -T minio silo healthcheck ready
 
+      - name: Verify knowledge version publishing and rollback through HTTP
+        run: |
+          compose=(docker compose -f deploy/docker/compose.yaml)
+          for service in api worker; do
+            "${compose[@]}" cp apps/api/tests/compose_index_versions.py "$service:/tmp/index_smoke.py"
+            "${compose[@]}" exec -d -T "$service" python /tmp/index_smoke.py --serve
+          done
+          "${compose[@]}" exec -T api python /tmp/index_smoke.py --parser-version structured_v1
+
       - name: Verify Chinese console
         run: |
           for attempt in $(seq 1 45); do
@@ -123,3 +179,180 @@ jobs:
       - name: Stop stack
         if: always()
         run: docker compose -f deploy/docker/compose.yaml down -v
+
+  staging-images:
+    name: Publish staging images
+    if: github.ref == 'refs/heads/feat/phase-6-knowledge-base-rag' && vars.STAGING_DEPLOY_ENABLED == 'true'
+    needs: [console, api, compose-smoke]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    outputs:
+      api_origin: ${{ steps.origin.outputs.api_origin }}
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read the Console API origin for this revision
+        id: origin
+        run: |
+          origin="$(sed -n 's/^ARG VITE_API_BASE_URL=//p' apps/console/Dockerfile)"
+          [[ "$origin" =~ ^https://[a-z0-9.-]+$ ]]
+          echo "api_origin=$origin" >> "$GITHUB_OUTPUT"
+
+      - name: Validate image publisher
+        run: |
+          test "$DOCKERHUB_USERNAME" = "macbook201808"
+          test -n "$DOCKERHUB_TOKEN"
+
+      - name: Log in to Docker Hub for image publishing
+        uses: docker/login-action@v3
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push API image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/api/Dockerfile
+          push: true
+          tags: macbook201808/supernova:api-${{ github.sha }}
+          cache-from: type=gha,scope=supernova-api
+          cache-to: type=gha,mode=max,scope=supernova-api
+
+      - name: Build and push Console image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/console/Dockerfile
+          push: true
+          tags: macbook201808/supernova:console-${{ github.sha }}
+          cache-from: type=gha,scope=supernova-console
+          cache-to: type=gha,mode=max,scope=supernova-console
+
+  staging-deploy:
+    name: Transfer and deploy staging images
+    environment: aliyun-staging
+    needs: staging-images
+    # A previous host may still be configured while the new release is being staged.
+    if: vars.STAGING_API_BASE_URL == needs.staging-images.outputs.api_origin
+    concurrency:
+      group: supernova-staging-deploy
+      cancel-in-progress: false
+    timeout-minutes: 45
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      STAGING_HOST: ${{ secrets.ALIYUN_STAGING_HOST }}
+      STAGING_USER: ${{ secrets.ALIYUN_STAGING_USER }}
+      STAGING_SSH_PORT: ${{ secrets.ALIYUN_STAGING_SSH_PORT || '22' }}
+      STAGING_SSH_PRIVATE_KEY: ${{ secrets.ALIYUN_STAGING_SSH_PRIVATE_KEY }}
+      STAGING_SSH_KNOWN_HOSTS: ${{ secrets.ALIYUN_STAGING_SSH_KNOWN_HOSTS }}
+      STAGING_DEPLOY_PATH: ${{ vars.STAGING_DEPLOY_PATH || '/opt/supernova-staging' }}
+      STAGING_API_BASE_URL: ${{ needs.staging-images.outputs.api_origin }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify deployment target before opening SSH
+        run: |
+          test -n "$STAGING_HOST"
+          test -n "$STAGING_USER"
+          test -n "$STAGING_SSH_PRIVATE_KEY"
+          test -n "$STAGING_SSH_KNOWN_HOSTS"
+          python3 - <<'PY'
+          import os
+          import socket
+          from urllib.parse import urlsplit
+
+          def addresses(host):
+              return {entry[4][0] for entry in socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)}
+
+          destination = addresses(os.environ["STAGING_HOST"])
+          approved = addresses(urlsplit(os.environ["STAGING_API_BASE_URL"]).hostname)
+          if not destination or not destination <= approved:
+              raise SystemExit("SSH target does not match the staging API DNS records.")
+          PY
+
+      - name: Configure SSH
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$STAGING_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$STAGING_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          host_entry="$STAGING_HOST"
+          if [ "$STAGING_SSH_PORT" != "22" ]; then
+            host_entry="[$STAGING_HOST]:$STAGING_SSH_PORT"
+          fi
+          ssh-keygen -F "$host_entry" -f ~/.ssh/known_hosts >/dev/null
+          printf '%s\n' 'Host *' '  BatchMode yes' '  StrictHostKeyChecking yes' '  IdentitiesOnly yes' > ~/.ssh/config
+          chmod 600 ~/.ssh/config
+
+      - name: Upload staging deployment files
+        run: |
+          ssh -p "$STAGING_SSH_PORT" "$STAGING_USER@$STAGING_HOST" \
+            "mkdir -p '$STAGING_DEPLOY_PATH'"
+          scp -P "$STAGING_SSH_PORT" \
+            deploy/docker/compose.staging.yaml \
+            deploy/scripts/bootstrap-staging.sh \
+            deploy/scripts/deploy-staging.sh \
+            deploy/scripts/rollback-staging.sh \
+            "$STAGING_USER@$STAGING_HOST:$STAGING_DEPLOY_PATH/"
+          ssh -p "$STAGING_SSH_PORT" "$STAGING_USER@$STAGING_HOST" \
+            "chmod 700 '$STAGING_DEPLOY_PATH/'*.sh"
+
+      - name: Check server bootstrap state
+        id: bootstrap
+        run: |
+          if ssh -p "$STAGING_SSH_PORT" "$STAGING_USER@$STAGING_HOST" \
+            "test -s '$STAGING_DEPLOY_PATH/.env'"; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Verify commit is still the latest Staging branch revision
+        id: latest
+        if: steps.bootstrap.outputs.ready == 'true'
+        run: |
+          latest_sha="$(git ls-remote origin refs/heads/feat/phase-6-knowledge-base-rag | awk '{print $1}')"
+          if [ -z "$latest_sha" ]; then
+            echo "Unable to resolve the latest Staging branch revision."
+            exit 1
+          fi
+          if [ "$latest_sha" != "$GITHUB_SHA" ]; then
+            echo "Skipping stale deployment $GITHUB_SHA; branch now points to $latest_sha."
+            echo "is_current=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_current=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Deploy immutable image tag
+        if: steps.bootstrap.outputs.ready == 'true' && steps.latest.outputs.is_current == 'true'
+        run: |
+          ssh -p "$STAGING_SSH_PORT" "$STAGING_USER@$STAGING_HOST" \
+            "set -eu
+             cd '$STAGING_DEPLOY_PATH'
+             ./deploy-staging.sh '${{ github.sha }}'"
+
+      - name: Report first-time server bootstrap
+        if: steps.bootstrap.outputs.ready != 'true'
+        run: |
+          echo "Deployment files were uploaded, but the server .env is not initialized yet."
+          echo "SSH to the server, create the MinIO bucket-only account, then run:"
+          echo "cd '$STAGING_DEPLOY_PATH' && ./bootstrap-staging.sh"
+          {
+            echo "## Server bootstrap required"
+            echo "Initialize the server-only .env and MinIO bucket credentials, then run this workflow again to build and transfer the images."
+          } >> "$GITHUB_STEP_SUMMARY"
+

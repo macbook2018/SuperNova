@@ -78,6 +78,36 @@ def test_unhandled_exception_returns_safe_error_envelope() -> None:
     assert b"sensitive internal detail" not in response.body
 
 
+
+def test_database_readiness_normalizes_sqlalchemy_psycopg_url(monkeypatch) -> None:
+    captured: dict[str, str] = {}
+
+    class FakeConnection:
+        async def execute(self, query: str) -> None:
+            assert query == "SELECT 1"
+
+        async def close(self) -> None:
+            return None
+
+    async def fake_connect(database_url: str, *, connect_timeout: int):
+        captured["database_url"] = database_url
+        assert connect_timeout == 2
+        return FakeConnection()
+
+    monkeypatch.setattr(health.psycopg.AsyncConnection, "connect", fake_connect)
+
+    result = asyncio.run(
+        health._check_database(
+            "postgresql+psycopg://supernova:secret@postgres:5432/supernova"
+        )
+    )
+
+    assert result == "ok"
+    assert captured["database_url"] == (
+        "postgresql://supernova:secret@postgres:5432/supernova"
+    )
+
+
 def test_readiness_returns_ready_when_dependencies_are_healthy(monkeypatch) -> None:
     async def healthy(_: str) -> str:
         return "ok"

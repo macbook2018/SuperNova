@@ -14,6 +14,10 @@ class UsageRecord(Base):
             "model_source IN ('platform', 'byok')",
             name="ck_usage_records_model_source",
         ),
+        CheckConstraint(
+            "request_type IN ('chat', 'audio_transcription')",
+            name="ck_usage_records_request_type",
+        ),
         Index("ix_usage_records_tenant_created", "tenant_id", "created_at"),
         Index("ix_usage_records_user_created", "user_id", "created_at"),
         Index("ix_usage_records_request_id", "request_id"),
@@ -42,6 +46,9 @@ class UsageRecord(Base):
     )
     model_source: Mapped[str] = mapped_column(
         String(16), nullable=False, default="byok", server_default="byok"
+    )
+    request_type: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="chat", server_default="chat"
     )
     persona_slug: Mapped[str] = mapped_column(String(80), nullable=False)
     provider_type: Mapped[str] = mapped_column(String(32), nullable=False)

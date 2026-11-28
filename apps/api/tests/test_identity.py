@@ -1,6 +1,8 @@
 from collections.abc import Generator
+from types import SimpleNamespace
 
 import pytest
+from app.api import auth
 from app.api.auth import _is_email_unique_violation
 from app.db.base import Base
 from app.db.session import get_db
@@ -280,3 +282,50 @@ def test_register_does_not_misreport_other_integrity_errors(
     assert response.json()["error"]["code"] == "internal_error"
     assert response.json()["error"]["request_id"]
     assert response.headers["access-control-allow-origin"] == "http://localhost:5173"
+
+
+
+def test_public_registration_cannot_claim_reserved_platform_admin_email(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        auth,
+        "get_settings",
+        lambda: SimpleNamespace(platform_admin_email_set=frozenset({"reserved@example.com"})),
+    )
+    response = client.post(
+        "/auth/register",
+        json={
+            "email": "RESERVED@example.com",
+            "password": "correct-horse-battery",
+            "display_name": "Reserved",
+        },
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "reserved_platform_admin_email"
+
+def test_tenant_owner_does_not_receive_platform_permissions_or_manage_platform_roles(
+    client: TestClient,
+) -> None:
+    tokens = register(client, "tenant-owner@example.com")
+    headers = auth_headers(tokens)
+
+    access = client.get("/admin/platform/access", headers=headers)
+    assert access.status_code == 200
+    assert access.json() == {
+        "is_platform_admin": False,
+        "roles": [],
+        "permissions": [],
+    }
+
+    roles = client.get("/admin/platform/roles", headers=headers)
+    assert roles.status_code == 403
+    assert roles.json()["detail"]["code"] == "platform_permission_required"
+
+    grant = client.post(
+        f"/admin/platform/users/{tokens['user']['id']}/roles/super_admin",
+        headers=headers,
+        json={"reason": "尝试自行提升平台权限"},
+    )
+    assert grant.status_code == 403
+    assert grant.json()["detail"]["code"] == "platform_permission_required"
