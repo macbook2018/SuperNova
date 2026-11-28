@@ -147,3 +147,8 @@
 @media(max-width:900px){.chat-analysis-model-grid{grid-template-columns:1fr 1fr}.chat-persona-apply{grid-template-columns:1fr 1fr}.chat-persona-apply .btn{grid-column:1/-1}}
 @media(max-width:600px){.chat-analysis-model-grid,.chat-faq-edit-grid,.chat-persona-apply{grid-template-columns:1fr}.chat-persona-apply .btn{grid-column:auto}.chat-review-heading{align-items:flex-start;flex-direction:column}.chat-faq-publish-bar{justify-content:stretch}.chat-faq-publish-bar label{width:100%}}
 .auth-brand img,.brand img,.hero-art img{border-radius:20%;}
+
+.document-row{grid-template-columns:minmax(0,1fr) auto auto}
+.document-row .row-actions{flex-flow:row wrap;align-items:center}
+@media(max-width:640px){.document-row{grid-template-columns:1fr auto}.document-row .row-actions{grid-column:1/-1}}
+.row-actions .preview-link{width:auto;padding:0 8px;white-space:nowrap;color:#3268b7;font-size:12px}

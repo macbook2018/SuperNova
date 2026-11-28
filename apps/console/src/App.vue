@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
+import KnowledgeChunkPreview from './components/KnowledgeChunkPreview.vue'
 import ChatImportsView from './components/ChatImportsView.vue'
 import PlatformAdminView from './components/PlatformAdminView.vue'
 import PlatformAccessView from './components/PlatformAccessView.vue'
@@ -144,7 +145,14 @@ const billingLoading = ref(false)
 const kbs = ref<KnowledgeBaseView[]>([])
 const knowledgeDocuments = ref<KnowledgeDocument[]>([])
 const knowledgeUsage = ref<KnowledgeUsageSummary | null>(null)
-const knowledgeBusy = ref(false)
+const knowledgeLoading = ref(false)
+const knowledgeWriting = ref(false)
+const knowledgeBusy = computed(() => knowledgeLoading.value || knowledgeWriting.value)
+const knowledgeLoadError = ref('')
+const previewDocumentId = ref('')
+const previewDocument = computed(() =>
+  knowledgeDocuments.value.find(doc => doc.id === previewDocumentId.value && doc.status === 'ready'),
+)
 const knowledgeSearchQuery = ref('')
 const knowledgeSearchHits = ref<KnowledgeSearchResponse['hits']>([])
 const knowledgeSearchBusy = ref(false)
@@ -153,6 +161,25 @@ const usageSummary = ref<UsageSummary | null>(null)
 const usageRecords = ref<UsageRecord[]>([])
 const usageLoading = ref(false)
 const selectedId = ref('')
+let kbView = 0
+let detailRequest = 0
+let searchRequest = 0
+
+watch([selectedId, () => page.value === 'knowledgeDetail', () => currentTenant.value?.id], () => {
+  kbView++
+  detailRequest++
+  searchRequest++
+  knowledgeLoading.value = false
+  knowledgeWriting.value = false
+  knowledgeLoadError.value = ''
+  previewDocumentId.value = ''
+  knowledgeDocuments.value = []
+  knowledgeUsage.value = null
+  knowledgeSearchQuery.value = ''
+  knowledgeSearchHits.value = []
+  knowledgeSearchBusy.value = false
+}, { flush: 'sync' })
+
 const selectedKb = computed<KnowledgeBaseView>(() =>
   kbs.value.find(k => k.id === selectedId.value) ??
   kbs.value[0] ??
@@ -264,21 +291,28 @@ async function loadPlatformAdminAccess() {
 }
 
 async function loadKnowledgeDetail(showError = false) {
-  if (!selectedId.value) return
-  knowledgeBusy.value = true
+  const kbId = selectedId.value
+  if (!kbId || page.value !== 'knowledgeDetail') return
+  const serial = ++detailRequest
+  knowledgeLoadError.value = ''
+  knowledgeLoading.value = true
   try {
     const [documents, usage] = await Promise.all([
-      request<KnowledgeDocument[]>(`/knowledge-bases/${selectedId.value}/documents`),
-      request<KnowledgeUsageSummary>(`/knowledge-bases/${selectedId.value}/usage`),
+      request<KnowledgeDocument[]>(`/knowledge-bases/${kbId}/documents`),
+      request<KnowledgeUsageSummary>(`/knowledge-bases/${kbId}/usage`),
     ])
+    if (serial !== detailRequest) return
     knowledgeDocuments.value = documents
     knowledgeUsage.value = usage
-    const selected = kbs.value.find(kb => kb.id === selectedId.value)
+    const selected = kbs.value.find(kb => kb.id === kbId)
     if (selected) selected.documents_count = usage.document_count
   } catch (error) {
-    if (showError) notify(error instanceof Error ? error.message : '读取知识库文档失败')
+    if (serial !== detailRequest) return
+    previewDocumentId.value = ''
+    knowledgeLoadError.value = error instanceof Error ? error.message : '读取知识库文档失败'
+    if (showError) notify(knowledgeLoadError.value)
   } finally {
-    knowledgeBusy.value = false
+    if (serial === detailRequest) knowledgeLoading.value = false
   }
 }
 async function loadBilling(showError = false) {
@@ -705,7 +739,6 @@ async function createKb() {
     await loadWorkspace()
     selectedId.value = created.id
     page.value = 'knowledgeDetail'
-    knowledgeSearchHits.value = []
     await loadKnowledgeDetail()
     notify('知识库创建成功')
   } catch (error) {
@@ -715,99 +748,88 @@ async function createKb() {
 function openKb(kb: KnowledgeBaseView) {
   selectedId.value = kb.id
   page.value = 'knowledgeDetail'
-  knowledgeSearchHits.value = []
   void loadKnowledgeDetail()
 }
 async function deleteKb(kb: KnowledgeBaseView) {
   if (!window.confirm(`确定删除知识库「${kb.name}」吗？请先删除其中的全部文档。`)) return
+  const view = kbView
+  const tenantId = currentTenant.value?.id
   try {
     await request<void>(`/knowledge-bases/${kb.id}`, 'DELETE')
+    if (currentTenant.value?.id !== tenantId) return
+    if (view === kbView) go('knowledge')
     await loadWorkspace()
-    page.value = 'knowledge'
     notify('知识库已删除')
   } catch (error) {
-    notify(error instanceof Error ? error.message : '删除知识库失败；请先删除文档')
+    if (view === kbView) notify(error instanceof Error ? error.message : '删除知识库失败；请先删除文档')
+  }
+}
+async function updateKnowledge(action: (kbId: string) => Promise<string>, fallback: string) {
+  const view = kbView
+  const kbId = selectedId.value
+  if (!kbId || page.value !== 'knowledgeDetail' || knowledgeWriting.value) return
+  knowledgeWriting.value = true
+  let message: string
+  try {
+    message = await action(kbId)
+  } catch (error) {
+    message = error instanceof Error ? error.message : fallback
+  }
+  if (view !== kbView) return
+  await loadKnowledgeDetail()
+  if (view === kbView) {
+    knowledgeWriting.value = false
+    notify(message)
   }
 }
 function upload() {
-  if (!selectedId.value) return
+  const view = kbView
+  const tenantId = currentTenant.value?.id
   const input = document.createElement('input')
   input.type = 'file'
   input.multiple = true
   input.accept = '.pdf,.docx,.pptx,.xlsx,.txt,.md,.csv,.html,.htm'
-  input.onchange = async () => {
+  input.onchange = () => {
     const files = Array.from(input.files ?? [])
-    if (!files.length) return
-    knowledgeBusy.value = true
-    let succeeded = 0
-    try {
+    if (!files.length || view !== kbView) return
+    void updateKnowledge(async kbId => {
       for (const file of files) {
+        if (currentTenant.value?.id !== tenantId) throw new Error('工作空间已切换')
         const form = new FormData()
         form.append('file', file)
-        await apiRequest<KnowledgeDocument>(
-          `/knowledge-bases/${selectedId.value}/documents/upload`,
-          { method: 'POST', body: form },
-        )
-        succeeded += 1
+        await apiRequest<KnowledgeDocument>(`/knowledge-bases/${kbId}/documents/upload`, {
+          method: 'POST', body: form,
+        })
       }
-      await loadKnowledgeDetail()
-      await loadWorkspace()
-      notify(`已提交 ${succeeded} 份文档，后台正在解析和建立索引`)
-    } catch (error) {
-      await loadKnowledgeDetail()
-      notify(error instanceof Error ? error.message : '部分文档上传失败')
-    } finally {
-      knowledgeBusy.value = false
-    }
+      return `已提交 ${files.length} 份文档，后台正在解析和建立索引`
+    }, '部分文档上传失败')
   }
   input.click()
 }
 async function importKnowledgeUrl() {
   const url = window.prompt('输入需要导入的公开网页 URL（公网地址必须使用 HTTPS）')
-  if (!url?.trim() || !selectedId.value) return
-  knowledgeBusy.value = true
-  try {
-    await request<KnowledgeDocument>(
-      `/knowledge-bases/${selectedId.value}/documents/import-url`,
-      'POST',
-      { url: url.trim() },
-    )
-    await loadKnowledgeDetail()
-    notify('网页已提交，后台正在抓取和建立索引')
-  } catch (error) {
-    notify(error instanceof Error ? error.message : '网页导入失败')
-  } finally {
-    knowledgeBusy.value = false
-  }
+  if (!url?.trim()) return
+  await updateKnowledge(async kbId => {
+    await request<KnowledgeDocument>(`/knowledge-bases/${kbId}/documents/import-url`, 'POST', { url: url.trim() })
+    return '网页已提交，后台正在抓取和建立索引'
+  }, '网页导入失败')
 }
 async function retryKnowledgeDocument(item: KnowledgeDocument) {
-  try {
-    await request<KnowledgeDocument>(
-      `/knowledge-bases/${selectedId.value}/documents/${item.id}/retry`,
-      'POST',
-    )
-    await loadKnowledgeDetail()
-    notify('已重新提交处理任务')
-  } catch (error) {
-    notify(error instanceof Error ? error.message : '重试失败')
-  }
+  await updateKnowledge(async kbId => {
+    await request<KnowledgeDocument>(`/knowledge-bases/${kbId}/documents/${item.id}/retry`, 'POST')
+    return '已重新提交处理任务'
+  }, '重试失败')
 }
 async function reindexKnowledgeDocument(item: KnowledgeDocument) {
-  try {
-    await request<KnowledgeDocument>(
-      `/knowledge-bases/${selectedId.value}/documents/${item.id}/reindex`,
-      'POST',
-    )
-    await loadKnowledgeDetail()
-    notify('已提交重建索引任务')
-  } catch (error) {
-    notify(error instanceof Error ? error.message : '重建索引失败')
-  }
+  await updateKnowledge(async kbId => {
+    await request<KnowledgeDocument>(`/knowledge-bases/${kbId}/documents/${item.id}/reindex`, 'POST')
+    return '已提交重建索引任务'
+  }, '重建索引失败')
 }
 async function downloadKnowledgeDocument(item: KnowledgeDocument) {
   try {
     await downloadApiFile(
-      `/knowledge-bases/${selectedId.value}/documents/${item.id}/download`,
+      `/knowledge-bases/${item.knowledge_base_id}/documents/${item.id}/download`,
       item.original_filename,
     )
   } catch (error) {
@@ -816,35 +838,21 @@ async function downloadKnowledgeDocument(item: KnowledgeDocument) {
 }
 async function deleteKnowledgeDocument(item: KnowledgeDocument) {
   if (!window.confirm(`确定删除文档「${item.original_filename}」吗？`)) return
-  try {
-    await request<void>(
-      `/knowledge-bases/${selectedId.value}/documents/${item.id}`,
-      'DELETE',
-    )
-    await loadKnowledgeDetail()
-    notify('文档已进入删除队列')
-  } catch (error) {
-    notify(error instanceof Error ? error.message : '删除文档失败')
-  }
+  await updateKnowledge(async kbId => {
+    await request<void>(`/knowledge-bases/${kbId}/documents/${item.id}`, 'DELETE')
+    return '文档已进入删除队列'
+  }, '删除文档失败')
 }
 async function reindexAllKnowledgeBase() {
-  if (!selectedId.value || !window.confirm('将对当前知识库所有可用文档重新解析并建立索引，是否继续？')) return
-  knowledgeBusy.value = true
-  try {
-    const result = await request<{ queued_documents: number }>(
-      `/knowledge-bases/${selectedId.value}/reindex`,
-      'POST',
-    )
-    await loadKnowledgeDetail()
-    notify(`已提交 ${result.queued_documents} 份文档的重建索引任务`)
-  } catch (error) {
-    notify(error instanceof Error ? error.message : '批量重建索引失败')
-  } finally {
-    knowledgeBusy.value = false
-  }
+  if (!window.confirm('将对当前知识库所有可用文档重新解析并建立索引，是否继续？')) return
+  await updateKnowledge(async kbId => {
+    const result = await request<{ queued_documents: number }>(`/knowledge-bases/${kbId}/reindex`, 'POST')
+    return `已提交 ${result.queued_documents} 份文档的重建索引任务`
+  }, '批量重建索引失败')
 }
 async function searchKnowledge() {
   if (!selectedId.value || !knowledgeSearchQuery.value.trim()) return
+  const serial = ++searchRequest
   knowledgeSearchBusy.value = true
   try {
     const result = await request<KnowledgeSearchResponse>(
@@ -852,11 +860,11 @@ async function searchKnowledge() {
       'POST',
       { query: knowledgeSearchQuery.value.trim() },
     )
-    knowledgeSearchHits.value = result.hits
+    if (serial === searchRequest) knowledgeSearchHits.value = result.hits
   } catch (error) {
-    notify(error instanceof Error ? error.message : '知识库检索失败')
+    if (serial === searchRequest) notify(error instanceof Error ? error.message : '知识库检索失败')
   } finally {
-    knowledgeSearchBusy.value = false
+    if (serial === searchRequest) knowledgeSearchBusy.value = false
   }
 }
 function formatBytes(value: number): string {
@@ -1021,20 +1029,23 @@ async function revokeKey(key: ApiKey) {
     <section class="panel">
      <div class="panel-title"><div><b>文档管理</b><small>支持 PDF、DOCX、PPTX、XLSX、TXT、Markdown、CSV、HTML；单文件默认上限 25 MB。</small></div><div class="heading-actions"><button class="btn secondary small" @click="importKnowledgeUrl" :disabled="knowledgeBusy">导入网页 URL</button><button class="btn primary small" @click="upload" :disabled="knowledgeBusy"><Upload :size="14"/>上传文件</button><button class="btn secondary small" @click="reindexAllKnowledgeBase" :disabled="knowledgeBusy">全部重建索引</button><button class="btn secondary small" @click="loadKnowledgeDetail(true)" :disabled="knowledgeBusy"><Activity :size="14"/>刷新</button></div></div>
      <div v-if="knowledgeBusy && !knowledgeDocuments.length" class="empty"><Activity :size="25"/><b>正在读取知识库</b></div>
+     <div v-else-if="knowledgeLoadError" class="empty" role="alert"><AlertCircle :size="24"/><b>{{knowledgeLoadError}}</b><button class="btn secondary small" @click="loadKnowledgeDetail()">重试</button></div>
      <div v-else-if="knowledgeDocuments.length" class="usage-list">
-      <div v-for="item in knowledgeDocuments" :key="item.id" class="usage-row">
-       <div><b>{{item.original_filename}}</b><small>{{item.source_type==='url'?'网页导入':'文件上传'}} · {{formatBytes(item.file_size_bytes)}} · {{item.chunk_count}} 个切片 · {{new Date(item.created_at).toLocaleString()}}</small><small v-if="item.error_message" class="warning">{{item.error_message}}</small></div>
+      <div v-for="item in knowledgeDocuments" :key="item.id" class="usage-row document-row">
+       <div><b>{{item.original_filename}}</b><small>{{item.source_type==='url'?'网页导入':'文件上传'}} · {{formatBytes(item.file_size_bytes)}}<template v-if="!knowledgeUsage?.active_release_id"> · {{item.chunk_count}} 个切片</template> · {{new Date(item.created_at).toLocaleString()}}</small><small v-if="item.error_message" class="warning">{{item.error_message}}</small></div>
        <label :class="item.status==='ready'?'running':'paused'">{{item.status==='ready'?'可检索':item.status==='queued'?'排队中':item.status==='processing'?'处理中':item.status==='failed'?'失败':item.status==='deleting'?'删除中':'已删除'}}</label>
        <div class="row-actions">
+        <button v-if="item.status==='ready'" class="preview-link" @click="previewDocumentId = item.id">查看切片</button>
         <button v-if="item.status==='ready'" @click="downloadKnowledgeDocument(item)" aria-label="下载文档"><Download :size="15"/></button>
-        <button v-if="item.status==='failed' || item.status==='deleting'" @click="retryKnowledgeDocument(item)" aria-label="重试"><Activity :size="15"/></button>
-        <button v-if="item.status==='ready'" @click="reindexKnowledgeDocument(item)" aria-label="重建索引"><Zap :size="15"/></button>
-        <button v-if="item.status!=='deleted' && item.status!=='deleting'" @click="deleteKnowledgeDocument(item)" aria-label="删除文档"><Trash2 :size="15"/></button>
+        <button v-if="item.status==='failed' || item.status==='deleting'" :disabled="knowledgeWriting" @click="retryKnowledgeDocument(item)" aria-label="重试"><Activity :size="15"/></button>
+        <button v-if="item.status==='ready'" :disabled="knowledgeWriting" @click="reindexKnowledgeDocument(item)" aria-label="重建索引"><Zap :size="15"/></button>
+        <button v-if="item.status!=='deleted' && item.status!=='deleting'" :disabled="knowledgeWriting" @click="deleteKnowledgeDocument(item)" aria-label="删除文档"><Trash2 :size="15"/></button>
        </div>
       </div>
      </div>
      <div v-else class="empty"><FileText :size="28"/><b>当前知识库还没有文档</b><small>上传文件或导入公开网页，后台 Worker 会自动解析、切片并建立向量索引。</small><button class="btn primary" @click="upload"><Upload :size="15"/>上传第一份文档</button></div>
     </section>
+    <KnowledgeChunkPreview v-if="previewDocument" :key="[previewDocument.id, previewDocument.active_index_version, knowledgeUsage?.active_release_id].join(':')" :document="previewDocument" @close="previewDocumentId = ''" />
     <section class="panel">
      <div class="panel-title"><div><b>检索调试</b><small>直接测试当前知识库的向量 + 关键词混合检索，并查看真实来源片段。</small></div></div>
      <form class="toolbar" @submit.prevent="searchKnowledge"><label class="search"><Search :size="16"/><input v-model="knowledgeSearchQuery" placeholder="输入一个问题，例如：退货政策是什么？"></label><button class="btn primary small" type="submit" :disabled="knowledgeSearchBusy || !knowledgeSearchQuery.trim()">{{knowledgeSearchBusy?'检索中…':'测试检索'}}</button></form>

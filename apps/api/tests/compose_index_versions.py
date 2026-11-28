@@ -124,7 +124,12 @@ def run_smoke(client, parser_version):
         assert hit["document_id"] == doc["id"] and EVIDENCE in hit["snippet"]
         return hit["chunk_id"]
 
+    document = f"{base}/documents/{doc['id']}"
+    preview_url = document + "/chunks"
     legacy_id = search()
+    legacy_page = request(client, "GET", preview_url)
+    assert legacy_id in {c["id"] for c in legacy_page["items"]}
+    assert legacy_page["active_release_id"] is None
     generation = request(client, "GET", versions)["generation"]
     candidate = request(
         client,
@@ -139,6 +144,7 @@ def run_smoke(client, parser_version):
     detail = versions + "/" + candidate["id"]
     wait_ready(lambda: request(client, "GET", detail)["status"])
     assert search() == legacy_id, "Unpublished candidate was served"
+    assert request(client, "GET", preview_url) == legacy_page
     published = request(
         client,
         "POST",
@@ -149,6 +155,14 @@ def run_smoke(client, parser_version):
     )
     active_id = search()
     assert active_id != legacy_id, "Publish did not switch the query to the shadow chunks"
+    assert client.get(preview_url, params={"snapshot": legacy_page["snapshot"]}).status_code == 409
+    published_page = request(client, "GET", preview_url)
+    assert published_page["active_release_id"] == candidate["id"]
+    evidence = next(c for c in published_page["items"] if c["id"] == active_id)
+    assert EVIDENCE in evidence["content"]
+    if parser_version == "structured_v1":
+        assert evidence["heading_path"] == ["退货规则"]
+        assert evidence["locations"][0]["line_start"] > 1
 
     persona = request(
         client,
@@ -190,8 +204,11 @@ def run_smoke(client, parser_version):
     )
     assert search() == legacy_id, "Rollback must return the original v1 chunk ID"
 
+    restored = request(client, "GET", preview_url)
+    assert restored["items"] == legacy_page["items"]
+    assert restored["snapshot"] != legacy_page["snapshot"]
+
     # The existing document reindex API must also retain exact old chunk IDs.
-    document = f"{base}/documents/{doc['id']}"
     history = document + "/index-history"
     first_version = request(client, "GET", history)["active_index_version"]
     request(client, "POST", document + "/reindex")

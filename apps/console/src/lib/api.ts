@@ -84,7 +84,44 @@ export interface KnowledgeDocument {
   updated_at: string
 }
 
+export interface ChunkLocation {
+  block_index?: number
+  page_number?: number
+  page_char_start?: number
+  page_char_end?: number
+  slide_number?: number
+  sheet_name?: string
+  table_index?: number
+  cell_range?: string
+  line_start?: number
+  line_end?: number
+  row_number?: number
+  row_start?: number
+  row_end?: number
+  paragraph_index?: number
+  element_index?: number
+  start?: number
+  end?: number
+}
+
+export interface DocumentChunkPage {
+  document_id: string
+  document_index_version: number
+  active_release_id: string | null
+  release_revision: number | null
+  snapshot: string
+  has_more: boolean
+  items: {
+    id: string
+    chunk_index: number
+    content: string
+    heading_path: string[]
+    locations: ChunkLocation[]
+  }[]
+}
+
 export interface KnowledgeUsageSummary {
+  active_release_id?: string | null
   document_count: number
   ready_documents: number
   queued_documents: number

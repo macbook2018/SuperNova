@@ -6,7 +6,7 @@ from typing import Annotated
 from urllib.parse import quote
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import Response
 from sqlalchemy import and_, func, select
 from sqlalchemy.exc import IntegrityError
@@ -15,9 +15,10 @@ from app.api.deps import CurrentPrincipal, DatabaseSession
 from app.api.knowledge_versions import document_history_router
 from app.api.knowledge_versions import router as index_versions_router
 from app.core.config import get_settings
-from app.knowledge.indexing import prepare_legacy_change
+from app.knowledge.indexing import IndexConflict, prepare_legacy_change
 from app.knowledge.legacy_revisions import next_document_index_version
 from app.knowledge.parsers import validate_document_bytes
+from app.knowledge.preview import published_chunk_page
 from app.knowledge.retrieval import retrieve_knowledge_base
 from app.knowledge.storage import delete_object, get_object, put_object
 from app.models.catalog import KnowledgeBase
@@ -30,6 +31,7 @@ from app.models.knowledge import (
     KnowledgeUsageRecord,
 )
 from app.schemas.knowledge import (
+    DocumentChunkPage,
     KnowledgeDocumentRead,
     KnowledgeImportUrlRequest,
     KnowledgeOperationUsage,
@@ -207,6 +209,39 @@ def list_knowledge_documents(
         .order_by(KnowledgeDocument.created_at.desc())
     ).all()
     return [_document_read(item) for item in documents]
+
+
+@router.get(
+    "/knowledge-bases/{knowledge_base_id}/documents/{document_id}/chunks",
+    response_model=DocumentChunkPage,
+)
+def preview_document_chunks(
+    knowledge_base_id: UUID,
+    document_id: UUID,
+    principal: CurrentPrincipal,
+    db: DatabaseSession,
+    limit: Annotated[int, Query(ge=1, le=50)] = 10,
+    offset: Annotated[int, Query(ge=0, le=2147483647)] = 0,
+    snapshot: Annotated[str | None, Query(min_length=1, max_length=128)] = None,
+) -> DocumentChunkPage:
+    tenant_id = principal.tenant.id
+    _get_knowledge_base(db, tenant_id, knowledge_base_id)
+    if offset and snapshot is None:
+        raise HTTPException(
+            422, detail={"code": "snapshot_required", "message": "翻页需要版本标记"}
+        )
+    try:
+        return published_chunk_page(
+            db, tenant_id, knowledge_base_id, document_id, limit, offset, snapshot
+        )
+    except LookupError:
+        raise HTTPException(
+            404, detail={"code": "document_not_found", "message": "文档不存在"}
+        ) from None
+    except IndexConflict as exc:
+        message = ("文档尚未就绪" if str(exc) == "document_not_ready"
+                   else "活动索引已变更，请重新预览")
+        raise HTTPException(409, detail={"code": str(exc), "message": message}) from None
 
 
 @router.post(

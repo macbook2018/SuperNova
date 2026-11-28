@@ -91,6 +91,24 @@ class KnowledgeDocumentRead(BaseModel):
     updated_at: datetime
 
 
+class PreviewChunk(BaseModel):
+    id: UUID
+    chunk_index: int
+    content: str
+    heading_path: list[str]
+    locations: list[dict[str, int | str]]
+
+
+class DocumentChunkPage(BaseModel):
+    document_id: UUID
+    snapshot: str
+    document_index_version: int
+    active_release_id: UUID | None
+    release_revision: int | None
+    items: list[PreviewChunk]
+    has_more: bool
+
+
 class KnowledgeImportUrlRequest(BaseModel):
     url: str = Field(min_length=8, max_length=2048)
 
